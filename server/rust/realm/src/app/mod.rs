@@ -35,6 +35,7 @@ pub mod onmsg_m2w_auction;
 pub mod organsysmessage;
 pub mod playermessage;
 pub mod player_base;
+pub mod playerdataqueue; // loaded-queue стадия MainLoop: FIFO загруженных игроков через route-шов hub-владельца
 pub mod servermessage;
 pub mod teammessage;
 pub mod world_client;

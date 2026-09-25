@@ -22,7 +22,8 @@ use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQue
 use crate::app::worldserver::{
     WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGlobeVariablesDelivery, WorldOnlinePlayerAppendOutcome,
-    WorldPingGameServerInfo, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
+    WorldOnlinePlayerRemoveOutcome, WorldPingGameServerInfo, WorldReceivedPlayerDataRead,
+    WorldReceivedPlayerDataUpdate,
     WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate,
     WorldRegionParamDecodeOutcome, WorldPlayerSaveResponseProgress, WorldReloadContext,
     WorldReloadResult, WorldServerSnapshotPlayerDecode,
@@ -946,6 +947,67 @@ pub enum WorldPlayerLoadRequestOutcome {
     Duplicate,
 }
 
+/// Итог одного queue-прохода FIFO загруженных игроков. `initial_size`
+/// фиксирует snapshot размера очереди на вход, `null_pops` — повторные pop
+/// пустых записей до первой извлечённой либо до исчерпания snapshot;
+/// `NoRecord` ставится только при исчерпанном snapshot, `Rejected`/`Accepted` —
+/// ровно один раз на вызов. Тип перевезён из `game.rs` вместе с queue-стадией
+/// MainLoop; старый пакет реэкспортирует. От формы select
+/// [`WorldPlayerSelectRouteOutcome`] тип сознательно отделён: direct-маршрут
+/// фиксирует `initial_size`/`null_pops` нулями и не несёт метаданных snapshot.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldProcessPlayerDataQueueOutcome {
+    NoRecord {
+        initial_size: u32,
+        null_pops: u32,
+    },
+    Rejected {
+        initial_size: u32,
+        null_pops: u32,
+        queue_player_id: u32,
+        client_ip: u32,
+        reason: WorldPlayerDataQueueRejectReason,
+        login_delivery: Result<i32, SendMessageError>,
+    },
+    Accepted {
+        initial_size: u32,
+        null_pops: u32,
+        player_id: u32,
+        client_ip: u32,
+        game_server_index: u32,
+        login_delivery: Result<i32, SendMessageError>,
+        friend_updates: Vec<WorldFriendPresenceUpdate>,
+        online_removal: WorldOnlinePlayerRemoveOutcome,
+        replaced_existing_player: bool,
+        login_time_ms: u32,
+    },
+}
+
+/// Блокирующий дефект queue-прохода: незавершённый cdkey в записи очереди,
+/// отказ organizing set либо неинициализированный порт game server-а. В отличие
+/// от сокращённой формы select ([`WorldPlayerSelectRouteBlock`]) содержит ветку
+/// `UnterminatedCdkey` — она ставится только при разборе записи очереди и не
+/// достижима чтением самого маршрута. Тип перевезён из `game.rs` вместе с
+/// queue-стадией; старый пакет реэкспортирует.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldProcessPlayerDataQueueBlock {
+    UnterminatedCdkey,
+    Organizing(PlayerOrganizingUpdateError),
+    UninitializedGameServerPort { game_server_index: u32 },
+}
+
+/// Отказ queue-прохода с метаданными snapshot, как их фиксировал исходный
+/// producer: `player_id` — id записи, чтение которой блокировало проход.
+/// Тип перевезён из `game.rs` вместе с queue-стадией; старый пакет
+/// реэкспортирует.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldProcessPlayerDataQueueError {
+    pub initial_size: u32,
+    pub null_pops: u32,
+    pub player_id: u32,
+    pub block: WorldProcessPlayerDataQueueBlock,
+}
+
 /// Технический дефект direct-маршрута ветки select: organizing set или
 /// неинициализированный порт game server-а. Форма повторяет
 /// `WorldProcessPlayerDataQueueBlock` исходного `route_loaded_player` без
@@ -1010,6 +1072,30 @@ pub trait WorldPlayerSelectGameView: WorldPlayerBaseGameView {
         after_login_send: &mut dyn FnMut(&mut CPlayer),
         get_tick: &mut dyn FnMut() -> u32,
     ) -> Result<WorldPlayerSelectRouteOutcome, WorldPlayerSelectRouteError>;
+}
+
+/// Шов loaded-queue маршрута стадии MainLoop: та же связная мутация inherent
+/// `route_loaded_player` у владельца игры, что у direct-шва select выше, но
+/// с исходными `initial_size`/`null_pops` snapshot-а очереди и порядком
+/// `LoadedQueue` (player публикуется после friend-loop, а не до него).
+/// Реализация живёт на `CGame` старого пакета и делегирует без перестановки;
+/// имя совпадает с inherent-методом специально (inherent priority исключает
+/// рекурсию). В отличие от select-формы исход сохраняет полные метаданные
+/// snapshot [`WorldProcessPlayerDataQueueOutcome`].
+pub trait WorldPlayerQueueGameView: WorldPlayerBaseGameView {
+    #[allow(clippy::too_many_arguments, reason = "точная форма route-вызова queue-стадии")]
+    fn route_loaded_player(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        initial_size: u32,
+        null_pops: u32,
+        queue_player_id: u32,
+        client_ip: u32,
+        cdkey: &[u8],
+        player: Option<Box<CPlayer>>,
+        after_login_send: &mut dyn FnMut(&mut CPlayer),
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> Result<WorldProcessPlayerDataQueueOutcome, WorldProcessPlayerDataQueueError>;
 }
 
 /// Узкий dyn-заменитель двух DB-запросов ветки выбора роли: проверка связки
