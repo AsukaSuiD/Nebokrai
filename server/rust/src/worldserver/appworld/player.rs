@@ -3455,7 +3455,7 @@ impl CPlayer {
         goods_database: &mut G,
     ) -> PlayerSaveOutcome
     where
-        P: RsPlayerOwner,
+        P: RsPlayerOwner<CPlayer>,
         J: RsJjcSysOwner,
         G: DbGoodsOwner<CPlayer>,
     {

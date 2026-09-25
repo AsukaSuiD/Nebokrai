@@ -1,4 +1,6 @@
-//! DB-владелец `CRsPlayer` WorldServer из `rsplayer.cpp`.
+//! DB-владелец `CRsPlayer` WorldServer из `rsplayer.cpp`; трейт `RsPlayerOwner` и
+//! его data-семья перенесены в Realm `persistence/rsplayer`, здесь остаётся
+//! Tiberius-реализация и их реэкспорт для переходных потребителей.
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner охватывает create/open/load/save игрока, отдельные field codecs,
@@ -11,11 +13,12 @@
 //! не откатываются автоматически. Параметризованный Tiberius, owned byte
 //! strings и typed snapshots заменяют ADO/COM, globals и fixed buffers, не
 //! меняя схемы, provider-order, значения отказа или wire-контракты caller-а.
+//! Realm-трейт параметризован игроком; локальная реализация для
+//! `TiberiusRsPlayer` разрешена orphan-правилом и связывает generic-параметр с
+//! `CPlayer`, а block-типы загрузки — associated types goods-владельца.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
-use std::error::Error;
-use std::fmt;
 use std::mem::size_of;
 
 use chrono::{Datelike, Local, NaiveDateTime, TimeZone, Timelike};
@@ -24,26 +27,42 @@ use futures_util::TryStreamExt;
 use tiberius::{Query, Row};
 
 use crate::dbaccess::row::{get_integer as read_ado_integer, get_value};
-use crate::dbaccess::worlddb::dbgoods::{
-    DbGoodsOwner, GoodsFiledSaveOutcome, GoodsLoadBlock, GoodsLoadFailure, GoodsLoadOutcome,
-    PlayerGoodsFiledSnapshot,
-};
-use crate::dbaccess::worlddb::goodslistener::GoodsTraversalBlock;
-use crate::dbaccess::worlddb::rsjjcsys::{
-    PlayerJjcDataSnapshot, PlayerJjcLoadFailure, PlayerJjcLoadOutcome, RsJjcSysOwner,
-};
-use crate::dbaccess::worlddb::rssetup::{
-    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
-};
-use crate::public::date::{TagTime, TagTimeArithmeticBlock};
+use crate::dbaccess::worlddb::dbgoods::{DbGoodsOwner, GoodsFiledSaveOutcome};
+use crate::dbaccess::worlddb::rsjjcsys::{PlayerJjcLoadOutcome, RsJjcSysOwner};
+use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
+use crate::public::date::TagTime;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerLoadDataOwner, PlayerLoadedGoodsInsertBlock,
 };
-use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
-use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
+use crate::worldserver::worldserver::playerranks::CPlayerRanks;
+use nebokrai_realm::characters::playerranks::PlayerRankOrganizingLookup;
+use nebokrai_realm::content::dbgoods::GoodsLoadOutcome as GenericGoodsLoadOutcome;
+use nebokrai_realm::persistence::rsplayer::{
+    PlayerLoadBlock as GenericPlayerLoadBlock, PlayerLoadOutcome as GenericPlayerLoadOutcome,
+};
+
+pub(crate) use nebokrai_realm::persistence::rsplayer::{
+    CollectedHonorRanksFields, EmbeddedFriendNameNul, HonorRanksBlobBlock,
+    HonorRanksByTypeSaveOutcome, HonorRanksFieldSink, HonorRanksSaveBlock, HonorRanksSaveOutcome,
+    PlayerAbilityBinaryField, PlayerAbilityBlobDecodeBlock, PlayerAbilityCreationSnapshot,
+    PlayerAbilityQueryLoadFailure, PlayerAbilityQueryLoadOutcome, PlayerAbilityRowLoadFailure,
+    PlayerAbilitySaveSnapshot, PlayerAbilityScalarSnapshot, PlayerAbilitySkill,
+    PlayerBaseCreateOutcome, PlayerBaseDatabaseRow, PlayerBaseLoadFailure, PlayerBaseSaveSnapshot,
+    PlayerCreateBlock, PlayerCreateOutcome, PlayerCreationBaseSnapshot, PlayerCreationSnapshot,
+    PlayerDeleteOutcome, PlayerDeleteTimeBlock, PlayerFriendName, PlayerLoadFailure,
+    PlayerQuestQueryLoadFailure, PlayerQuestQueryLoadOutcome, PlayerQuestSaveEntry,
+    PlayerQuestSaveSnapshot, PlayerRanksStatBlock, PlayerRanksStatFailure, PlayerRanksStatOutcome,
+    PlayerSaveBlock, PlayerSaveOutcome, PlayerSaveSnapshot, PlayerScriptFlagSnapshot, PlayerThing,
+    RsPlayerNotice, RsPlayerOperation, RsPlayerOwner, RsPlayerSaveError,
+};
+
+pub(crate) type PlayerLoadBlock =
+    GenericPlayerLoadBlock<GoodsLoadedAddonBlock, PlayerLoadedGoodsInsertBlock>;
+pub(crate) type PlayerLoadOutcome =
+    GenericPlayerLoadOutcome<GoodsLoadedAddonBlock, PlayerLoadedGoodsInsertBlock>;
 
 const CREATE_PLAYER_BASE_PREFIX: &[u8] = b"INSERT INTO CSL_PLAYER_BASE (id,name,Account,levels,occupation,sex,Country,HEAD,\t\t\t\t\t HELM,BODY,GLOV,BOOT,WEAPON,BACK,\t\t\t\t\t HEADGEAR,FROCK,WING,MANTEAU,FAIRY,\t\t\t\t\t HelmLevel,BodyLevel,GlovLevel,BootLevel,WeaponLevel,BackLevel,\t\t\t\t\t HEADGEARLevel,FROCKLevel,WINGLevel,MANTEAULevel,FAIRYLevel,\t\t\t\t\t Region) \t\t\t\t VALUES (";
 const SAVE_PLAYER_BASE_SQL: &str = "IF EXISTS (SELECT TOP 1 id FROM CSL_PLAYER_BASE WHERE id = @P30) BEGIN UPDATE TOP (1) CSL_PLAYER_BASE SET [Name] = @P1, [Levels] = @P2, [Occupation] = @P3, [Sex] = @P4, [Country] = @P5, [HEAD] = @P6, [HELM] = @P7, [BODY] = @P8, [GLOV] = @P9, [BOOT] = @P10, [WEAPON] = @P11, [BACK] = @P12, [HEADGEAR] = @P13, [FROCK] = @P14, [WING] = @P15, [MANTEAU] = @P16, [FAIRY] = @P17, [HelmLevel] = @P18, [BodyLevel] = @P19, [GlovLevel] = @P20, [BootLevel] = @P21, [WeaponLevel] = @P22, [BackLevel] = @P23, [HEADGEARLevel] = @P24, [FROCKLevel] = @P25, [WINGLevel] = @P26, [MANTEAULevel] = @P27, [FAIRYLevel] = @P28, [Region] = @P29 WHERE id = @P30; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
@@ -112,477 +131,6 @@ pub(crate) fn decode_honor_ranks_blob(
     }
 
     Ok(lists)
-}
-
-pub(crate) trait HonorRanksFieldSink {
-    type Error;
-
-    fn put_honor_ranks_field(
-        &mut self,
-        rank_type: HonorRanksType,
-        blob: Vec<u8>,
-    ) -> Result<(), Self::Error>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct HonorRanksBlobBlock {
-    pub(crate) total_entries: usize,
-}
-
-#[derive(Debug)]
-pub(crate) enum HonorRanksByTypeSaveOutcome<E> {
-    Saved,
-    FieldFailed(E),
-    BlockedMissingFact(HonorRanksBlobBlock),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct HonorRanksSaveBlock {
-    pub(crate) period: HonorRanksSavePeriod,
-    pub(crate) rank_type: HonorRanksType,
-    pub(crate) blob: HonorRanksBlobBlock,
-}
-
-#[derive(Debug)]
-pub(crate) enum HonorRanksSaveOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(HonorRanksSaveBlock),
-}
-
-#[derive(Default)]
-struct CollectedHonorRanksFields {
-    fields: Vec<(HonorRanksType, Vec<u8>)>,
-}
-
-impl HonorRanksFieldSink for CollectedHonorRanksFields {
-    type Error = Infallible;
-
-    fn put_honor_ranks_field(
-        &mut self,
-        rank_type: HonorRanksType,
-        blob: Vec<u8>,
-    ) -> Result<(), Self::Error> {
-        self.fields.push((rank_type, blob));
-        Ok(())
-    }
-}
-
-pub(crate) struct PlayerCreationBaseSnapshot {
-    pub(crate) id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) account: Vec<u8>,
-    pub(crate) level: u8,
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) country: u8,
-    pub(crate) head: u8,
-    pub(crate) equipment_ids: [u32; 11],
-    pub(crate) equipment_levels: [u8; 11],
-    pub(crate) region_id: i32,
-}
-
-pub(crate) struct PlayerBaseSaveSnapshot<'a> {
-    pub(crate) id: i32,
-    pub(crate) name: &'a [u8],
-    pub(crate) level: u8,
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) country: u8,
-    pub(crate) head: u8,
-    pub(crate) equipment_ids: [u32; 11],
-    pub(crate) equipment_levels: [i32; 11],
-    pub(crate) region_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerBaseDatabaseRow {
-    pub(crate) id: u32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) level: u8,
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) country: u8,
-    pub(crate) head: u8,
-    pub(crate) equipment_ids: [u32; 11],
-    pub(crate) equipment_levels: [u8; 11],
-    pub(crate) region_id: i32,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerBaseLoadFailure {
-    MissingConnection,
-    Database,
-    MissingRequiredValue {
-        row_index: usize,
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        row_index: usize,
-        column: &'static str,
-        value: i64,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerBaseCreateOutcome {
-    Created,
-    Failed,
-}
-
-/// Полный caller-owned view трёх стадий `CRsPlayer::CreatePlayer`.
-///
-/// Все вложенные ID обязаны происходить из одного исходного `CPlayer`:
-/// `base.id == abilities.scalar.id == goods.player_id`.
-pub(crate) struct PlayerCreationSnapshot<'player, 'goods_snapshot> {
-    pub(crate) base: PlayerCreationBaseSnapshot,
-    pub(crate) abilities: PlayerAbilityCreationSnapshot<'player>,
-    pub(crate) goods: PlayerGoodsFiledSnapshot<'goods_snapshot>,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerCreateBlock {
-    Goods(GoodsTraversalBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerCreateOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(PlayerCreateBlock),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlayerDeleteTimeBlock {
-    pub(crate) deletion_time: i32,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerDeleteOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(PlayerDeleteTimeBlock),
-}
-
-#[derive(Debug)]
-pub(crate) struct RsPlayerNotice {
-    pub(crate) operation: RsPlayerOperation,
-    pub(crate) error: RsPlayerSaveError,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum RsPlayerOperation {
-    OpenPlayerBaseCount,
-    OpenPlayerBase,
-    GetPlayerDeletionDate,
-    GetPlayerCountryById,
-    GetPlayerNameById,
-    ValidatePlayerIdInCdkey,
-    IsNameExist,
-    GetPlayerId,
-    GetCdKey,
-    StatRanks,
-    Outer,
-    BaseRow,
-    SaveBaseRow,
-    AbilityRow,
-    SaveAbilityRow,
-    SaveQuestData,
-    Restore,
-    Delete,
-    HonorRanksLoad,
-    HonorRanksInsert,
-    HonorRanksSave,
-}
-
-#[derive(Debug)]
-pub(crate) enum RsPlayerSaveError {
-    Database(RsPlayerDatabaseError),
-    MissingConnection,
-    PlayerRanksStatFailed,
-    MissingBaseRow,
-    MissingAbilityRow,
-    MissingHonorRanksRow { period: HonorRanksSavePeriod },
-    MalformedPlayerBaseRow,
-    JjcSaveFailed,
-}
-
-impl fmt::Display for RsPlayerSaveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Database(error) => error.fmt(formatter),
-            Self::MissingConnection => write!(formatter, "не передано соединение World player DB"),
-            Self::PlayerRanksStatFailed => {
-                write!(formatter, "пересчёт рейтинга игроков завершился ошибкой")
-            }
-            Self::MissingBaseRow => write!(formatter, "не найдена строка CSL_PLAYER_BASE"),
-            Self::MissingAbilityRow => write!(formatter, "не найдена строка CSL_PLAYER_ABILITY"),
-            Self::MissingHonorRanksRow { period } => write!(
-                formatter,
-                "не найдена строка CSL_HonorRanks для {period:?}"
-            ),
-            Self::MalformedPlayerBaseRow => {
-                write!(formatter, "некорректная строка CSL_PLAYER_BASE")
-            }
-            Self::JjcSaveFailed => {
-                write!(formatter, "отдельное сохранение JJc завершилось ошибкой")
-            }
-        }
-    }
-}
-
-impl Error for RsPlayerSaveError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Database(error) => Some(error),
-            Self::MissingConnection
-            | Self::PlayerRanksStatFailed
-            | Self::MissingBaseRow
-            | Self::MissingAbilityRow
-            | Self::MissingHonorRanksRow { .. }
-            | Self::MalformedPlayerBaseRow
-            | Self::JjcSaveFailed => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RsPlayerDatabaseError(tiberius::error::Error);
-
-impl fmt::Display for RsPlayerDatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "ошибка TDS World player DB: {}", self.0)
-    }
-}
-
-impl Error for RsPlayerDatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<tiberius::error::Error> for RsPlayerDatabaseError {
-    fn from(error: tiberius::error::Error) -> Self {
-        Self(error)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerRanksStatFailure {
-    MissingConnection,
-    Database {
-        row_index: Option<usize>,
-        source: tiberius::error::Error,
-    },
-    MissingRequiredValue {
-        row_index: usize,
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        row_index: usize,
-        column: &'static str,
-        value: i64,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerRanksStatBlock {
-    MaximumCountUnknown,
-    AddRank {
-        row_index: usize,
-        source: PlayerRankAddBlock,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerRanksStatOutcome {
-    ReturnedTrue { row_count: usize },
-    ReturnedFalse(PlayerRanksStatFailure),
-    BlockedMissingFact(PlayerRanksStatBlock),
-}
-
-pub(crate) trait RsPlayerOwner {
-    async fn get_player_count_in_db_by_cdkey(
-        &mut self,
-        account: &[u8],
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Option<u8>;
-
- /// Повторяет World-only `GetPlayerCountInCdkey`: DB sentinel сохраняется,
- /// successful byte складывается с live creation-count с x86 wrapping.
-    async fn get_player_count_in_cdkey(
-        &mut self,
-        account: &[u8],
-        creation_count: u8,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Option<u8> {
-        self.get_player_count_in_db_by_cdkey(account, active_transaction)
-            .await
-            .and_then(|database_count| {
-                let count = database_count.wrapping_add(creation_count);
-                (count != u8::MAX).then_some(count)
-            })
-    }
-
-    async fn open_player_base_in_db(
-        &mut self,
-        account: &[u8],
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure>;
-
-    async fn get_player_deletion_date(
-        &mut self,
-        player_id: u32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> i32;
-
-    async fn get_player_country_by_id(
-        &mut self,
-        player_id: u32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> u8;
-
-    async fn get_player_name_by_id(
-        &mut self,
-        player_id: u32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Vec<u8>;
-
-    async fn validate_player_id_in_cdkey(
-        &mut self,
-        account: &[u8],
-        player_id: u32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn is_name_exist(
-        &mut self,
-        player_name: &[u8],
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn get_cd_key(
-        &mut self,
-        player_name: &[u8],
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Vec<u8>;
-
-    async fn stat_ranks(
-        &mut self,
-        ranks: &mut CPlayerRanks,
-        organizing: &COrganizingCtrl,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> PlayerRanksStatOutcome;
-
-    async fn load_player<J, G, WeekDay>(
-        &mut self,
-        player: &mut CPlayer,
-        active_transaction: Option<&mut WorldTdsClient>,
-        thing_setup: &CThingSetup,
-        get_week_day: WeekDay,
-        jjc_owner: &mut J,
-        goods_owner: &mut G,
-        goods_registry: &GoodsBasePropertiesRegistry,
-        changed_goods_indices: &BTreeMap<u32, u32>,
-        dakong_addon_types: &BTreeSet<i32>,
-    ) -> PlayerLoadOutcome
-    where
-        J: RsJjcSysOwner,
-        G: DbGoodsOwner<
-            CPlayer,
-            AddonBlock = GoodsLoadedAddonBlock,
-            InsertBlock = PlayerLoadedGoodsInsertBlock,
-        >,
-        WeekDay: FnMut() -> u16;
-
-    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
-        &mut self,
-        snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-        jjc_owner: &mut J,
-        goods_owner: &mut G,
-    ) -> PlayerCreateOutcome;
-
-    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
-        &mut self,
-        snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-        jjc_owner: &mut J,
-        goods_owner: &mut G,
-    ) -> PlayerSaveOutcome;
-
-    async fn create_player_base(
-        &mut self,
-        snapshot: &PlayerCreationBaseSnapshot,
-        active_transaction: &mut WorldTdsClient,
-    ) -> PlayerBaseCreateOutcome;
-
-    async fn save_player_base(
-        &mut self,
-        snapshot: Option<&PlayerBaseSaveSnapshot<'_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn create_player_abilities<J: RsJjcSysOwner>(
-        &mut self,
-        snapshot: &PlayerAbilityCreationSnapshot<'_>,
-        active_transaction: &mut WorldTdsClient,
-        jjc_owner: &mut J,
-    ) -> bool;
-
-    async fn save_player_abilities<J: RsJjcSysOwner>(
-        &mut self,
-        snapshot: Option<&PlayerAbilitySaveSnapshot<'_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-        jjc_owner: &mut J,
-    ) -> bool;
-
-    async fn save_quest_data(
-        &mut self,
-        snapshot: Option<&PlayerQuestSaveSnapshot<'_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn restore_player(
-        &mut self,
-        player_id: u32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn delete_player(
-        &mut self,
-        player_id: u32,
-        deletion_time: i32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> PlayerDeleteOutcome;
-
-    async fn load_honor_ranks<S: HonorRanksLoadSink>(
-        &mut self,
-        sink: &mut S,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> HonorRanksLoadOutcome;
-
-    async fn insert_honor_ranks(
-        &mut self,
-        snapshot: &HonorRanksDbDataSnapshot,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    fn save_honor_ranks_by_type<S: HonorRanksFieldSink>(
-        &mut self,
-        snapshot: &mut HonorRanksDbDataSnapshot,
-        period: HonorRanksSavePeriod,
-        rank_type: HonorRanksType,
-        sink: &mut S,
-    ) -> HonorRanksByTypeSaveOutcome<S::Error>;
-
-    async fn save_honor_ranks(
-        &mut self,
-        snapshot: &mut HonorRanksDbDataSnapshot,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> HonorRanksSaveOutcome;
-
-    fn pop_notice(&mut self) -> Option<RsPlayerNotice>;
 }
 
 pub(crate) struct TiberiusRsPlayer {
@@ -892,93 +440,6 @@ pub(crate) struct PlayerAbilityScalarAssignment<'a> {
     pub(crate) value: PlayerAbilityScalarValue<'a>,
 }
 
-pub(crate) struct PlayerAbilityScalarSnapshot<'a> {
-    pub(crate) id: i32,
-    pub(crate) name: &'a [u8],
-    pub(crate) region_id: i32,
-    pub(crate) pos_x: f32,
-    pub(crate) pos_y: f32,
-    pub(crate) dir: i32,
-    pub(crate) account: &'a [u8],
-    pub(crate) title: &'a [u8],
-    pub(crate) level: u8,
-    pub(crate) exp: u32,
-    pub(crate) head_pic: u8,
-    pub(crate) face_pic: u8,
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) spouse_id: u32,
-    pub(crate) union_id: u32,
-    pub(crate) murderer_time: u32,
-    pub(crate) pk_count: u16,
-    pub(crate) kill_count: u32,
-    pub(crate) hit_top_log: u16,
-    pub(crate) hot_hit: u32,
-    pub(crate) loan_max: u32,
-    pub(crate) loan: u32,
-    pub(crate) loan_time: i32,
-    pub(crate) remain_point: u16,
-    pub(crate) pk_normal: bool,
-    pub(crate) pk_team: bool,
-    pub(crate) pk_union: bool,
-    pub(crate) pk_badman: bool,
-    pub(crate) pk_country: bool,
-    pub(crate) yp: u16,
-    pub(crate) hp: u32,
-    pub(crate) mp: u32,
-    pub(crate) rp: u16,
-    pub(crate) base_max_hp: u32,
-    pub(crate) base_max_mp: u32,
-    pub(crate) base_max_yp: u16,
-    pub(crate) base_max_rp: u16,
-    pub(crate) base_str: u32,
-    pub(crate) base_dex: u32,
-    pub(crate) base_con: u32,
-    pub(crate) base_int: u32,
-    pub(crate) base_min_atk: u32,
-    pub(crate) base_max_atk: u32,
-    pub(crate) base_hit: u16,
-    pub(crate) base_burden: u16,
-    pub(crate) base_cch: u16,
-    pub(crate) base_def: u32,
-    pub(crate) base_dodge: u16,
-    pub(crate) base_atc_speed: u16,
-    pub(crate) base_element_resistant: u32,
-    pub(crate) base_hp_recover_speed: u16,
-    pub(crate) base_mp_recover_speed: u16,
-    pub(crate) base_vigour: u32,
-    pub(crate) base_max_vigour: u32,
-    pub(crate) base_energy: u32,
-    pub(crate) base_max_energy: u32,
-    pub(crate) base_credit: u32,
-    pub(crate) display_head_piece: u8,
-    pub(crate) country: u8,
-    pub(crate) contribute: i32,
-    pub(crate) is_charged: bool,
-    pub(crate) quest_time_begin: i32,
-    pub(crate) quest_time_limit: i32,
-    pub(crate) quest: bool,
-    pub(crate) depot_password: &'a [u8],
-    pub(crate) exploit: u32,
-    pub(crate) kudos: u32,
-    pub(crate) mode: u32,
-    pub(crate) fairy_enabled: bool,
-    pub(crate) foster_num: u32,
-    pub(crate) hatcher_num: u32,
-    pub(crate) battle_fairy_enabled: bool,
-    pub(crate) fetch_power: u32,
-    pub(crate) max_fetch_power: u32,
-    pub(crate) auction_space: u32,
-    pub(crate) exalt: u32,
-    pub(crate) szl: u32,
-    pub(crate) gods_battle_faction: i32,
-    pub(crate) base_fy_energy: u32,
-    pub(crate) base_bl_fy_energy: u32,
-    pub(crate) lt_up_60_count: u16,
-    pub(crate) remain_jl_dan_count: u16,
-    pub(crate) lt_60_stamp: u32,
-}
-
 pub(crate) struct PlayerAbilityLoadScalarSnapshot<'a> {
     pub(crate) ability: PlayerAbilityScalarSnapshot<'a>,
     pub(crate) silence_time: i32,
@@ -1117,128 +578,6 @@ pub(crate) fn player_ability_scalar_assignments<'a>(
         ),
         assignment(Field::Lt60Stamp, Value::Ui4(snapshot.lt_60_stamp)),
     ]
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerAbilityBinaryField {
-    HotKey,
-    Skill,
-    ScriptFlag,
-    State,
-    Friend,
-    CiQing,
-    Thing,
-}
-
-impl PlayerAbilityBinaryField {
-    pub(crate) const fn column_name(self) -> &'static str {
-        match self {
-            Self::HotKey => "HotKey",
-            Self::Skill => "ListSkill",
-            Self::ScriptFlag => "VariableList",
-            Self::State => "ListState",
-            Self::Friend => "ListFriendName",
-            Self::CiQing => "ciqing",
-            Self::Thing => "ListThing",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerAbilitySkill {
-    pub(crate) id: u16,
-    pub(crate) level: u16,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerThing {
-    pub(crate) tid: u16,
-    pub(crate) count: u16,
-    pub(crate) max_count: u16,
-    pub(crate) point: u16,
-}
-
-pub(crate) struct PlayerScriptFlagSnapshot<'a> {
-    pub(crate) variable_num: i32,
-    pub(crate) variable_data: &'a [u8],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerFriendName<'a>(&'a [u8]);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EmbeddedFriendNameNul {
-    pub(crate) offset: usize,
-}
-
-impl<'a> PlayerFriendName<'a> {
-    pub(crate) fn from_legacy_bytes(bytes: &'a [u8]) -> Result<Self, EmbeddedFriendNameNul> {
-        match bytes.iter().position(|byte| *byte == 0) {
-            Some(offset) => Err(EmbeddedFriendNameNul { offset }),
-            None => Ok(Self(bytes)),
-        }
-    }
-}
-
-/// Полный caller-owned view одной новой строки `CSL_PLAYER_ABILITY`.
-///
-/// Все части обязаны происходить из одного `CPlayer` snapshot; в частности,
-/// `scalar.id == jjc.id`, как два чтения одного исходного объекта.
-pub(crate) struct PlayerAbilityCreationSnapshot<'a> {
-    pub(crate) scalar: PlayerAbilityScalarSnapshot<'a>,
-    pub(crate) hot_keys: &'a [u32; 24],
-    pub(crate) skills: &'a [PlayerAbilitySkill],
-    pub(crate) script_flag: PlayerScriptFlagSnapshot<'a>,
-    pub(crate) ex_states: &'a [u8],
-    pub(crate) friend_names: &'a [PlayerFriendName<'a>],
-    pub(crate) ci_qing_ids: &'a BTreeSet<u32>,
-    pub(crate) things: &'a [PlayerThing],
-    pub(crate) jjc: PlayerJjcDataSnapshot,
-}
-
-pub(crate) struct PlayerAbilitySaveSnapshot<'a> {
-    pub(crate) ability: PlayerAbilityCreationSnapshot<'a>,
-    pub(crate) silence_time: i32,
-    pub(crate) days_honor_eliminate_num: u32,
-    pub(crate) weeks_honor_eliminate_num: u32,
-    pub(crate) months_honor_eliminate_num: u32,
-    pub(crate) total_honor_eliminate_num: u32,
-    pub(crate) rank_of_nobility_id: u32,
-    pub(crate) appellation_id: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerQuestSaveEntry {
-    pub(crate) quest_id: u16,
-    pub(crate) complete: u8,
-}
-
-pub(crate) struct PlayerQuestSaveSnapshot<'a> {
-    pub(crate) player_id: i32,
-    pub(crate) quests: &'a BTreeMap<u16, PlayerQuestSaveEntry>,
-}
-
-/// Полный caller-owned view четырёх стадий `CRsPlayer::SavePlayer`.
-///
-/// Все вложенные ID обязаны происходить из одного исходного `CPlayer`:
-/// `base.id == abilities.base.scalar.id == quest.player_id == goods.player_id`.
-pub(crate) struct PlayerSaveSnapshot<'player, 'quest, 'goods_snapshot> {
-    pub(crate) base: PlayerBaseSaveSnapshot<'player>,
-    pub(crate) abilities: PlayerAbilitySaveSnapshot<'player>,
-    pub(crate) quest: PlayerQuestSaveSnapshot<'quest>,
-    pub(crate) goods: PlayerGoodsFiledSnapshot<'goods_snapshot>,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerSaveBlock {
-    Goods(GoodsTraversalBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerSaveOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(PlayerSaveBlock),
 }
 
 pub(crate) fn encode_player_quest_data(snapshot: &PlayerQuestSaveSnapshot<'_>) -> Vec<u8> {
@@ -1408,44 +747,6 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerAbilityBlobDecodeBlock {
-    HotKeySize {
-        actual_bytes: usize,
-    },
-    FriendNameWithoutTerminator {
-        offset: usize,
-        available_bytes: usize,
-    },
-    ScriptPayloadTooLarge {
-        actual_bytes: usize,
-    },
-}
-
-impl fmt::Display for PlayerAbilityBlobDecodeBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::HotKeySize { actual_bytes } => write!(
-                formatter,
-                "HotKey содержит {actual_bytes} байт вместо обязательных 96"
-            ),
-            Self::FriendNameWithoutTerminator {
-                offset,
-                available_bytes,
-            } => write!(
-                formatter,
-                "ListFriendName с offset {offset} не содержит NUL в оставшихся {available_bytes} байтах"
-            ),
-            Self::ScriptPayloadTooLarge { actual_bytes } => write!(
-                formatter,
-                "VariableList payload содержит {actual_bytes} байт и не помещается в signed long"
-            ),
-        }
-    }
-}
-
-impl Error for PlayerAbilityBlobDecodeBlock {}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoadedPlayerScriptFlag {
     pub(crate) variable_num: i32,
     pub(crate) variable_data: Vec<u8>,
@@ -1547,77 +848,6 @@ pub(crate) fn load_quest_data(blob: &[u8]) -> Vec<PlayerQuestSaveEntry> {
             complete: entry[2],
         })
         .collect()
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerAbilityRowLoadFailure {
-    Database {
-        column: &'static str,
-        source: tiberius::error::Error,
-    },
-    MissingRequiredValue {
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        column: &'static str,
-        value: i64,
-        target: &'static str,
-    },
-    Blob {
-        field: PlayerAbilityBinaryField,
-        source: PlayerAbilityBlobDecodeBlock,
-    },
-    HonorTime(TagTimeArithmeticBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerAbilityQueryLoadFailure {
-    ZeroPlayerId,
-    MissingConnection,
-    Database(tiberius::error::Error),
-    MissingRow,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerAbilityQueryLoadOutcome {
-    ReturnedTrue,
-    ReturnedFalse(PlayerAbilityQueryLoadFailure),
-    BlockedMalformed(PlayerAbilityRowLoadFailure),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerQuestQueryLoadFailure {
-    ZeroPlayerId,
-    MissingConnection,
-    Database(tiberius::error::Error),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerQuestQueryLoadOutcome {
-    ReturnedTrue { quest_count: usize },
-    ReturnedFalse(PlayerQuestQueryLoadFailure),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerLoadFailure {
-    Connection(WorldDatabaseConnectionError),
-    Ability(PlayerAbilityQueryLoadFailure),
-    Quest(PlayerQuestQueryLoadFailure),
-    Goods(GoodsLoadFailure),
-    Jjc(PlayerJjcLoadFailure),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerLoadBlock {
-    Ability(PlayerAbilityRowLoadFailure),
-    Goods(GoodsLoadBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerLoadOutcome {
-    ReturnedTrue,
-    ReturnedFalse(PlayerLoadFailure),
-    BlockedMissingFact(PlayerLoadBlock),
 }
 
 fn required_ability_integer(
@@ -2074,8 +1304,8 @@ impl TiberiusRsPlayer {
     }
 }
 
-impl RsPlayerOwner for TiberiusRsPlayer {
-    async fn load_player<J, G, WeekDay>(
+impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
+    fn load_player<J, G, WeekDay>(
         &mut self,
         player: &mut CPlayer,
         active_transaction: Option<&mut WorldTdsClient>,
@@ -2086,16 +1316,13 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         goods_registry: &GoodsBasePropertiesRegistry,
         changed_goods_indices: &BTreeMap<u32, u32>,
         dakong_addon_types: &BTreeSet<i32>,
-    ) -> PlayerLoadOutcome
+    ) -> impl std::future::Future<Output = GenericPlayerLoadOutcome<G::AddonBlock, G::InsertBlock>>
     where
         J: RsJjcSysOwner,
-        G: DbGoodsOwner<
-            CPlayer,
-            AddonBlock = GoodsLoadedAddonBlock,
-            InsertBlock = PlayerLoadedGoodsInsertBlock,
-        >,
+        G: DbGoodsOwner<CPlayer>,
         WeekDay: FnMut() -> u16,
     {
+        async move {
         let mut standalone_connection;
         let active_transaction = match active_transaction {
             Some(active_transaction) => active_transaction,
@@ -2103,7 +1330,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 standalone_connection = match self.settings.connect().await {
                     Ok(connection) => connection,
                     Err(source) => {
-                        return PlayerLoadOutcome::ReturnedFalse(
+                        return GenericPlayerLoadOutcome::ReturnedFalse(
                             PlayerLoadFailure::Connection(source),
                         );
                     }
@@ -2123,10 +1350,10 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         {
             PlayerAbilityQueryLoadOutcome::ReturnedTrue => {}
             PlayerAbilityQueryLoadOutcome::ReturnedFalse(source) => {
-                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Ability(source));
+                return GenericPlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Ability(source));
             }
             PlayerAbilityQueryLoadOutcome::BlockedMalformed(source) => {
-                return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Ability(source));
+                return GenericPlayerLoadOutcome::BlockedMissingFact(GenericPlayerLoadBlock::Ability(source));
             }
         }
 
@@ -2136,7 +1363,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         {
             PlayerQuestQueryLoadOutcome::ReturnedTrue { .. } => {}
             PlayerQuestQueryLoadOutcome::ReturnedFalse(source) => {
-                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Quest(source));
+                return GenericPlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Quest(source));
             }
         }
 
@@ -2150,12 +1377,12 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             )
             .await
         {
-            GoodsLoadOutcome::ReturnedTrue { .. } => {}
-            GoodsLoadOutcome::ReturnedFalse(source) => {
-                return PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Goods(source));
+            GenericGoodsLoadOutcome::ReturnedTrue { .. } => {}
+            GenericGoodsLoadOutcome::ReturnedFalse(source) => {
+                return GenericPlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Goods(source));
             }
-            GoodsLoadOutcome::BlockedMissingFact(source) => {
-                return PlayerLoadOutcome::BlockedMissingFact(PlayerLoadBlock::Goods(source));
+            GenericGoodsLoadOutcome::BlockedMissingFact(source) => {
+                return GenericPlayerLoadOutcome::BlockedMissingFact(GenericPlayerLoadBlock::Goods(source));
             }
         }
 
@@ -2163,18 +1390,20 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             .load_jjc_data(player, Some(&mut *active_transaction))
             .await
         {
-            PlayerJjcLoadOutcome::ReturnedTrue { .. } => PlayerLoadOutcome::ReturnedTrue,
+            PlayerJjcLoadOutcome::ReturnedTrue { .. } => GenericPlayerLoadOutcome::ReturnedTrue,
             PlayerJjcLoadOutcome::ReturnedFalse(source) => {
-                PlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Jjc(source))
+                GenericPlayerLoadOutcome::ReturnedFalse(PlayerLoadFailure::Jjc(source))
             }
+        }
         }
     }
 
-    async fn get_player_count_in_db_by_cdkey(
+    fn get_player_count_in_db_by_cdkey(
         &mut self,
         account: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Option<u8> {
+    ) -> impl std::future::Future<Output = Option<u8>> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::OpenPlayerBaseCount,
@@ -2210,13 +1439,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
  // одновременно был sentinel-ом ошибки внешнего owner-а.
         let count = rows.len() as u8;
         (count != u8::MAX).then_some(count)
+        }
     }
 
-    async fn open_player_base_in_db(
+    fn open_player_base_in_db(
         &mut self,
         account: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure> {
+    ) -> impl std::future::Future<Output = Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure>> + Send {
+        async move {
         const EQUIPMENT_ID_FIELDS: [&str; 11] = [
             "HELM", "BODY", "GLOV", "BOOT", "WEAPON", "BACK", "Headgear", "Frock",
             "Wing", "Manteau", "Fairy",
@@ -2375,13 +1606,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             });
         }
         Ok(result)
+        }
     }
 
-    async fn get_player_deletion_date(
+    fn get_player_deletion_date(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> i32 {
+    ) -> impl std::future::Future<Output = i32> + Send {
+        async move {
         if player_id == 0 {
             return 0;
         }
@@ -2438,13 +1671,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         };
  // Оригинал `_mktime == -1` нормализовался в ноль до возврата.
         i32::try_from(local_midnight.timestamp()).unwrap_or(0)
+        }
     }
 
-    async fn get_player_country_by_id(
+    fn get_player_country_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> u8 {
+    ) -> impl std::future::Future<Output = u8> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::GetPlayerCountryById,
@@ -2487,13 +1722,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 0
             }
         }
+        }
     }
 
-    async fn get_player_name_by_id(
+    fn get_player_name_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Vec<u8> {
+    ) -> impl std::future::Future<Output = Vec<u8>> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::GetPlayerNameById,
@@ -2539,14 +1776,16 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 Vec::new()
             }
         }
+        }
     }
 
-    async fn validate_player_id_in_cdkey(
+    fn validate_player_id_in_cdkey(
         &mut self,
         account: &[u8],
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         if player_id == 0 {
             return false;
         }
@@ -2604,13 +1843,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             }
         }
         false
+        }
     }
 
-    async fn is_name_exist(
+    fn is_name_exist(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         let player_name = visible_c_string(player_name);
         if player_name.contains(&b'\'') {
             return false;
@@ -2647,13 +1888,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 false
             }
         }
+        }
     }
 
-    async fn get_cd_key(
+    fn get_cd_key(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Vec<u8> {
+    ) -> impl std::future::Future<Output = Vec<u8>> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::GetPlayerId,
@@ -2744,14 +1987,16 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 Vec::new()
             }
         }
+        }
     }
 
-    async fn stat_ranks(
+    fn stat_ranks<Organizing: PlayerRankOrganizingLookup>(
         &mut self,
         ranks: &mut CPlayerRanks,
-        organizing: &COrganizingCtrl,
+        organizing: &Organizing,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> PlayerRanksStatOutcome {
+    ) -> impl std::future::Future<Output = PlayerRanksStatOutcome> {
+        async move {
         macro_rules! stat_failed {
             ($failure:expr) => {{
                 self.notices.push_back(RsPlayerNotice {
@@ -2916,15 +2161,17 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         PlayerRanksStatOutcome::ReturnedTrue {
             row_count: row_index,
         }
+        }
     }
 
-    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
+    fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,
         jjc_owner: &mut J,
         goods_owner: &mut G,
-    ) -> PlayerCreateOutcome {
+    ) -> impl std::future::Future<Output = PlayerCreateOutcome> {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::Outer,
@@ -2959,15 +2206,17 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 PlayerCreateOutcome::BlockedMissingFact(PlayerCreateBlock::Goods(block))
             }
         }
+        }
     }
 
-    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
+    fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,
         jjc_owner: &mut J,
         goods_owner: &mut G,
-    ) -> PlayerSaveOutcome {
+    ) -> impl std::future::Future<Output = PlayerSaveOutcome> {
+        async move {
         let Some(snapshot) = snapshot else {
             return PlayerSaveOutcome::ReturnedFalse;
         };
@@ -3008,13 +2257,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 PlayerSaveOutcome::BlockedMissingFact(PlayerSaveBlock::Goods(block))
             }
         }
+        }
     }
 
-    async fn create_player_base(
+    fn create_player_base(
         &mut self,
         snapshot: &PlayerCreationBaseSnapshot,
         active_transaction: &mut WorldTdsClient,
-    ) -> PlayerBaseCreateOutcome {
+    ) -> impl std::future::Future<Output = PlayerBaseCreateOutcome> + Send {
+        async move {
         let sql = build_create_player_base_sql(snapshot);
 
         match execute_batch(active_transaction, sql).await {
@@ -3027,13 +2278,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 PlayerBaseCreateOutcome::Failed
             }
         }
+        }
     }
 
-    async fn save_player_base(
+    fn save_player_base(
         &mut self,
         snapshot: Option<&PlayerBaseSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         let Some(snapshot) = snapshot else {
             return false;
         };
@@ -3083,14 +2336,16 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 false
             }
         }
+        }
     }
 
-    async fn create_player_abilities<J: RsJjcSysOwner>(
+    fn create_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: &PlayerAbilityCreationSnapshot<'_>,
         active_transaction: &mut WorldTdsClient,
         jjc_owner: &mut J,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> {
+        async move {
         if let Err(error) = insert_player_ability(snapshot, active_transaction).await {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::AbilityRow,
@@ -3108,14 +2363,16 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         true
+        }
     }
 
-    async fn save_player_abilities<J: RsJjcSysOwner>(
+    fn save_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: Option<&PlayerAbilitySaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
         jjc_owner: &mut J,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> {
+        async move {
         let Some(snapshot) = snapshot else {
             return false;
         };
@@ -3164,13 +2421,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         true
+        }
     }
 
-    async fn save_quest_data(
+    fn save_quest_data(
         &mut self,
         snapshot: Option<&PlayerQuestSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         let Some(snapshot) = snapshot else {
             return false;
         };
@@ -3194,13 +2453,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         true
+        }
     }
 
-    async fn restore_player(
+    fn restore_player(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::Restore,
@@ -3221,14 +2482,16 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 false
             }
         }
+        }
     }
 
-    async fn delete_player(
+    fn delete_player(
         &mut self,
         player_id: u32,
         deletion_time: i32,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> PlayerDeleteOutcome {
+    ) -> impl std::future::Future<Output = PlayerDeleteOutcome> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::Delete,
@@ -3265,13 +2528,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
                 PlayerDeleteOutcome::ReturnedFalse
             }
         }
+        }
     }
 
-    async fn load_honor_ranks<S: HonorRanksLoadSink>(
+    fn load_honor_ranks<S: HonorRanksLoadSink>(
         &mut self,
         sink: &mut S,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> HonorRanksLoadOutcome {
+    ) -> impl std::future::Future<Output = HonorRanksLoadOutcome> {
+        async move {
         let Some(active_transaction) = active_transaction else {
             self.notices.push_back(RsPlayerNotice {
                 operation: RsPlayerOperation::HonorRanksLoad,
@@ -3351,13 +2616,15 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         HonorRanksLoadOutcome::ReturnedTrue
+        }
     }
 
-    async fn insert_honor_ranks(
+    fn insert_honor_ranks(
         &mut self,
         snapshot: &HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool {
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             return false;
         };
@@ -3374,6 +2641,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         true
+        }
     }
 
     fn save_honor_ranks_by_type<S: HonorRanksFieldSink>(
@@ -3422,11 +2690,12 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
     }
 
-    async fn save_honor_ranks(
+    fn save_honor_ranks(
         &mut self,
         snapshot: &mut HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> HonorRanksSaveOutcome {
+    ) -> impl std::future::Future<Output = HonorRanksSaveOutcome> + Send {
+        async move {
         let Some(active_transaction) = active_transaction else {
             return HonorRanksSaveOutcome::ReturnedFalse;
         };
@@ -3476,6 +2745,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
 
         HonorRanksSaveOutcome::ReturnedTrue
+        }
     }
 
     fn pop_notice(&mut self) -> Option<RsPlayerNotice> {

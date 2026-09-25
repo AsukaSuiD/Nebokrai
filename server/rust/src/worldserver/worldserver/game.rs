@@ -860,7 +860,7 @@ pub(crate) type WorldGameInitResult<ContextBlock> =
 
 pub(crate) trait WorldGameInitContext {
     type Block;
-    type PlayerDatabase: RsPlayerOwner + nebokrai_realm::characters::honorranks::HonorRanksDbOwner;
+    type PlayerDatabase: RsPlayerOwner<CPlayer> + nebokrai_realm::characters::honorranks::HonorRanksDbOwner;
     type EnemyFactionsDatabase: RsEnemyFactionsOwner;
     type GeneralVariableDatabase: RsGenVarOwner;
     type UnionDatabase: RsUnionOwner;
@@ -14694,7 +14694,7 @@ impl CGame {
         put_log_info: &mut PutLogInfo,
     ) -> Result<PlayerRanksStatRunReport, PlayerRanksStatRunBlock>
     where
-        PlayerDatabase: RsPlayerOwner,
+        PlayerDatabase: RsPlayerOwner<CPlayer>,
         GetTick: FnMut() -> u32 + ?Sized,
         GetLocalTime: FnMut() -> WorldLogLocalTime + ?Sized,
         PutLogInfo: FnMut(&[u8]) + ?Sized,
@@ -16150,7 +16150,7 @@ impl CGame {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>
     where
-        Database: RsPlayerOwner + ?Sized,
+        Database: RsPlayerOwner<CPlayer> + ?Sized,
     {
         let report = |requested_name: &[u8], legacy_result, disposition| {
             WorldPlayerNameChangeReport {
@@ -21338,7 +21338,7 @@ where
     S: VariableListSaveSource,
     O: RsSetupOwner,
     V: RsGenVarOwner,
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,

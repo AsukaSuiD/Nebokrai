@@ -1306,7 +1306,7 @@ pub(crate) async fn save_new_character_entry<P, J, G>(
     connection: &mut WorldTdsClient,
 ) -> NewCharacterSaveReport
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
 {
@@ -1362,7 +1362,7 @@ where
 /// `Commit` требует от связанный list-owner-а удалить текущий node под
 /// `g_CriticalSectionSavePlayerList`; `Failure` сохраняет его. Обе исходные
 /// ветви продолжают обход со следующим ID.
-pub(crate) async fn save_restore_character_entry<P: RsPlayerOwner>(
+pub(crate) async fn save_restore_character_entry<P: RsPlayerOwner<CPlayer>>(
     player_id: u32,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -1404,7 +1404,7 @@ pub(crate) async fn save_restore_character_entry<P: RsPlayerOwner>(
 /// `g_CriticalSectionSavePlayerList`; `Failure` сохраняет его и разрешает
 /// перейти к следующему. После `BlockedMissingFact` connection и очередь
 /// нельзя использовать дальше до решения локальной time-границы.
-pub(crate) async fn save_delete_character_entry<P: RsPlayerOwner>(
+pub(crate) async fn save_delete_character_entry<P: RsPlayerOwner<CPlayer>>(
     snapshot: DeletionPlayerSnapshot,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -1458,7 +1458,7 @@ pub(crate) async fn save_new_characters_from_world_snapshot<P, J, G>(
     log_sink: &mut impl SaveDataLogSink,
 ) -> Result<NewCharactersSaveReport, WorldSnapshotSaveBlock>
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
 {
@@ -1674,7 +1674,7 @@ pub(crate) async fn save_factions_from_world_snapshot<F: RsFactionOwner>(
     })
 }
 
-pub(crate) async fn save_restore_characters_from_world_snapshot<P: RsPlayerOwner>(
+pub(crate) async fn save_restore_characters_from_world_snapshot<P: RsPlayerOwner<CPlayer>>(
     world: &mut WorldDbDataSaveSession<'_>,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -1735,7 +1735,7 @@ pub(crate) async fn save_restore_characters_from_world_snapshot<P: RsPlayerOwner
     })
 }
 
-pub(crate) async fn save_delete_characters_from_world_snapshot<P: RsPlayerOwner>(
+pub(crate) async fn save_delete_characters_from_world_snapshot<P: RsPlayerOwner<CPlayer>>(
     world: &mut WorldDbDataSaveSession<'_>,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -2188,7 +2188,7 @@ where
     S: VariableListSaveSource,
     O: RsSetupOwner,
     V: RsGenVarOwner,
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
@@ -2764,7 +2764,7 @@ async fn save_region_entry<R: RsRegionOwner>(
 /// abnormal-catch, что и `SaveHonorRanks == false`. После
 /// `BlockedMissingFact` caller обязан остановить lifecycle и не передавать
 /// connection следующей Save GodsBattle phase.
-pub(crate) async fn save_honor_ranks<P: RsPlayerOwner>(
+pub(crate) async fn save_honor_ranks<P: RsPlayerOwner<CPlayer>>(
     snapshot: &mut HonorRanksDbDataSnapshot,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -2840,7 +2840,7 @@ pub(crate) async fn save_honor_ranks<P: RsPlayerOwner>(
     }
 }
 
-pub(crate) async fn save_honor_ranks_from_world_snapshot<P: RsPlayerOwner>(
+pub(crate) async fn save_honor_ranks_from_world_snapshot<P: RsPlayerOwner<CPlayer>>(
     honor_ranks: &mut CHonorRanks,
     player_database: &mut P,
     connection: &mut WorldTdsClient,
@@ -3242,7 +3242,7 @@ async fn save_character_entry<P, J, G>(
     connection: &mut WorldTdsClient,
 ) -> SaveCharacterEntryOutcome
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
 {
@@ -3309,7 +3309,7 @@ pub(crate) async fn save_characters<P, J, G>(
     connection: &mut WorldTdsClient,
 ) -> SaveCharacterSaveReport
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
 {
@@ -3392,7 +3392,7 @@ pub(crate) async fn save_characters_from_world_snapshot<P, J, G>(
     log_sink: &mut impl SaveDataLogSink,
 ) -> SaveCharacterSaveReport
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
 {
@@ -3532,7 +3532,7 @@ pub(crate) async fn do_save_data_after_unions<P, J, G, R, B, E, C, L>(
     log_sink: &mut impl SaveDataLogSink,
 ) -> DoSaveDataAfterUnionsReport
 where
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
     R: RsRegionOwner,
@@ -3927,7 +3927,7 @@ where
     S: VariableListSaveSource,
     O: RsSetupOwner,
     V: RsGenVarOwner,
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
@@ -4142,7 +4142,7 @@ where
     S: VariableListSaveSource,
     O: RsSetupOwner,
     V: RsGenVarOwner,
-    P: RsPlayerOwner,
+    P: RsPlayerOwner<CPlayer>,
     J: RsJjcSysOwner,
     G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
