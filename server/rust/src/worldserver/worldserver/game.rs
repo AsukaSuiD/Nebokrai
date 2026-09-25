@@ -967,8 +967,8 @@ impl FactionWarStopContext for WorldMainLoopFactionWarEffects<'_> {
             .organizing
             .faction_by_id_mut(faction_id)
             .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
-        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
-            let _ = game.update_player_faction_info_from_faction(faction, player_id);
+        let _ = faction.update_enemy_faction(self.game, |_view, faction, player_id| {
+            let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
             self.players_to_update.push(player_id)
         });
         Ok(())
@@ -1568,22 +1568,7 @@ pub(crate) use nebokrai_realm::app::worldothermessage::{
     WorldPlayerNameChangeDisposition, WorldPlayerNameChangeReport, WorldPlayerNameLookupError,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLocalMessageQueueBlock {
-    pub(crate) message_type: i32,
-}
-
-impl fmt::Display for WorldLocalMessageQueueBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "локальное World-сообщение {:#08X} не поставлено: s_pNetServer отсутствует",
-            self.message_type
-        )
-    }
-}
-
-impl Error for WorldLocalMessageQueueBlock {}
+pub(crate) use nebokrai_realm::app::world_message::WorldLocalMessageQueueBlock;
 
 pub(crate) struct RoutedWorldMessage {
     pub(crate) source: WorldMessageSource,
@@ -5490,14 +5475,8 @@ pub(crate) struct WorldGameAiReport {
     pub(crate) legacy_result: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionNameLookup<'a> {
-    RegionNotFound,
-    NullRegionPointer,
-    Name(&'a [u8]),
-}
-
 pub(crate) use nebokrai_realm::app::gmmessage::{WorldNamedRegionLookup, WorldNamedRegionMatch, WorldRegionIdRouteScan, WorldRegionIdRoute};
+pub(crate) use nebokrai_realm::app::world_game_view::WorldRegionNameLookup;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionParamUpdateOutcome {
@@ -16872,6 +16851,29 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::region_routes_by_owner_id(self, region_id)
     }
 
+    fn region_name(&self, region_id: i32) -> WorldRegionNameLookup<'_> {
+        CGame::region_name(self, region_id)
+    }
+
+    fn queue_local_world_message(
+        &self,
+        message: CMessage,
+    ) -> Result<(), WorldLocalMessageQueueBlock> {
+        CGame::queue_local_world_message(self, message)
+    }
+
+    fn allocate_leave_word_id(&mut self) -> i32 {
+        CGame::allocate_leave_word_id(self)
+    }
+
+    fn update_player_faction_info_from_faction(
+        &self,
+        faction: &CFaction,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
+        CGame::update_player_faction_info_from_faction(self, faction, player_id)
+    }
+
     fn online_player_count(&self) -> usize {
         CGame::online_player_count(self)
     }
@@ -17728,8 +17730,8 @@ impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
         )
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -17825,8 +17827,11 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
             .ok_or(CountryGovernanceContextBlock::OwnedCityMutation)?
             .clear_owned_cities(
                 &*self.base.game,
-                |game, faction, player_id| {
-                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                |_view, faction, player_id| {
+                    let _ = self
+                        .base
+                        .game
+                        .update_player_faction_info_from_faction(faction, player_id);
                     (self.update_player)(player_id);
                 },
             )
@@ -17845,8 +17850,11 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
             .add_owned_city(
                 &*self.base.game,
                 city_id,
-                |game, faction, player_id| {
-                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                |_view, faction, player_id| {
+                    let _ = self
+                        .base
+                        .game
+                        .update_player_faction_info_from_faction(faction, player_id);
                     (self.update_player)(player_id);
                 },
             )

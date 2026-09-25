@@ -878,8 +878,8 @@ impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
         format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1190,8 +1190,8 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
         format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1286,8 +1286,8 @@ impl FactionDemiseContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
         )
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1360,8 +1360,8 @@ impl FactionExitContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
         format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1450,8 +1450,8 @@ impl FactionFireOutContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
         format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1516,8 +1516,8 @@ impl FactionLevelContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
 }
 
 impl FactionSetParameterContext for WorldFactionSetParameterEffects<'_, '_, '_, '_> {
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 }
@@ -1597,8 +1597,8 @@ impl FactionUpgradeContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
         format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -1680,8 +1680,8 @@ impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_
         )
     }
 
-    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
-        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+    fn update_player_faction_info(&mut self, faction: &CFaction, player_id: i32) {
+        let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 }

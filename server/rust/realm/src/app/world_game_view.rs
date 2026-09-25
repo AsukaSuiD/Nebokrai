@@ -11,7 +11,7 @@ use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::app::auction::WorldBaiTanRemoval;
 use crate::app::gmmessage::{WorldNamedRegionLookup, WorldRegionIdRouteScan};
 use crate::app::world_client::CMyNetClient;
-use crate::app::world_message::{CMessage, SendMessageError};
+use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQueueBlock};
 use crate::app::worldserver::{WorldReloadContext, WorldReloadResult};
 use crate::app::worldothermessage::{
     WorldGoodsLink, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
@@ -19,9 +19,23 @@ use crate::app::worldothermessage::{
 };
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
-use crate::characters::player::{CPlayer, PlayerCodecError, PlayerPropertyCoefficients};
+use crate::characters::player::{
+    CPlayer, PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
+    PlayerPropertyCoefficients,
+};
+use crate::organizations::faction::CFaction;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::skillfactory::CSkillFactory;
+
+/// Трёхсторонний поиск имени региона: отсутствующий ключ карты, null-ячейка
+/// owner-а и найденное имя. Свёртка в `Option` потеряла бы отличие
+/// `NullRegionPointer` (Blocked ветки) от `RegionNotFound` (пустое имя).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldRegionNameLookup<'a> {
+    RegionNotFound,
+    NullRegionPointer,
+    Name(&'a [u8]),
+}
 
 /// Снимок состояния game server-а: наличие коннекта и числовой индекс маршрута.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,6 +139,19 @@ pub trait WorldGameView {
     fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup;
 
     fn region_routes_by_owner_id(&self, region_id: i32) -> WorldRegionIdRouteScan;
+
+    fn region_name(&self, region_id: i32) -> WorldRegionNameLookup<'_>;
+
+    fn queue_local_world_message(&self, message: CMessage) -> Result<(), WorldLocalMessageQueueBlock>;
+
+    fn allocate_leave_word_id(&mut self) -> i32;
+
+    /// Обновляет проекцию faction-информации игрока по переданной фракции.
+    fn update_player_faction_info_from_faction(
+        &self,
+        faction: &CFaction,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock>;
 
     fn online_player_count(&self) -> usize;
 

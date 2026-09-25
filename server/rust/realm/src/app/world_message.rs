@@ -80,6 +80,26 @@ pub enum SendMessageError {
     LengthOutsideLegacyRange,
 }
 
+/// Отказ постановки локального World-сообщения при отсутствующем net-server:
+/// такое сообщение не ставится, но уже совершённые эффекты caller-а
+/// не откатываются.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldLocalMessageQueueBlock {
+    pub message_type: i32,
+}
+
+impl std::fmt::Display for WorldLocalMessageQueueBlock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "локальное World-сообщение {:#08X} не поставлено: s_pNetServer отсутствует",
+            self.message_type
+        )
+    }
+}
+
+impl std::error::Error for WorldLocalMessageQueueBlock {}
+
 /// Тринадцать доказанных свободных handler-владельцев WorldServer.
 pub trait WorldMessageHandlers {
     /// Возвращает достигнутый `CGame::m_Setup.bUseLogSys` для `0x60200`.

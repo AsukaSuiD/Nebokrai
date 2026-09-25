@@ -350,8 +350,8 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
         let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
             OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id },
         )?;
-        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
-            let _ = game.update_player_faction_info_from_faction(faction, player_id);
+        let _ = faction.update_enemy_faction(self.game, |_view, faction, player_id| {
+            let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
             (self.update_player)(player_id);
         });
         Ok(())
@@ -513,8 +513,8 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
         let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
             OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation { faction_id },
         )?;
-        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
-            let _ = game.update_player_faction_info_from_faction(faction, player_id);
+        let _ = faction.update_enemy_faction(self.game, |_view, faction, player_id| {
+            let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
             (self.update_player)(player_id);
         });
         Ok(())
@@ -2415,6 +2415,7 @@ pub(crate) struct COrganizingPlayerUpdater<'a> {
 
 struct DetachedFactionApplicationContext<'a, Effects> {
     controller: &'a mut COrganizingCtrl,
+    game: &'a CGame,
     target_map_key: i32,
     effects: &'a mut Effects,
 }
@@ -2498,10 +2499,10 @@ where
 
     fn remove_previous_faction_applications(
         &mut self,
-        game: &CGame,
         current_faction: &mut CFaction,
         player_id: i32,
     ) -> Result<(), Self::Block> {
+        let game = self.game;
         let mut completed_removals = Vec::with_capacity(self.controller.factions.len());
         for (&map_key, faction) in &mut self.controller.factions {
             let outcome = if map_key == self.target_map_key {
@@ -2565,12 +2566,11 @@ where
 
     fn update_player_faction_info(
         &mut self,
-        game: &CGame,
         faction: &CFaction,
         player_id: i32,
     ) {
         self.effects
-            .update_player_faction_info(game, faction, player_id);
+            .update_player_faction_info(faction, player_id);
     }
 
     fn faction_join_log_enabled(&self) -> bool {
@@ -2607,10 +2607,10 @@ where
 
     fn remove_previous_faction_applications(
         &mut self,
-        game: &CGame,
         current_faction: &mut CFaction,
         player_id: i32,
     ) -> Result<(), Self::Block> {
+        let game = self.game;
         let mut completed_removals = Vec::with_capacity(self.controller.factions.len());
         for (&map_key, faction) in &mut self.controller.factions {
             let outcome = if map_key == self.target_map_key {
@@ -3514,7 +3514,7 @@ impl COrganizingCtrl {
             return Ok(None);
         };
         faction
-            .add_owned_city(game, region_id, |game, faction, player_id| {
+            .add_owned_city(game, region_id, |_view, faction, player_id| {
                 let _ = game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             })
@@ -3956,6 +3956,7 @@ impl COrganizingCtrl {
         let result = {
             let mut context = DetachedFactionApplicationContext {
                 controller: self,
+                game,
                 target_map_key: map_key,
                 effects,
             };
@@ -5302,7 +5303,7 @@ impl COrganizingCtrl {
                         map_key,
                         faction.update_city_war_enemy_faction(
                             game,
-                            |game, faction, player_id| {
+                            |_view, faction, player_id| {
                                 let _ = game
                                     .update_player_faction_info_from_faction(faction, player_id);
                                 update_player(player_id);
@@ -5442,7 +5443,7 @@ impl COrganizingCtrl {
             CityWarOrganizingOwner::Faction(faction_id) => self
                 .faction_by_id_mut(faction_id)
                 .expect("resolved city-war faction owner не удаляется")
-                .delete_owned_city(game, region_id, |game, faction, player_id| {
+                .delete_owned_city(game, region_id, |_view, faction, player_id| {
                     let _ = game.update_player_faction_info_from_faction(faction, player_id);
                     update_player(player_id);
                 })
@@ -5478,7 +5479,7 @@ impl COrganizingCtrl {
             CityWarOrganizingOwner::Faction(faction_id) => self
                 .faction_by_id_mut(faction_id)
                 .expect("resolved city-war faction owner не удаляется")
-                .add_owned_city(game, region_id, |game, faction, player_id| {
+                .add_owned_city(game, region_id, |_view, faction, player_id| {
                     let _ = game.update_player_faction_info_from_faction(faction, player_id);
                     update_player(player_id);
                 })
@@ -6338,7 +6339,7 @@ impl COrganizingCtrl {
                 .update_player_faction_info(
                     game,
                     first_player_id,
-                    |game, faction, player_id| {
+                    |_view, faction, player_id| {
                         let _ = game.update_player_faction_info_from_faction(faction, player_id);
                         update_player(player_id);
                     },
@@ -6350,7 +6351,7 @@ impl COrganizingCtrl {
                 .update_player_faction_info(
                     game,
                     second_player_id,
-                    |game, faction, player_id| {
+                    |_view, faction, player_id| {
                         let _ = game.update_player_faction_info_from_faction(faction, player_id);
                         update_player(player_id);
                     },
@@ -6711,7 +6712,7 @@ impl COrganizingCtrl {
         let source_cities = self
             .faction_by_id_mut(source_faction_id)
             .expect("source faction owner проверен")
-            .clear_owned_cities(game, |game, faction, player_id| {
+            .clear_owned_cities(game, |_view, faction, player_id| {
                 let _ = game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             });
@@ -6724,7 +6725,7 @@ impl COrganizingCtrl {
         let target_city = self
             .faction_by_id_mut(target_faction_id)
             .expect("target faction owner проверен")
-            .add_owned_city(game, region_id, |game, faction, player_id| {
+            .add_owned_city(game, region_id, |_view, faction, player_id| {
                 let _ = game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             });
@@ -7628,8 +7629,8 @@ impl UnionOwnedCityMutationContext for UnionOrganizingBridge<'_> {
             return Ok(false);
         };
         faction
-            .add_owned_city_list(self.game, region_ids, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+            .add_owned_city_list(self.game, region_ids, |_view, faction, player_id| {
+                let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             })
             .map(|_| true)
@@ -7644,8 +7645,8 @@ impl UnionOwnedCityMutationContext for UnionOrganizingBridge<'_> {
             return Ok(false);
         };
         faction
-            .clear_owned_cities(self.game, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+            .clear_owned_cities(self.game, |_view, faction, player_id| {
+                let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             })
             .map(|_| true)
@@ -7718,8 +7719,8 @@ impl UnionPlayerRefreshContext for UnionOrganizingBridge<'_> {
         update_player: &mut dyn FnMut(i32),
     ) -> Option<Vec<i32>> {
         self.organizing.faction_by_id(faction_id).map(|faction| {
-            faction.update_player_faction_info(self.game, 0, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+            faction.update_player_faction_info(self.game, 0, |_view, faction, player_id| {
+                let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
                 update_player(player_id);
             })
         })
