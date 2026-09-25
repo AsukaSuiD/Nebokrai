@@ -42,6 +42,8 @@ pub mod teammessage;
 pub mod world_client;
 pub mod world_game_view;
 pub mod world_message;
+pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration и typed-доставка его событий
+pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, INI-замена, build error MainLoop DB-stage
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view;
 pub mod world_runtime; // драйвер потока игры World: CreateGame→Init→turn→Release→DeleteGame + init/release data-bundle; CGame входит assoc-типом и фабрикой, context-impl у process-owner-а

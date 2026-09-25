@@ -925,6 +925,7 @@ dependencies = [
  "freetype-rs",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "nebokrai-shared",
  "parking_lot",
  "procfs",
