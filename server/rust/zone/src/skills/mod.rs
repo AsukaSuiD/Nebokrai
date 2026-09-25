@@ -16,11 +16,15 @@ mod lifecycle;
 mod masked_area;
 mod pillar;
 mod poisonfog;
+mod projectile; // Прицельные снаряды: общий полёт, элементный контакт и усилитель душами.
 mod roar;
 pub mod skillfactory;
 mod snowstorm;
 mod soulmirror;
 mod spidermist;
+// Клиентские контракты состояний Zone (проекция живых записей и runtime-план
+// visual); enum-каталог payload арены moveshape сваривается из hub до шага B.
+pub mod state;
 pub mod statefactory;
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
 mod visualeffect;
@@ -71,3 +75,5 @@ pub use wangsheng::{WANGSHENG_SKILL_ID, wangsheng_restored_health};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
 pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
     encode_related_phalanx_snapshot, next_summon_shape_id};
+pub use projectile::{BaseProjectileFlight, ElementProjectileAttack,
+    ElementProjectileLiveField, SoulProjectileAmplification};

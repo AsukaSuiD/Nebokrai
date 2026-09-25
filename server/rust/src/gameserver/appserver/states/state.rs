@@ -1,4 +1,6 @@
-//! Общие callbacks, доступ и клиентское представление состояний GameServer.
+//! Общие callbacks и доступ состояний GameServer; клиентское представление
+//! (проекция записей и runtime-план visual) перенесено в Zone `skills::state`
+//! и делегируется отсюда, включая шов `StateClientPayload` для `StateData`.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/states/state.h/.cpp
 //! и операции состояний appserver/moveshape.cpp, GetObject appserver/serverregion.cpp.
 //!
@@ -33,6 +35,7 @@ use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
+use nebokrai_zone::skills::state::{StateClientPayload, StatePayloadView};
 
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
@@ -521,43 +524,23 @@ fn log_state_array_change(
     crate::public::tools::put_debug_string(&text);
 }
 
-/// Заимствованная клиентская проекция одного живого экземпляра, без DB Serialize.
-/// Только Team дописывает имя после общей тройки ID/time/additional.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct StateClientRecord<'a> {
-    pub(crate) time: i32,
-    pub(crate) additional: u32,
-    pub(crate) team_name: Option<&'a [u8]>,
-}
+// Заимствованная клиентская проекция одного живого экземпляра, без DB Serialize.
+// Перенесена в Zone `skills::state`; реэкспорт сохраняет прежний путь.
+pub(crate) use nebokrai_zone::skills::state::StateClientRecord;
 
-impl StateClientRecord<'_> {
-    fn timed(time: i32) -> Self {
-        Self { time, ..Self::default() }
-    }
-}
-
-// Один список задаёт AI/End/Begin/destructor/OnUpdateProperties/SetRegion, клиентскую
-// проекцию и остаточное состояние visual после runtime Begin. Внутри общего
-// lifecycle-семейства client-clause относится к конкретному typed payload.
+// Один список задаёт AI/End/Begin/destructor/OnUpdateProperties/SetRegion.
+// Клиентская проекция и остаточное состояние visual после runtime Begin
+// перенесены в Zone `skills::state`: генерируемые обёртки делегируют её
+// каталогу, а client=/visual= clauses здесь больше не задаются — единый
+// источник этих контрактов теперь в Zone.
 macro_rules! state_callbacks {
     (@destructor) => { None };
     (@destructor $destructor:path) => { Some($destructor) };
     (@region) => { set_state_user_region };
     (@region $set_region:path) => { $set_region };
-    (@visual) => { |_state: &StateData| Some((1, false)) };
-    (@visual $visual:expr) => { $visual };
-    (@client $payload:expr, $team_count:expr, $clock:expr) => { StateClientRecord::default() };
-    (@client $payload:expr, $team_count:expr, $clock:expr;
-        |$state:ident, $team:ident, $now:ident| $client:expr) => {{
-        let $state = $payload;
-        let $team = $team_count;
-        let $now = $clock;
-        $client
-    }};
     ($($(
         StateData::$variant:ident(_)
-        $(; client = |$state:ident, $team:ident, $now:ident| $client:block)?
-    )|+ => ($ai:expr, $end:path, $restart:path, $property:expr $(, $set_region:path)?) $(; visual = $visual:expr)? $(; destructor = $destructor:path)?),+ $(,)?) => {
+    )|+ => ($ai:expr, $end:path, $restart:path, $property:expr $(, $set_region:path)?) $(; destructor = $destructor:path)?),+ $(,)?) => {
         fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
             match state { $($(StateData::$variant(_))|+ => $ai),+ }
         }
@@ -583,23 +566,11 @@ macro_rules! state_callbacks {
             team_member_count: usize,
             now: &mut dyn FnMut() -> u32,
         ) -> StateClientRecord<'a> {
-            match state {
-                $($(StateData::$variant(_payload) => state_callbacks!(@client
-                    _payload, team_member_count, &mut *now
-                    $(; |$state, $team, $now| $client)?
-                )),+),+
-            }
+            nebokrai_zone::skills::state::state_client_record(state, team_member_count, now)
         }
 
         pub(crate) fn registered_runtime_state_visual(state: &StateData) -> Option<super::visualeffect::CVisualEffect> {
-            let plan: fn(&StateData) -> Option<(i32, bool)> = match state {
-                $($(StateData::$variant(_))|+ => state_callbacks!(@visual $($visual)?)),+
-            };
-            let (loop_value, updated) = plan(state)?;
-            let mut visual = super::visualeffect::CVisualEffect::new();
-            visual.begin_visual_effect(loop_value);
-            if updated { visual.update_visual_effect(); }
-            Some(visual)
+            nebokrai_zone::skills::state::registered_runtime_state_visual(state)
         }
 
         fn state_set_region(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) {
@@ -620,32 +591,32 @@ state_callbacks! {
         skills::taijistate::end_tai_ji_state,
         skills::taijistate::restart_tai_ji_state,
         skills::taijistate::update_tai_ji_state_properties
-    ); visual = |_state| None,
+    ),
     StateData::EnlargeFullMiss(_) => (
         |_, _, _, _, _| {},
         skills::enlargefullmissstate::end_enlarge_full_miss_state,
         skills::enlargefullmissstate::restart_enlarge_full_miss_state,
         skills::enlargefullmissstate::update_enlarge_full_miss_state_properties
-    ); visual = |_state| None,
+    ),
     StateData::EnlargeMaxHp(_) => (
         |_, _, _, _, _| {},
         skills::enlargemaxhpstate::end_enlarge_max_hp_state,
         skills::enlargemaxhpstate::restart_enlarge_max_hp_state,
         skills::enlargemaxhpstate::update_enlarge_max_hp_state_properties
-    ); visual = |_state| None,
+    ),
     StateData::EnlargeMaxMp(_) => (
         |_, _, _, _, _| {},
         skills::enlargemaxmpstate::end_enlarge_max_mp_state,
         skills::enlargemaxmpstate::restart_enlarge_max_mp_state,
         skills::enlargemaxmpstate::update_enlarge_max_mp_state_properties
-    ); visual = |_state| None,
+    ),
     StateData::Origin(_) => (
         |_, _, _, _, _| {},
         skills::originstate::end_origin_state,
         skills::originstate::restart_origin_state,
         skills::originstate::update_origin_state_properties
-    ); visual = |_state| None,
-    StateData::MeteorArrow(_); client = |state, _team, _now| { StateClientRecord { additional: state.additional_data() as u32, ..StateClientRecord::default() } } => (
+    ),
+    StateData::MeteorArrow(_) => (
         |_, _, _, _, _| {},
         skills::meteorarrowstate::end_meteor_arrow_state,
         skills::meteorarrowstate::restart_meteor_arrow_state,
@@ -657,7 +628,7 @@ state_callbacks! {
         skills::energyholdingstate::restart_energy_holding_state,
         |_, _, _, _, _| true
     ),
-    StateData::SoulCollect(_); client = |state, _team, _now| { StateClientRecord { additional: state.souls() as u32, ..StateClientRecord::default() } } => (
+    StateData::SoulCollect(_) => (
         |_, _, _, _, _| {},
         skills::soulcollectstate::end_soul_collect_state,
         skills::soulcollectstate::restart_soul_collect_state,
@@ -668,22 +639,22 @@ state_callbacks! {
         skills::swordshipstate::end_swordship_state,
         skills::swordshipstate::restart_swordship_state,
         skills::swordshipstate::update_swordship_state_properties
-    ); visual = |_state| None,
+    ),
     StateData::WuXing(_) => (
         |_, _, _, _, _| {},
         skills::wuxingstate::end_wuxing_state,
         skills::wuxingstate::restart_wuxing_state,
         skills::wuxingstate::update_wuxing_state_properties
-    ); visual = |_state| None,
-    StateData::Agility2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    ),
+    StateData::Agility2(_) => (
         |game, region, target, key, runtime| {
             skills::agilitystate2::update_agility_state_2(game, region, target, key, runtime.now_milliseconds());
         },
         skills::agilitystate2::end_agility_state_2,
         skills::agilitystate2::restart_agility_state_2,
         skills::agilitystate2::update_agility_state_2_properties
-    ); visual = |_state| Some((0, true)),
-    StateData::Callosity(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    ),
+    StateData::Callosity(_) => (
         |game, region, target, key, runtime| {
             skills::callositystate::update_callosity_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -691,7 +662,7 @@ state_callbacks! {
         skills::callositystate::restart_callosity_state,
         skills::callositystate::update_callosity_state_properties
     ),
-    StateData::Hearten(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::Hearten(_) => (
         |game, region, target, key, runtime| {
             skills::heartenstate::update_hearten_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -699,7 +670,7 @@ state_callbacks! {
         skills::heartenstate::restart_hearten_state,
         skills::heartenstate::update_hearten_state_properties
     ),
-    StateData::RageBreak(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::RageBreak(_) => (
         |game, region, target, key, runtime| {
             skills::ragebreakstate::update_rage_break_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -707,7 +678,7 @@ state_callbacks! {
         skills::ragebreakstate::restart_rage_break_state,
         skills::ragebreakstate::update_rage_break_state_properties
     ),
-    StateData::Pillar(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::Pillar(_) => (
         |game, region, target, key, runtime| {
             skills::pillarstate::update_pillar_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -723,7 +694,7 @@ state_callbacks! {
         skills::tianshenxiafanstate::restart_tian_shen_xia_fan_state,
         skills::tianshenxiafanstate::update_tian_shen_xia_fan_state_properties
     ),
-    StateData::Wangsheng(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::Wangsheng(_) => (
         |game, region, target, key, runtime| {
             skills::wangshengstate::update_wangsheng_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -731,14 +702,14 @@ state_callbacks! {
         skills::wangshengstate::restart_wangsheng_state,
         skills::wangshengstate::update_wangsheng_state_properties
     ),
-    StateData::Blind(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
-    | StateData::Rush(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
-    | StateData::Rush2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
-    | StateData::KnockOut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
-    | StateData::KnightCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
-    | StateData::SpiderWeb(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
-    | StateData::Seal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
-    | StateData::Strike(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::Blind(_)
+    | StateData::Rush(_)
+    | StateData::Rush2(_)
+    | StateData::KnockOut(_)
+    | StateData::KnightCut(_)
+    | StateData::SpiderWeb(_)
+    | StateData::Seal(_)
+    | StateData::Strike(_) => (
         |game, region, target, key, runtime| {
             skills::blindstate::update_blind_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -746,8 +717,8 @@ state_callbacks! {
         skills::blindstate::restart_blind_state,
         |_, _, _, _, _| true,
         set_state_sufferer_region
-    ); visual = |state| Some((1, matches!(state, StateData::Blind(_) | StateData::Rush(_) | StateData::Rush2(_)))),
-    StateData::Heal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    ),
+    StateData::Heal(_) => (
         |game, region, target, key, runtime| {
             skills::healstate::update_stored_heal_state(game, region, target, key, || runtime.now_milliseconds());
         },
@@ -756,7 +727,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::PoisonArrow(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::PoisonArrow(_) => (
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0x21e, _>(game, region, target, key, runtime);
         },
@@ -765,7 +736,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::SpiderPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::SpiderPoison(_) => (
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0x191, _>(game, region, target, key, runtime);
         },
@@ -774,7 +745,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::SpriteBurn(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::SpriteBurn(_) => (
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0x1a6, _>(game, region, target, key, runtime);
         },
@@ -783,7 +754,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::BloodLoss(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::BloodLoss(_) => (
         |game, region, target, key, runtime| {
             skills::bloodlossstate::update_blood_loss_state(game, region, target, key, runtime);
         },
@@ -792,7 +763,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::LeafCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::LeafCut(_) => (
         |game, region, target, key, runtime| {
             skills::leafcutstate::update_leaf_cut_state::<0x6b, _>(game, region, target, key, runtime);
         },
@@ -801,7 +772,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::LeafCut2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::LeafCut2(_) => (
         |game, region, target, key, runtime| {
             skills::leafcutstate::update_leaf_cut_state::<0x80, _>(game, region, target, key, runtime);
         },
@@ -810,7 +781,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::LeafCut3(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::LeafCut3(_) => (
         |game, region, target, key, runtime| {
             skills::leafcutstate::update_leaf_cut_state::<0x8f, _>(game, region, target, key, runtime);
         },
@@ -819,7 +790,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::Kerosene(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::Kerosene(_) => (
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0xf1, _>(game, region, target, key, runtime);
         },
@@ -828,7 +799,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::Cure(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::Cure(_) => (
         |game, region, target, key, runtime| {
             skills::curestate::update_cure_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -837,7 +808,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::BossBlueQuake(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::BossBlueQuake(_) => (
         |game, region, target, key, runtime| {
             skills::bossbluequakestate::update_boss_blue_quake_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -845,7 +816,7 @@ state_callbacks! {
         skills::bossbluequakestate::restart_boss_blue_quake_state,
         |_, _, _, _, _| true
     ),
-    StateData::BoaLock(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::BoaLock(_) => (
         |game, region, target, key, runtime| {
             skills::boalockstate::update_boa_lock_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -854,7 +825,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::GodBless(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::GodBless(_) => (
         |game, region, target, key, runtime| {
             skills::godblessstate::update_god_bless_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -862,8 +833,8 @@ state_callbacks! {
         skills::godblessstate::restart_god_bless_state,
         skills::godblessstate::update_god_bless_state_properties,
         set_god_bless_regions
-    ); visual = |state| Some((if matches!(state, StateData::GodBless(state) if state.skill_id() == skills::godblessstate2::GOD_BLESS_STATE_2_ID) { 0 } else { 1 }, false)),
-    StateData::Roar(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    ),
+    StateData::Roar(_) => (
         |game, region, target, key, runtime| {
             skills::roarstate::update_roar_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -872,7 +843,7 @@ state_callbacks! {
         skills::roarstate::update_roar_state_properties,
         set_state_sufferer_region
     ),
-    StateData::Weak(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::Weak(_) => (
         |game, region, target, key, runtime| {
             skills::weakstate::update_weak_state(game, region, target, key, &mut || runtime.now_milliseconds());
         },
@@ -881,7 +852,7 @@ state_callbacks! {
         skills::weakstate::update_weak_state_properties,
         skills::weakstate::set_weak_state_region
     ),
-    StateData::Fury(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::Fury(_) => (
         |game, region, target, key, runtime| {
             skills::furystate::update_fury_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -889,7 +860,7 @@ state_callbacks! {
         skills::furystate::restart_fury_state,
         skills::furystate::update_fury_state_properties
     ),
-    StateData::BossBlueFury(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::BossBlueFury(_) => (
         |game, region, target, key, runtime| {
             skills::bossbluefurystate::update_boss_blue_fury_state(game, region, target, key, || runtime.now_milliseconds());
         },
@@ -897,7 +868,7 @@ state_callbacks! {
         skills::bossbluefurystate::restart_boss_blue_fury_state,
         skills::bossbluefurystate::update_boss_blue_fury_state_properties
     ),
-    StateData::PoisonFog(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::PoisonFog(_) => (
         |game, region, target, key, runtime| {
             skills::poisonfogstate::update_poison_fog_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -906,7 +877,7 @@ state_callbacks! {
         skills::poisonfogstate::update_poison_fog_state_properties,
         set_state_sufferer_region
     ),
-    StateData::BattleFairyAttribute(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::BattleFairyAttribute(_) => (
         |game, region, target, key, runtime| {
             skills::battlefairyattributestate::update_battle_fairy_attribute_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -914,16 +885,7 @@ state_callbacks! {
         skills::battlefairyattributestate::restart_battle_fairy_attribute_state,
         skills::battlefairyattributestate::update_battle_fairy_attribute_state_properties
     ),
-    StateData::DefenseShield(_); client = |state, _team, now| {
-        use skills::shieldstate::DefenseShieldState;
-        let (time, additional) = match state {
-            DefenseShieldState::Life(state) => (state.client_time(now), state.life() as u32),
-            DefenseShieldState::Machine(state) => (state.client_time(now), state.life() as u32),
-            DefenseShieldState::Mana(state) => (state.client_time(now), state.life() as u32),
-            DefenseShieldState::Promotion(state) => (state.client_time(now), 0),
-        };
-        StateClientRecord { time, additional, team_name: None }
-    } => (
+    StateData::DefenseShield(_) => (
         |game, region, target, key, runtime| {
             skills::shieldstate::update_defense_shield(game, region, target, key, runtime.now_milliseconds());
         },
@@ -931,8 +893,8 @@ state_callbacks! {
         skills::shieldstate::restart_defense_shield_state,
         |_, _, _, _, _| true,
         set_defense_shield_region
-    ); visual = |state| { let once = matches!(state, StateData::DefenseShield(skills::shieldstate::DefenseShieldState::Promotion(_))); Some((if once { 0 } else { 1 }, once)) },
-    StateData::DaubPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    ),
+    StateData::DaubPoison(_) => (
         |game, region, target, key, runtime| {
             skills::daubpoisonstate::update_daub_poison_state(game, region, target, key, runtime.now_milliseconds());
         },
@@ -948,7 +910,7 @@ state_callbacks! {
         super::automaticrestore::restart_automatic_restore_state,
         |_, _, _, _, _| true
     ),
-    StateData::ConsumableRestore(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::ConsumableRestore(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_consumable_restore_state(region, target, key, runtime);
         },
@@ -957,7 +919,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
-    StateData::Particular(_); client = |state, _team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(), team_name: None } } => (
+    StateData::Particular(_) => (
         |game, region, target, key, runtime| {
             crate::gameserver::appserver::particularstate::update_particular_state(game, region, target, key, runtime);
         },
@@ -965,8 +927,8 @@ state_callbacks! {
         crate::gameserver::appserver::particularstate::restart_particular_state,
         |_, _, _, _, _| true,
         set_state_sufferer_region
-    ); visual = |_state| Some((1, true)),
-    StateData::Team(_); client = |state, team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(team), team_name: Some(state.team_name()) } } => (
+    ),
+    StateData::Team(_) => (
         |game, region, target, key, runtime| {
             crate::gameserver::appserver::teamstate::update_team_recruitment_state(game, region, target, key, runtime);
         },
@@ -974,8 +936,8 @@ state_callbacks! {
         crate::gameserver::appserver::teamstate::restart_team_recruitment_state,
         |_, _, _, _, _| true,
         set_state_sufferer_region
-    ); visual = |_state| Some((1, true)),
-    StateData::Script(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    ),
+    StateData::Script(_) => (
         |game, region, target, key, runtime| {
             crate::gameserver::appserver::scriptstate::update_script_move_state(game, region, target, key, runtime);
         },
@@ -983,11 +945,8 @@ state_callbacks! {
         crate::gameserver::appserver::scriptstate::restart_script_move_state,
         crate::gameserver::appserver::scriptstate::update_script_move_state_properties,
         set_script_state_region
-    ); visual = |state| match state {
-        StateData::Script(state) => Some((if state.is_auto_protect() { 1 } else { 0 }, false)),
-        _ => None,
-    },
-    StateData::ChangeBody(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    ),
+    StateData::ChangeBody(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_change_body_state(region, target, key, runtime);
         },
@@ -996,7 +955,7 @@ state_callbacks! {
         crate::gameserver::appserver::chbystate::update_change_body_state_properties,
         CGame::set_change_body_state_region
     ),
-    StateData::Extended(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::Extended(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_extended_state(region, target, key, runtime);
         },
@@ -1004,7 +963,7 @@ state_callbacks! {
         CGame::restart_move_shape_extended_state,
         CGame::update_move_shape_extended_state_properties
     ),
-    StateData::Undead(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
+    StateData::Undead(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_appellation_state(region, target, key, runtime);
         },
@@ -1012,7 +971,7 @@ state_callbacks! {
         CGame::restart_move_shape_appellation_state,
         CGame::update_move_shape_appellation_state_properties
     ),
-    StateData::Ride(_); client = |state, _team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(), team_name: None } } => (
+    StateData::Ride(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_ride_state(region, target, key, runtime);
         },
@@ -1020,6 +979,73 @@ state_callbacks! {
         CGame::restart_move_shape_ride_state,
         CGame::update_move_shape_ride_state_properties
     ),
+}
+
+/// Сварка единого enum-каталога payload арены `moveshape` с клиентскими
+/// контрактами Zone `skills::state`. Снимается шагом B переноса хранилища:
+/// тогда `StateData` переедет в Zone вместе с этим impl, и match каталога
+/// пойдёт прямо по `&StateData` без трейта и вида.
+impl<'a> StateClientPayload<'a> for StateData {
+    fn state_payload_view(&'a self) -> StatePayloadView<'a> {
+        match self {
+            StateData::PersistentAgility(state) => StatePayloadView::PersistentAgility(state),
+            StateData::TaiJi(state) => StatePayloadView::TaiJi(state),
+            StateData::EnlargeFullMiss(state) => StatePayloadView::EnlargeFullMiss(state),
+            StateData::EnlargeMaxHp(state) => StatePayloadView::EnlargeMaxHp(state),
+            StateData::EnlargeMaxMp(state) => StatePayloadView::EnlargeMaxMp(state),
+            StateData::Origin(state) => StatePayloadView::Origin(state),
+            StateData::MeteorArrow(state) => StatePayloadView::MeteorArrow(state),
+            StateData::EnergyHolding(state) => StatePayloadView::EnergyHolding(state),
+            StateData::SoulCollect(state) => StatePayloadView::SoulCollect(state),
+            StateData::Swordship(state) => StatePayloadView::Swordship(state),
+            StateData::WuXing(state) => StatePayloadView::WuXing(state),
+            StateData::Agility2(state) => StatePayloadView::Agility2(state),
+            StateData::Callosity(state) => StatePayloadView::Callosity(state),
+            StateData::Hearten(state) => StatePayloadView::Hearten(state),
+            StateData::RageBreak(state) => StatePayloadView::RageBreak(state),
+            StateData::Pillar(state) => StatePayloadView::Pillar(state),
+            StateData::TianShenXiaFan(state) => StatePayloadView::TianShenXiaFan(state),
+            StateData::Wangsheng(state) => StatePayloadView::Wangsheng(state),
+            StateData::Blind(state) => StatePayloadView::Blind(state),
+            StateData::Rush(state) => StatePayloadView::Rush(state),
+            StateData::Rush2(state) => StatePayloadView::Rush2(state),
+            StateData::KnockOut(state) => StatePayloadView::KnockOut(state),
+            StateData::KnightCut(state) => StatePayloadView::KnightCut(state),
+            StateData::SpiderWeb(state) => StatePayloadView::SpiderWeb(state),
+            StateData::Seal(state) => StatePayloadView::Seal(state),
+            StateData::Strike(state) => StatePayloadView::Strike(state),
+            StateData::Heal(state) => StatePayloadView::Heal(state),
+            StateData::PoisonArrow(state) => StatePayloadView::PoisonArrow(state),
+            StateData::SpiderPoison(state) => StatePayloadView::SpiderPoison(state),
+            StateData::SpriteBurn(state) => StatePayloadView::SpriteBurn(state),
+            StateData::BloodLoss(state) => StatePayloadView::BloodLoss(state),
+            StateData::LeafCut(state) => StatePayloadView::LeafCut(state),
+            StateData::LeafCut2(state) => StatePayloadView::LeafCut2(state),
+            StateData::LeafCut3(state) => StatePayloadView::LeafCut3(state),
+            StateData::Kerosene(state) => StatePayloadView::Kerosene(state),
+            StateData::Cure(state) => StatePayloadView::Cure(state),
+            StateData::BossBlueQuake(state) => StatePayloadView::BossBlueQuake(state),
+            StateData::BoaLock(state) => StatePayloadView::BoaLock(state),
+            StateData::GodBless(state) => StatePayloadView::GodBless(state),
+            StateData::Roar(state) => StatePayloadView::Roar(state),
+            StateData::Weak(state) => StatePayloadView::Weak(state),
+            StateData::Fury(state) => StatePayloadView::Fury(state),
+            StateData::BossBlueFury(state) => StatePayloadView::BossBlueFury(state),
+            StateData::PoisonFog(state) => StatePayloadView::PoisonFog(state),
+            StateData::BattleFairyAttribute(state) => StatePayloadView::BattleFairyAttribute(state),
+            StateData::DefenseShield(state) => StatePayloadView::DefenseShield(state),
+            StateData::DaubPoison(state) => StatePayloadView::DaubPoison(state),
+            StateData::AutomaticRestore(state) => StatePayloadView::AutomaticRestore(state),
+            StateData::ConsumableRestore(state) => StatePayloadView::ConsumableRestore(state),
+            StateData::Particular(state) => StatePayloadView::Particular(state),
+            StateData::Team(state) => StatePayloadView::Team(state),
+            StateData::Script(state) => StatePayloadView::Script(state),
+            StateData::ChangeBody(state) => StatePayloadView::ChangeBody(state),
+            StateData::Extended(state) => StatePayloadView::Extended(state),
+            StateData::Undead(state) => StatePayloadView::Undead(state),
+            StateData::Ride(state) => StatePayloadView::Ride(state),
+        }
+    }
 }
 
 
