@@ -25,21 +25,74 @@
 //! повторные устаревшие ID; сюда перенесено только правило.
 //!
 //! `encode_related_phalanx_snapshot` / `encode_related_phalanx_prefix`:
-//! VERIFIED_DISASSEMBLY для порядка конверта по двум членам семейства,
-//! `CWeakPhalanx::AddToByteArray` (RVA `0x1F54D0`) и
-//! `CFireBoltPhalanx::AddToByteArray` (RVA `0x1FBD20`): skill ID базового
-//! `CSummonShape` (`[esi+0xB8]`; getter `GetSkillID` RVA `0x1E1030`, pub
-//! `1:001e0030`), уровень навыка владельца (`+0xC8` у weak, `+0xD4` у
-//! firebolt), первые два поля вложенного `tagMasterInfo` (`+0x84` type,
-//! `+0x88` id; копия десяти DWORD через ctor/assign RVA `0x10A610`/`0x10A640`,
-//! см. `zone/combat/masterinfo.rs`), оставшееся время (`GetRemainedTime`
-//! RVA `0x1E9870`, pub `1:001e8870`) и финальный `CShape::AddToByteArray`
-//! (RVA `0x5B250`). Тела владельцев НЕ слиты линкером: адреса и immediate
-//! полей различаются, общим является только порядок конверта, поэтому
-//! значения приходят параметрами. Исходная функция пробрасывает флаг
-//! `include_child` в базовый `CShape`; перенесённый клиентский снимок
-//! фиксирует `true` — поведение прежнего адаптера сохранено, пересмотр
-//! остаётся за per-phalanx порциями владельцев.
+//! VERIFIED_DISASSEMBLY для порядка конверта по всему семейству — машинно
+//! досмотрены все 11 уникальных тел `AddToByteArray@C*Phalanx` (таблица
+//! ниже): skill ID базового `CSummonShape` (`[esi+0xB8]`; getter
+//! `GetSkillID` RVA `0x1E1030`, pub `1:001e0030`), уровень навыка владельца
+//! (immediate чтения зависит от владельца, см. таблицу), первые два поля
+//! вложенного `tagMasterInfo` (`+0x84` type, `+0x88` id; копия десяти DWORD
+//! через ctor/assign RVA `0x10A610`/`0x10A640`, см.
+//! `zone/combat/masterinfo.rs`), оставшееся время (`GetRemainedTime`
+//! RVA `0x1E9870`, pub `1:001e8870`; вызов `call 0x5E9870`) и финальный
+//! `CShape::AddToByteArray` (RVA `0x5B250`). Исходная функция пробрасывает
+//! флаг `include_child` (второй аргумент) в базовый `CShape`; перенесённый
+//! клиентский снимок фиксирует `true` — поведение прежнего адаптера
+//! сохранено, пересмотр остаётся за per-phalanx порциями владельцев.
+//!
+//! Семейство тел `AddToByteArray@C*Phalanx` (S_PUB32 PDB). Линкер частично
+//! сфолдовал 29 имён в 11 уникальных тел: внутри группы машинный код
+//! байт-идентичен, между группами адреса и immediate различаются. Во всех
+//! телах уровень читается как поле самого объекта фаланги (`this` в esi),
+//! а не через указатель мастера: различие immediate (`+0xC8`, `+0xD4`, …)
+//! отражает разный layout владельцев, а не разный контракт.
+//!
+//! - RVA `0x1E4100` (VA `0x5E4100`): `CFatalBlowPhalanx`,
+//!   `CHeartLessArrowPhalanx2`, `CHeartLessArrowPhalanx3`; уровень
+//!   `[esi+0xBC]`. Пятипольный конверт — соответствует zone-конверту.
+//! - RVA `0x1E47A0` (VA `0x5E47A0`): `CArcheryPhalanx`,
+//!   `CBaseMagicPhalanx`, `CBFBaseAttackPhalanx`, `CSpiderMistPhalanx`,
+//!   `CLeimingPhalanx2`, `CYinYangPhalanx`, `CYinYangPhalanx2`; уровень
+//!   `[esi+0xCC]`. Соответствует.
+//! - RVA `0x1EF0C0` (VA `0x5EF0C0`): `CGodThunderPhalanx`,
+//!   `CGodThunderPhalanx2`, `CThunderPhalanx`; уровень `[esi+0xD8]`.
+//!   Расширенный хвост до `CShape`, см. ниже: счётчик
+//!   `n = ([esi+0xB0] / [esi+0xC4]) * [esi+0xDC]` (беззнаковое деление).
+//!   Пятипольный префикс совпадает, расширение к zone-конверту не
+//!   перенесено — частичное соответствие, полный перенос отложен.
+//! - RVA `0x1F54D0` (VA `0x5F54D0`): `CWeakPhalanx`,
+//!   `CGodPunishmentPhalanx`, `CThunderBlowPhalanx`, `CTianhuoPhalanx`;
+//!   уровень `[esi+0xC8]`. Соответствует (базовый спотчек ранней порции).
+//! - RVA `0x1F76A0` (VA `0x5F76A0`): `CThunderSlashPhalanx`; уровень
+//!   `[esi+0xE4]`. Соответствует.
+//! - RVA `0x1F8ED0` (VA `0x5F8ED0`): `CSnowStormPhalanx`; уровень
+//!   `[esi+0xD8]`. Расширенный хвост: счётчик
+//!   `n = ([esi+0xB0] / [esi+0xC4]) * k2(level) * k1(level)`, где k1/k2
+//!   выбираются по уровню 1/2/3 (иначе k1(1)/k2(1)) из глобальных RVA
+//!   `0x2A52C4`/`0x2A52CC`/`0x2A52D4` (k1) и `0x2A52C8`/`0x2A52D0`/
+//!   `0x2A52D8` (k2). Префикс совпадает, расширение не перенесено; смысл
+//!   таблиц коэффициентов — UNKNOWN.
+//! - RVA `0x1F9750` (VA `0x5F9750`): `CFallingStarPhalanx`,
+//!   `CMeteorArrowPhalanx`; уровень `[esi+0xEC]`. Расширенный хвост:
+//!   счётчик `n = [esi+0xE4]`. Префикс совпадает, расширение не перенесено.
+//! - RVA `0x1F9F30` (VA `0x5F9F30`): `CRainArrowPhalanx`; уровень
+//!   `[esi+0x108]`. Соответствует.
+//! - RVA `0x1FA850` (VA `0x5FA850`): `CLightingArrowPhalanx`; уровень
+//!   `[esi+0xF4]`. Соответствует.
+//! - RVA `0x1FBD20` (VA `0x5FBD20`): `CFireBoltPhalanx`,
+//!   `CFireBallPhalanx`, `CFireWallPhalanx`, `CPoisonFogPhalanx`,
+//!   `CThunderFirePhalanx`; уровень `[esi+0xD4]`. Соответствует (базовый
+//!   спотчек ранней порции).
+//! - RVA `0x1FECB0` (VA `0x5FECB0`): `CChaosSpherePhalanx`; уровень
+//!   `[esi+0xD8]`. Соответствует.
+//!
+//! Расширенный хвост трёх тел (godthunder, snowstorm, fallingstar) имеет
+//! одну схему: после оставшегося времени дописываются `[esi+0xB0]` и
+//! `[esi+0xC4]` как i32, счётчик `n` как i32 и `8*n` сырых байт по
+//! указателю из `[esi+0xBC]` через helper RVA `0x7AD90` (VA `0x47AD90`) —
+//! raw-append `(vector, ptr, byte_count)`; различается только вычисление
+//! `n`. Семантика полей `[esi+0xB0/0xBC/0xC4/0xDC/0xE4]` и content массива
+//! — UNKNOWN, устанавливается per-phalanx порциями владельцев. Символов
+//! `*Masked*` в PDB этой сборки нет.
 //!
 //! Двойное чтение часов: VERIFIED_DISASSEMBLY. `GetRemainedTime` обращается
 //! к часам дважды через IAT `0x64B264` (это `WINMM!timeGetTime`): первое
