@@ -554,6 +554,10 @@ impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
 
 pub const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
     [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
+/// Session-result типы, чьё третье поле result в wire — DWORD (читательский
+/// рукав `0x4A7976`); остальные три типа семейства читают result как BYTE
+/// (рукава `0x4A74C6`/`0x4A804F`) — см. [`dispatch_organizing_session_result`].
+pub const SESSION_RESULT_DWORD_MESSAGE_TYPES: [i32; 3] = [0x60120, 0x60122, 0x60124];
 pub const FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE: i32 = 0x60101;
 pub const CREATE_FACTION_MESSAGE_TYPE: i32 = 0x60103;
 pub const CREATE_FACTION_RESPONSE_TYPE: i32 = 0x7FE01;
@@ -637,6 +641,8 @@ pub enum OrganizingSessionResultDispatch {
         session_id: i64,
         cookie_first: i32,
         cookie_second: i32,
+        /// Обёртка `i32` для wire-width по типу: DWORD у `0x60120`/`0x60122`/
+        /// `0x60124`, BYTE у `0x60117`/`0x60119`/`0x60131`.
         result: i32,
         outcome: NetSessionCallbackOutcome,
     },
@@ -3961,6 +3967,19 @@ pub fn dispatch_goods_war_faction_win(
 
 /// Декодирует общий session-result branch `OnOrgasysMessage` в исходном
 /// порядке полей и передаёт callback менеджеру без дополнительных ответов.
+/// Ширина третьего поля result зависит от типа: `0x60120`/`0x60122`/`0x60124`
+/// читаются DWORD-рукавом `0x4A7976` (`get_long`), а `0x60117`/`0x60119`/
+/// `0x60131` — BYTE-рукавами `0x4A74C6`/`0x4A804F` (`get_char`); рукава
+/// сходятся в merge `0x4A74EA`, после которого идёт общий `cookie_first`.
+/// Отправители Game `0x48ABC3`/`0x48AC1F`/`0x48AC7B` записывают тот же
+/// макет, а результат доставляется через `CNetSessionManager::CheckCookie`
+/// (`0x460B30`, call-site `0x4C1720`), который при расхождении cookie молча
+/// отбрасывает результат.
+///
+/// Реконструкция ранее унифицировала чтение result под `get_char` для всех
+/// шести типов; расхождение оставалось скрытым, потому что сдвинутый на три
+/// байта `cookie_first` давал cookie mismatch и `CheckCookie` ничем не
+/// отвечал. Машинная ширина по типам восстановлена по приведённым рукавам.
 pub fn dispatch_organizing_session_result(
     message: &mut CMessage,
     manager: &CNetSessionManager,
@@ -3972,10 +3991,14 @@ pub fn dispatch_organizing_session_result(
 
     let session_id = message.base_mut().get_long64().unwrap_or(0);
     let cookie_second = message.base_mut().get_long().unwrap_or(0);
-    let result = message
-        .base_mut()
-        .get_char()
-        .map_or(0, |result| i32::from(result as u8));
+    let result = if SESSION_RESULT_DWORD_MESSAGE_TYPES.contains(&message_type) {
+        message.base_mut().get_long().unwrap_or(0)
+    } else {
+        message
+            .base_mut()
+            .get_char()
+            .map_or(0, |result| i32::from(result as u8))
+    };
     let cookie_first = message.base_mut().get_long().unwrap_or(0);
     let outcome =
         manager.on_sync_callback_result(session_id, cookie_first, cookie_second, result);
