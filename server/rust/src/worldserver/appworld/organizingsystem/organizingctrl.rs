@@ -861,7 +861,7 @@ pub(crate) struct COrganizingPlayerUpdater<'a> {
 
 struct DetachedFactionApplicationContext<'a, Effects> {
     controller: &'a mut COrganizingCtrl,
-    game: &'a CGame,
+    game: &'a dyn nebokrai_realm::app::world_game_view::WorldGameView,
     target_map_key: i32,
     effects: &'a mut Effects,
 }
@@ -972,7 +972,7 @@ where
 
 struct DetachedFactionDoJoinContext<'a, Effects> {
     controller: &'a mut COrganizingCtrl,
-    game: &'a CGame,
+    game: &'a dyn nebokrai_realm::app::world_game_view::WorldGameView,
     target_map_key: i32,
     effects: &'a mut Effects,
 }
@@ -1549,7 +1549,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn set_faction_parameter<Context>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         faction_id: i32,
         parameter: &[u8],
@@ -1588,7 +1588,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn set_contributor_for_player<Context>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         requester_id: i32,
         target_id: i32,
@@ -1621,7 +1621,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn add_contributor_experience(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         faction_id: i32,
         player_id: i32,
         experience_delta: i32,
@@ -1654,7 +1654,7 @@ impl COrganizingCtrl {
  /// соответствующий соседний virtual owner `OnMember*Change`.
     pub(crate) fn change_faction_member_state<ReadValue>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         faction_id: i32,
         player_id: i32,
         operation: i32,
@@ -1713,7 +1713,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn set_faction_admission_permit(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         faction_id: i32,
         player_id: i32,
         permit: bool,
@@ -1948,7 +1948,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn add_owned_city_to_faction(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         faction_id: i32,
         region_id: i32,
         update_player: &mut dyn FnMut(i32),
@@ -2048,7 +2048,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn leave_word_for_player(
         &mut self,
-        game: &mut CGame,
+        game: &mut dyn nebokrai_realm::app::world_game_view::WorldGameView,
         player_id: i32,
         content: &mut Vec<u8>,
         time: TagTimeValue,
@@ -2079,7 +2079,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn edit_leave_word_for_player(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         player_id: i32,
         leave_word_id: i32,
         operator: EOperator,
@@ -2110,7 +2110,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn pronounce_for_player(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         player_id: i32,
         content: &mut Vec<u8>,
         time: TagTimeValue,
@@ -2336,7 +2336,7 @@ impl COrganizingCtrl {
  /// master-player lookup ветки `0x60118`.
     pub(crate) fn apply_for_named_union_join<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         map_key: i32,
         applicant_faction_id: i32,
         second_parameter: i32,
@@ -2385,7 +2385,7 @@ impl COrganizingCtrl {
  /// signed map-order его reentrant membership/remove проходов.
     pub(crate) fn apply_for_faction_join_by_map_key<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         map_key: i32,
         player_id: i32,
@@ -2426,7 +2426,7 @@ impl COrganizingCtrl {
  /// один local-time snapshot, повторный lookup и virtual `DoJoin`.
     pub(crate) fn do_faction_join_by_manager<Effects, GetLocalTime>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         manager_id: i32,
         applicant_id: i32,
@@ -2627,7 +2627,7 @@ impl COrganizingCtrl {
  /// target faction на её исходной позиции controller-map.
     fn add_faction_to_client_with_detached(
         &self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         target_map_key: i32,
         current_faction: &CFaction,
         player_id: i32,
@@ -2669,7 +2669,7 @@ impl COrganizingCtrl {
 
     fn add_all_faction_info_to_client_with_detached(
         &self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         target_map_key: i32,
         current_faction: &CFaction,
         player_id: i32,
@@ -2953,7 +2953,7 @@ impl COrganizingCtrl {
  /// virtual `CUnion::FireOut(manager, target faction)`.
     pub(crate) fn fire_out_union_by_master<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         manager_id: i32,
         target_faction_id: i32,
@@ -3023,7 +3023,7 @@ impl COrganizingCtrl {
  /// disband через заново вычисленный `CUnion::GetPlayerHeader()`.
     pub(crate) fn exit_union_by_player<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         player_id: i32,
         effects: &mut Effects,
@@ -3122,7 +3122,7 @@ impl COrganizingCtrl {
  /// virtual `CUnion::Demise(old master, new master faction)`.
     pub(crate) fn demise_union_by_master<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         old_master_player_id: i32,
         new_master_faction_id: i32,
         effects: &mut Effects,
@@ -3166,7 +3166,7 @@ impl COrganizingCtrl {
  /// disband, delete-очередь, owned-city refresh и удаление owner-а.
     pub(crate) fn disband_confederation<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         manager_id: i32,
         union_id: i32,
@@ -3328,7 +3328,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn update_other_faction_info_to_client(
         &self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         faction_id: i32,
         faction_name: &[u8],
         operator: EOperator,
@@ -3363,7 +3363,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn disband_faction<Context>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         player_id: i32,
         faction_id: i32,
         context: &mut Context,
@@ -3837,7 +3837,7 @@ impl COrganizingCtrl {
 
     fn add_city_war_victor_counts(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         owner: CityWarOrganizingOwner,
         offence: bool,
     ) -> Result<CityWarVictorMutation, CityWarVictorMutationBlock> {
@@ -3880,7 +3880,7 @@ impl COrganizingCtrl {
 
     fn delete_city_war_owner_city(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         owner: CityWarOrganizingOwner,
         region_id: i32,
         update_player: &mut dyn FnMut(i32),
@@ -3916,7 +3916,7 @@ impl COrganizingCtrl {
 
     fn add_city_war_owner_city(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         owner: CityWarOrganizingOwner,
         region_id: i32,
         update_player: &mut dyn FnMut(i32),
@@ -3956,7 +3956,7 @@ impl COrganizingCtrl {
     )]
     pub(crate) fn on_attack_city_end<Effects>(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         result: i32,
         region_id: i32,
         attacker_player_id: i32,
@@ -5559,7 +5559,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn remove_person_from_apply_faction_list(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         player_id: i32,
     ) -> RemovePersonFromApplyFactionListOutcome {
         let mut removals = Vec::with_capacity(self.factions.len());
@@ -5928,7 +5928,7 @@ impl UnionOperatorValidationContext for COrganizingCtrl {
 /// `&mut COrganizingCtrl` и `&CGame` локальным bridge на месте вызова.
 pub(crate) struct UnionOrganizingBridge<'a> {
     pub(crate) organizing: &'a mut COrganizingCtrl,
-    pub(crate) game: &'a CGame,
+    pub(crate) game: &'a dyn nebokrai_realm::app::world_game_view::WorldGameView,
 }
 
 impl UnionOperatorValidationContext for UnionOrganizingBridge<'_> {
@@ -6476,7 +6476,7 @@ impl UnionFactionMemberContext for UnionFactionMapView<'_> {
 }
 
 fn send_union_snapshot_to_faction(
-    game: &CGame,
+    game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
     factions: &BTreeMap<i32, Option<Box<CFaction>>>,
     union: &mut CUnion,
     faction_id: i32,
@@ -6759,5 +6759,472 @@ impl nebokrai_realm::app::world_organizing_view::WorldOrganizingView for COrgani
     ) -> Option<Vec<FactionTalkDelivery>> {
         self.faction_by_id(faction_id)
             .map(|faction| faction.talk(game, speaker_id, first_text, second_text))
+    }
+}
+
+/// Прямая делегация одноимённым inherent-методам: game-доступ выше этого
+/// шва не пересекает `&dyn WorldGameView`, а generic context/effects —
+/// Realm-трейты; полный контракт комментирует сам трейт.
+impl nebokrai_realm::app::world_organizing_view::WorldOrganizingDispatchView
+    for COrganizingCtrl
+{
+    fn is_free_player(&self, player_id: i32) -> FreePlayerLookup {
+        COrganizingCtrl::is_free_player(self, player_id)
+    }
+
+    fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
+        COrganizingCtrl::faction_by_id(self, faction_id)
+    }
+
+    fn faction_by_id_mut(&mut self, faction_id: i32) -> Option<&mut CFaction> {
+        COrganizingCtrl::faction_by_id_mut(self, faction_id)
+    }
+
+    fn faction_id_by_master_player(
+        &self,
+        player_id: i32,
+    ) -> Result<i32, FactionMasterLookupBlock> {
+        COrganizingCtrl::faction_id_by_master_player(self, player_id)
+    }
+
+    fn union_id_by_master_player(
+        &self,
+        player_id: i32,
+    ) -> Result<Option<i32>, OrganizingUnionByMasterBlock> {
+        COrganizingCtrl::union_id_by_master_player(self, player_id)
+    }
+
+    fn faction_by_player_in_apply_list(&self, player_id: i32) -> ApplyFactionLookup {
+        COrganizingCtrl::faction_by_player_in_apply_list(self, player_id)
+    }
+
+    fn faction_count_by_country(&self, country: u8) -> Result<i32, FactionCountryCountBlock> {
+        COrganizingCtrl::faction_count_by_country(self, country)
+    }
+
+    fn faction_list_page(
+        &self,
+        requested_page: i32,
+        country: u8,
+    ) -> Result<FactionListPage, FactionListPageBlock> {
+        COrganizingCtrl::faction_list_page(self, requested_page, country)
+    }
+
+    fn declare_war_faction_count(&self) -> Result<i32, DeclareWarFactionPageBlock> {
+        COrganizingCtrl::declare_war_faction_count(self)
+    }
+
+    fn declare_war_faction_page(
+        &self,
+        source_faction_id: i32,
+        requested_page: i32,
+        faction_wars: &CFactionWarSys,
+    ) -> Result<DeclareWarFactionPage, DeclareWarFactionPageBlock> {
+        COrganizingCtrl::declare_war_faction_page(
+            self,
+            source_faction_id,
+            requested_page,
+            faction_wars,
+        )
+    }
+
+    fn organizing_by_name(
+        &self,
+        requested_name: &[u8],
+    ) -> Result<Option<OrganizingNameMatch>, OrganizingNameLookupBlock> {
+        COrganizingCtrl::organizing_by_name(self, requested_name)
+    }
+
+    fn country_by_name_match(
+        &self,
+        matched: OrganizingNameMatch,
+    ) -> Result<u8, OrganizingNameCountryBlock> {
+        COrganizingCtrl::country_by_name_match(self, matched)
+    }
+
+    fn operate_faction_tax(
+        &self,
+        faction_id: i32,
+        player_id: i32,
+        region_id: i32,
+    ) -> Result<
+        Option<FactionOperationOutcome>,
+        FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    > {
+        COrganizingCtrl::operate_faction_tax(self, faction_id, player_id, region_id)
+    }
+
+    fn operate_faction_city_gate(
+        &self,
+        faction_id: i32,
+        player_id: i32,
+        region_id: i32,
+    ) -> Result<
+        Option<FactionOperationOutcome>,
+        FactionOperationBlock<FactionUnionMembershipLookupBlock>,
+    > {
+        COrganizingCtrl::operate_faction_city_gate(self, faction_id, player_id, region_id)
+    }
+
+    fn set_faction_goods_war_count(&mut self, faction_id: i32, count: i32) -> Option<i32> {
+        COrganizingCtrl::set_faction_goods_war_count(self, faction_id, count)
+    }
+
+    fn enable_leave_word_for_master<Context>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Result<OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordEnableBlock>
+    where
+        Context: FactionOrganizingInfoContext,
+    {
+        COrganizingCtrl::enable_leave_word_for_master(self, player_id, context)
+    }
+
+    fn leave_word_for_player(
+        &mut self,
+        game: &mut dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<OrganizingLeaveWordOutcome, OrganizingLeaveWordBlock> {
+        COrganizingCtrl::leave_word_for_player(self, game, player_id, content, time)
+    }
+
+    fn edit_leave_word_for_player(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        player_id: i32,
+        leave_word_id: i32,
+        operator: EOperator,
+    ) -> Result<OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEditBlock> {
+        COrganizingCtrl::edit_leave_word_for_player(self, game, player_id, leave_word_id, operator)
+    }
+
+    fn pronounce_for_player(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        player_id: i32,
+        content: &mut Vec<u8>,
+        time: TagTimeValue,
+    ) -> Result<OrganizingPronounceOutcome, OrganizingPronounceBlock> {
+        COrganizingCtrl::pronounce_for_player(self, game, player_id, content, time)
+    }
+
+    fn remove_person_from_apply_faction_list(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        player_id: i32,
+    ) -> RemovePersonFromApplyFactionListOutcome {
+        COrganizingCtrl::remove_person_from_apply_faction_list(self, game, player_id)
+    }
+
+    fn apply_for_faction_join_by_map_key<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        map_key: i32,
+        player_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+        effects: &mut Effects,
+    ) -> Result<FactionApplyForJoinOutcome, OrganizingFactionApplicationBlock>
+    where
+        Effects: FactionApplyForJoinEffects,
+    {
+        COrganizingCtrl::apply_for_faction_join_by_map_key(
+            self,
+            game,
+            parameters,
+            map_key,
+            player_id,
+            second_parameter,
+            third_parameter,
+            effects,
+        )
+    }
+
+    fn apply_for_named_union_join<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        map_key: i32,
+        applicant_faction_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+        effects: &mut Effects,
+    ) -> Result<
+        UnionApplyForJoinOutcome<Effects::SessionReport>,
+        OrganizingNamedUnionApplicationBlock<Effects::SessionBlock>,
+    >
+    where
+        Effects: UnionApplyForJoinEffects,
+    {
+        COrganizingCtrl::apply_for_named_union_join(
+            self,
+            game,
+            map_key,
+            applicant_faction_id,
+            second_parameter,
+            third_parameter,
+            effects,
+        )
+    }
+
+    fn do_faction_join_by_manager<Effects, GetLocalTime>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        applicant_id: i32,
+        approve_flag: i32,
+        get_local_time: GetLocalTime,
+        effects: &mut Effects,
+    ) -> Result<OrganizingFactionDoJoinOutcome, OrganizingFactionDoJoinBlock>
+    where
+        Effects: FactionDoJoinEffects,
+        GetLocalTime: FnOnce() -> TagTimeValue,
+    {
+        COrganizingCtrl::do_faction_join_by_manager(
+            self,
+            game,
+            parameters,
+            manager_id,
+            applicant_id,
+            approve_flag,
+            get_local_time,
+            effects,
+        )
+    }
+
+    fn fire_out_union_by_master<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        target_faction_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionFireOutOutcome, OrganizingUnionFireOutBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        COrganizingCtrl::fire_out_union_by_master(
+            self,
+            game,
+            parameters,
+            manager_id,
+            target_faction_id,
+            effects,
+            update_player,
+        )
+    }
+
+    fn exit_union_by_player<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionExitOutcome, OrganizingUnionExitBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        COrganizingCtrl::exit_union_by_player(
+            self,
+            game,
+            parameters,
+            player_id,
+            effects,
+            update_player,
+        )
+    }
+
+    fn demise_union_by_master<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        old_master_player_id: i32,
+        new_master_faction_id: i32,
+        effects: &mut Effects,
+        get_tick: &mut dyn FnMut() -> u32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingUnionDemiseOutcome, OrganizingUnionDemiseBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        COrganizingCtrl::demise_union_by_master(
+            self,
+            game,
+            old_master_player_id,
+            new_master_faction_id,
+            effects,
+            get_tick,
+            update_player,
+        )
+    }
+
+    fn disband_confederation<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        manager_id: i32,
+        union_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<OrganizingConfederationDisbandOutcome, OrganizingConfederationDisbandBlock>
+    where
+        Effects: UnionFireOutEffects,
+    {
+        COrganizingCtrl::disband_confederation(
+            self,
+            game,
+            parameters,
+            manager_id,
+            union_id,
+            effects,
+            update_player,
+        )
+    }
+
+    fn disband_faction<Context>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        player_id: i32,
+        faction_id: i32,
+        context: &mut Context,
+    ) -> Result<OrganizingDisbandOutcome, OrganizingDisbandBlock>
+    where
+        Context: FactionDisbandContext,
+    {
+        COrganizingCtrl::disband_faction(self, game, player_id, faction_id, context)
+    }
+
+    fn set_faction_parameter<Context>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+        parameter: &[u8],
+        value: i32,
+        context: &mut Context,
+    ) -> Result<Option<FactionSetParameterOutcome>, FactionSetParameterBlock>
+    where
+        Context: FactionSetParameterContext,
+    {
+        COrganizingCtrl::set_faction_parameter(
+            self,
+            game,
+            parameters,
+            faction_id,
+            parameter,
+            value,
+            context,
+        )
+    }
+
+    fn upload_faction_icon<Context>(
+        &mut self,
+        parameters: &COrganizingParam,
+        faction_id: i32,
+        player_id: i32,
+        time: &TagTimeValue,
+        context: &mut Context,
+    ) -> Result<Option<FactionUploadIconOutcome>, FactionUploadIconBlock>
+    where
+        Context: FactionUploadIconContext,
+    {
+        COrganizingCtrl::upload_faction_icon(self, parameters, faction_id, player_id, time, context)
+    }
+
+    fn set_contributor_for_player<Context>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        requester_id: i32,
+        target_id: i32,
+        enabled: bool,
+        context: &mut Context,
+    ) -> Result<OrganizingContributorOutcome, OrganizingContributorBlock>
+    where
+        Context: FactionContributorContext,
+    {
+        COrganizingCtrl::set_contributor_for_player(
+            self,
+            game,
+            parameters,
+            requester_id,
+            target_id,
+            enabled,
+            context,
+        )
+    }
+
+    fn add_contributor_experience(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        faction_id: i32,
+        player_id: i32,
+        experience_delta: i32,
+    ) -> Result<OrganizingFactionExperienceMutation, FactionExperienceBlock> {
+        COrganizingCtrl::add_contributor_experience(
+            self,
+            game,
+            faction_id,
+            player_id,
+            experience_delta,
+        )
+    }
+
+    fn change_faction_member_state(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        faction_id: i32,
+        player_id: i32,
+        operation: i32,
+        read_value: &mut dyn FnMut() -> i32,
+    ) -> OrganizingFactionMemberStateOutcome {
+        COrganizingCtrl::change_faction_member_state(
+            self,
+            game,
+            faction_id,
+            player_id,
+            operation,
+            read_value,
+        )
+    }
+
+    fn set_faction_admission_permit(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        faction_id: i32,
+        player_id: i32,
+        permit: bool,
+    ) -> Result<Option<FactionPermitUpdate>, FactionPermitBlock> {
+        COrganizingCtrl::set_faction_admission_permit(self, game, faction_id, player_id, permit)
+    }
+
+    fn on_attack_city_end<Effects>(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        result: i32,
+        region_id: i32,
+        attacker_player_id: i32,
+        defender_faction_id: i32,
+        effects: &mut Effects,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<AttackCityEndReport, AttackCityEndBlock>
+    where
+        Effects: AttackCityEndEffects,
+    {
+        COrganizingCtrl::on_attack_city_end(
+            self,
+            game,
+            result,
+            region_id,
+            attacker_player_id,
+            defender_faction_id,
+            effects,
+            update_player,
+        )
     }
 }

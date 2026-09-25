@@ -6,6 +6,13 @@
 //! владельцам в исходном порядке. Дополнительные socket/ownership/tail gates
 //! не добавляются; повторный lookup остаётся повторным.
 //!
+//! Membership/governance ветви (заявки, выходы, распуски, dub/purview,
+//! leave-word/pronounce, налоги, городские операции, списки фракций)
+//! перенесены в `nebokrai_realm::app::organsysmessage` поверх статического
+//! организационного view; здешние одноимённые `pub(crate)` функции — только
+//! направляющая обвязка, собирающая CGame-адаптеры контекстов, либо ветви,
+//! чьи адаптеры ещё привязаны к старому владельцу игры.
+//!
 //! Async session callback публикует terminal action в main-loop FIFO и лишь
 //! там изменяет `CGame`; confirmation остаётся на исходной позиции callback.
 //! Короткий payload останавливает ветку после уже выполненного префикса.
@@ -41,17 +48,15 @@ use crate::worldserver::appworld::goodswarmember::{
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
     CFaction, FactionApplyForJoinEffects, FactionContributorContext, FactionDemiseContext,
-    FactionDisbandContext,
     FactionDoJoinEffects,
     FactionDubContext, FactionDubFormatArgument,
     FactionExitContext,
     FactionFireOutContext,
-    current_local_member_time, goods_war_check_for_faction_id,
+    goods_war_check_for_faction_id,
     FactionEnemyMutationContext,
     FactionEnemyWarLogArgument, FactionExperienceBlock,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionPurviewChange, FactionPurviewChangeContext,
-    FactionOperationOutcome,
     FactionSetParameterContext,
     FactionUpgradeContext, FactionUpgradeFormatArgument,
     FactionUploadIconBlock, FactionUploadIconContext,
@@ -64,31 +69,23 @@ use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityWarResultRegion, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    AttackCityEndBlock, AttackCityEndEffects, COrganizingCtrl,
+    AttackCityEndEffects, COrganizingCtrl,
     ConfederationCreationEffects,
     ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
     ConfederationCreationSessionRequest,
     CityTransferEffects,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
     CityTransferStartBlock,
-    DeclareWarFactionPage,
-    ApplyFactionLookup, FactionListPage,
-    RemovePersonFromApplyFactionListOutcome,
     FreeFactionLookup, FreePlayerLookup,
 
     OrganizingContributorBlock,
-    OrganizingDisbandOutcome, OrganizingDisbandPlayer,
-    FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
-    OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
-    OrganizingLeaveWordEnableBlock,
+    FactionUnionMembershipLookupBlock,
     WorldFactionWarDeclarationEffects,
-    OrganizingPronounceBlock,
     OrganizingUnionApplyForJoinDispatchBlock,
     FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
     FactionCreationPreparation,
     UnionOrganizingBridge,
     PlayerInviteFactionBlock, PlayerInviteFactionEffects,
-    OrganizingNameKind,
     OrganizingFactionDoJoinBlock,
     begin_city_transfer_session, begin_confederation_creation_session,
     OrganizingUnionDemiseBlock,
@@ -96,7 +93,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionFireOutBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
-    ECityState, EOperator, TagTimeValue,
+    TagTimeValue,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::{
@@ -623,28 +620,31 @@ impl FactionApplicationListContext for WorldUnionApplicationEffects<'_> {
     }
 }
 
-/// Узкий war/string/log adapter faction-ветви `0x60108` поверх общего
-/// session/transport owner-а, который нужен соседней union-ветви.
-struct WorldFactionApplicationEffects<'owner, 'effects> {
-    village_war: &'owner CVillageWarSys,
-    attack_city: &'owner CAttackCitySys,
+/// Узкий war/string/log adapter faction-ветви `0x60108`. Держит игру прямо,
+/// а не через общий session/transport owner: realm-обработчик ветви получает
+/// `&mut`-ссылки и на этот адаптер, и на owner-а соседней union-ветви
+/// одновременно, поэтому owner-borrow здесь не нужен и не допустим; игровой
+/// объект тот же, что и в owner-е, во всех call-site-ах диспетчера.
+struct WorldFactionApplicationEffects<'a> {
+    game: &'a CGame,
+    village_war: &'a CVillageWarSys,
+    attack_city: &'a CAttackCitySys,
     use_log_system: bool,
     faction_apply_log_enabled: bool,
-    write_faction_apply_log: &'owner mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-    owner: &'owner mut WorldUnionApplicationEffects<'effects>,
+    write_faction_apply_log: &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
 }
 
-impl FactionOrganizingInfoContext for WorldFactionApplicationEffects<'_, '_> {
+impl FactionOrganizingInfoContext for WorldFactionApplicationEffects<'_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
-        Some(self.owner.game.get_string_by_id(string_id).to_vec())
+        Some(self.game.get_string_by_id(string_id).to_vec())
     }
 
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>) {
-        let _ = COrganizingCtrl::send_organizing_info_to_client(self.owner.game, request);
+        let _ = COrganizingCtrl::send_organizing_info_to_client(self.game, request);
     }
 }
 
-impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
+impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_> {
     fn already_declared_for_village_war(&self, faction_id: i32) -> bool {
         self.village_war.is_already_declared_for_war(faction_id)
     }
@@ -658,7 +658,7 @@ impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
             .iter()
             .map(|argument| UnionFormatArgument::Text(*argument))
             .collect::<Vec<_>>();
-        format_union_world_string(self.owner.game.get_string_by_id(string_id), &arguments)
+        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
     }
 
     fn faction_apply_log_enabled(&self) -> bool {
@@ -1341,114 +1341,9 @@ where
     )
 }
 
-pub(crate) fn dispatch_leave_word_enable<Context>(
-    message: &mut CMessage,
-    organizing: &mut COrganizingCtrl,
-    context: &mut Context,
-) -> Option<Result<OrganizingLeaveWordEnableDispatch, OrganizingLeaveWordEnableBlock>>
-where
-    Context: FactionOrganizingInfoContext,
-{
-    if message.message_type() != ENABLE_LEAVE_WORD_MESSAGE_TYPE {
-        return None;
-    }
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    Some(
-        organizing
-            .enable_leave_word_for_master(player_id, context)
-            .map(|outcome| OrganizingLeaveWordEnableDispatch { player_id, outcome }),
-    )
-}
-
-fn capture_local_tag_time() -> TagTimeValue {
-    let local_time = TagTime::local_now();
-    TagTimeValue {
-        year: local_time.year,
-        month: local_time.month,
-        day_of_week: local_time.day_of_week,
-        day: local_time.day,
-        hour: local_time.hour,
-        minute: local_time.minute,
-        second: local_time.second,
-        milliseconds: local_time.milliseconds,
-    }
-}
-
-pub(crate) fn dispatch_leave_word(
-    message: &mut CMessage,
-    game: &mut CGame,
-    organizing: &mut COrganizingCtrl,
-) -> Option<Result<OrganizingLeaveWordDispatch, OrganizingLeaveWordBlock>> {
-    if message.message_type() != LEAVE_WORD_MESSAGE_TYPE {
-        return None;
-    }
-
-    let mut content = message
-        .base_mut()
-        .get_str_bytes(LEAVE_WORD_INPUT_CAPACITY)
-        .unwrap_or_default();
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let time = capture_local_tag_time();
-    Some(
-        organizing
-            .leave_word_for_player(game, player_id, &mut content, time)
-            .map(|outcome| OrganizingLeaveWordDispatch {
-                player_id,
-                content,
-                time,
-                outcome,
-            }),
-    )
-}
-
-pub(crate) fn dispatch_leave_word_edit(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-) -> Option<Result<OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEditBlock>> {
-    if message.message_type() != EDIT_LEAVE_WORD_MESSAGE_TYPE {
-        return None;
-    }
-
-    let leave_word_id = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    Some(
-        organizing
-            .edit_leave_word_for_player(game, player_id, leave_word_id, EOperator::Delete)
-            .map(|outcome| OrganizingLeaveWordEditDispatch {
-                leave_word_id,
-                player_id,
-                outcome,
-            }),
-    )
-}
-
-pub(crate) fn dispatch_pronounce(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-) -> Option<Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>> {
-    if message.message_type() != PRONOUNCE_MESSAGE_TYPE {
-        return None;
-    }
-
-    let mut content = message
-        .base_mut()
-        .get_str_bytes(PRONOUNCE_INPUT_CAPACITY)
-        .unwrap_or_default();
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let time = capture_local_tag_time();
-    Some(
-        organizing
-            .pronounce_for_player(game, player_id, &mut content, time)
-            .map(|outcome| OrganizingPronounceDispatch {
-                player_id,
-                content,
-                time,
-                outcome,
-            }),
-    )
-}
+// Ветви `0x6011A/0x6011B/0x6011C/0x6011D` (leave-word enable/edit, pronounce)
+// перенесены в realm (`nebokrai_realm::app::organsysmessage`) волной
+// организационного view; имена доступны здесь через glob re-export.
 
 pub(crate) fn dispatch_faction_war_player_died(
     message: &mut CMessage,
@@ -1491,6 +1386,23 @@ pub(crate) enum OrganizingCreateFactionBlock {
     clippy::too_many_arguments,
     reason = "границы один к одному соответствуют exact World owner-ам"
 )]
+/// Local-time snapshot wire-полей остаётся у creation-ветви `0x60103`;
+/// перенесённые в realm ветви получают ту же формулу через
+/// `current_local_member_time` её владельца.
+fn capture_local_tag_time() -> TagTimeValue {
+    let local_time = TagTime::local_now();
+    TagTimeValue {
+        year: local_time.year,
+        month: local_time.month,
+        day_of_week: local_time.day_of_week,
+        day: local_time.day,
+        hour: local_time.hour,
+        minute: local_time.minute,
+        second: local_time.second,
+        milliseconds: local_time.milliseconds,
+    }
+}
+
 pub(crate) async fn dispatch_create_faction(
     message: &mut CMessage,
     game: &mut CGame,
@@ -1796,107 +1708,15 @@ pub(crate) fn dispatch_initial_organizing_data(
     })
 }
 
-pub(crate) trait FactionApplicationListContext: FactionOrganizingInfoContext {
- /// `None` означает offline miss, внутренний `None` — ещё не
- /// Готовый country найденного player-owner-а.
-    fn online_player_country(&self, player_id: i32) -> Option<Option<u8>>;
-}
-
-pub(crate) fn dispatch_faction_list<Context>(
-    message: &mut CMessage,
-    organizing: &COrganizingCtrl,
-    context: &mut Context,
-    sender: Option<&ServerCommandHandle>,
-) -> Option<Result<OrganizingFactionListDispatch, OrganizingFactionListBlock>>
-where
-    Context: FactionApplicationListContext,
-{
-    if message.message_type() != FACTION_LIST_MESSAGE_TYPE {
-        return None;
-    }
-
-    let socket_id = message.socket_id();
-    let request_id = message.base_mut().get_long64().unwrap_or(0);
-    let cookie = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let page = message.base_mut().get_long().unwrap_or(0);
-    let outcome = match context.online_player_country(player_id) {
-        None => OrganizingFactionListOutcome::PlayerOffline,
-        Some(None) => {
-            return Some(Err(OrganizingFactionListBlock::PlayerCountry {
-                player_id,
-            }));
-        }
-        Some(Some(country)) => {
-            let total_factions = match organizing.faction_count_by_country(country) {
-                Ok(total_factions) => total_factions,
-                Err(block) => return Some(Err(OrganizingFactionListBlock::Count(block))),
-            };
-            if total_factions == 0 {
-                send_faction_list_empty_notice(context, player_id);
-                OrganizingFactionListOutcome::Empty {
-                    country,
-                    response: send_faction_list_response(
-                        sender, socket_id, player_id, 0, request_id, cookie, None,
-                    ),
-                }
-            } else {
-                let start = page.wrapping_mul(11).wrapping_sub(11);
-                if start >= total_factions {
-                    OrganizingFactionListOutcome::PageOutsideRange {
-                        country,
-                        total_factions,
-                        page,
-                    }
-                } else {
-                    let applied_faction_id = match organizing
-                        .faction_by_player_in_apply_list(player_id)
-                    {
-                        ApplyFactionLookup::NoFaction => 0,
-                        ApplyFactionLookup::Faction(faction_id) => faction_id,
-                        ApplyFactionLookup::BlockedNullFaction { map_key } => {
-                            return Some(Err(OrganizingFactionListBlock::ApplyList {
-                                map_key,
-                            }));
-                        }
-                    };
-                    let page_data = match organizing.faction_list_page(page, country) {
-                        Ok(page_data) => page_data,
-                        Err(block) => {
-                            return Some(Err(OrganizingFactionListBlock::Page(block)));
-                        }
-                    };
-                    let response = send_faction_list_response(
-                        sender,
-                        socket_id,
-                        player_id,
-                        total_factions,
-                        request_id,
-                        cookie,
-                        Some((page, applied_faction_id, &page_data)),
-                    );
-                    OrganizingFactionListOutcome::Page {
-                        country,
-                        page: page_data,
-                        applied_faction_id,
-                        response,
-                    }
-                }
-            }
-        }
-    };
-
-    Some(Ok(OrganizingFactionListDispatch {
-        request_id,
-        cookie,
-        player_id,
-        page,
-        outcome,
-    }))
-}
+// Контракт country-lookup-а и сама ветвь `0x60107` faction list перенесены в
+// realm (`nebokrai_realm::app::organsysmessage`); impl контракта для
+// `WorldUnionApplicationEffects` ниже резолвится через glob re-export.
 
 /// Выполняет `0x60108`: `(player ID, discarded Long, name[20])`,
 /// online/country gate и virtual `ApplyForJoin(player ID, 0, 0)`.
+/// Ветвь `0x60108` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает war/string/log адаптер faction-пути и передаёт оба
+/// effects-владельца обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_application(
     message: &mut CMessage,
@@ -1915,191 +1735,30 @@ pub(crate) fn dispatch_faction_application(
         OrganizingFactionApplicationDispatchBlock<UnionApplicationSessionBlock>,
     >,
 > {
-    if message.message_type() != FACTION_APPLICATION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let discarded_value = message.base_mut().get_long().unwrap_or(0);
-    let organizing_name = message
-        .base_mut()
-        .get_str_bytes(20)
-        .unwrap_or_default();
-    let Some(player) = game.online_player_by_id(player_id as u32) else {
-        return Some(Ok(OrganizingFactionApplicationDispatch {
-            player_id,
-            discarded_value,
-            organizing_name,
-            outcome: OrganizingFactionApplicationOutcome::PlayerOffline,
-        }));
+    let mut faction_effects = WorldFactionApplicationEffects {
+        game,
+        village_war,
+        attack_city,
+        use_log_system,
+        faction_apply_log_enabled,
+        write_faction_apply_log,
     };
-    let Some(player_country) = player.country() else {
-        return Some(Err(
-            OrganizingFactionApplicationDispatchBlock::PlayerCountry { player_id },
-        ));
-    };
-    let matched = match organizing.organizing_by_name(&organizing_name) {
-        Ok(Some(matched)) => matched,
-        Ok(None) => {
-            return Some(Ok(OrganizingFactionApplicationDispatch {
-                player_id,
-                discarded_value,
-                organizing_name,
-                outcome: OrganizingFactionApplicationOutcome::OrganizingNotFound,
-            }));
-        }
-        Err(source) => {
-            return Some(Err(
-                OrganizingFactionApplicationDispatchBlock::NameLookup(source),
-            ));
-        }
-    };
-    let organizing_country = match organizing.country_by_name_match(matched) {
-        Ok(country) => country,
-        Err(source) => {
-            return Some(Err(
-                OrganizingFactionApplicationDispatchBlock::OrganizingCountry(source),
-            ));
-        }
-    };
-    if player_country != organizing_country {
-        return Some(Ok(OrganizingFactionApplicationDispatch {
-            player_id,
-            discarded_value,
-            organizing_name,
-            outcome: OrganizingFactionApplicationOutcome::CountryMismatch {
-                matched,
-                player_country,
-                organizing_country,
-            },
-        }));
-    }
-
-    let outcome = match matched.kind {
-        OrganizingNameKind::Faction => {
-            let mut faction_effects = WorldFactionApplicationEffects {
-                village_war,
-                attack_city,
-                use_log_system,
-                faction_apply_log_enabled,
-                write_faction_apply_log,
-                owner: effects,
-            };
-            let outcome = match organizing.apply_for_faction_join_by_map_key(
-                game,
-                parameters,
-                matched.map_key,
-                player_id,
-                0,
-                0,
-                &mut faction_effects,
-            ) {
-                Ok(outcome) => outcome,
-                Err(source) => {
-                    return Some(Err(
-                        OrganizingFactionApplicationDispatchBlock::Faction(source),
-                    ));
-                }
-            };
-            OrganizingFactionApplicationOutcome::Faction { matched, outcome }
-        }
-        OrganizingNameKind::Union => {
-            let outcome = match organizing.apply_for_named_union_join(
-                game,
-                matched.map_key,
-                player_id,
-                0,
-                0,
-                effects,
-            ) {
-                Ok(outcome) => outcome,
-                Err(source) => {
-                    return Some(Err(
-                        OrganizingFactionApplicationDispatchBlock::Union(source),
-                    ));
-                }
-            };
-            OrganizingFactionApplicationOutcome::Union { matched, outcome }
-        }
-    };
-    Some(Ok(OrganizingFactionApplicationDispatch {
-        player_id,
-        discarded_value,
-        organizing_name,
-        outcome,
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_application(
+        message,
+        game,
+        organizing,
+        parameters,
+        &mut faction_effects,
+        effects,
+    )
 }
 
-/// Выполняет `0x60109`: очищает все faction apply-list и уведомляет
-/// только о подтверждённом переходе из положительной apply-faction в пустую.
-pub(crate) fn dispatch_faction_application_cancel<Context>(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-    context: &mut Context,
-) -> Option<
-    Result<OrganizingFactionApplicationCancelDispatch, OrganizingFactionApplicationCancelBlock>,
->
-where
-    Context: FactionOrganizingInfoContext,
-{
-    if message.message_type() != CANCEL_FACTION_APPLICATION_MESSAGE_TYPE {
-        return None;
-    }
+// Ветвь `0x60109` cancel application перенесена в realm
+// (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let previous_faction_id = match organizing.faction_by_player_in_apply_list(player_id) {
-        ApplyFactionLookup::NoFaction => 0,
-        ApplyFactionLookup::Faction(faction_id) => faction_id,
-        ApplyFactionLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionApplicationCancelBlock::Lookup {
-                phase: FactionApplicationCancelLookupPhase::BeforeRemoval,
-                map_key,
-            }));
-        }
-    };
-    let removal = organizing.remove_person_from_apply_faction_list(game, player_id);
-    if matches!(
-        &removal,
-        RemovePersonFromApplyFactionListOutcome::BlockedNullFaction { .. }
-    ) {
-        return Some(Err(OrganizingFactionApplicationCancelBlock::Removal {
-            previous_faction_id,
-            outcome: removal,
-        }));
-    }
-
-    let mut remaining_faction_id = None;
-    let mut notice_sent = false;
-    if previous_faction_id > 0 {
-        let remaining = match organizing.faction_by_player_in_apply_list(player_id) {
-            ApplyFactionLookup::NoFaction => 0,
-            ApplyFactionLookup::Faction(faction_id) => faction_id,
-            ApplyFactionLookup::BlockedNullFaction { map_key } => {
-                return Some(Err(OrganizingFactionApplicationCancelBlock::Lookup {
-                    phase: FactionApplicationCancelLookupPhase::AfterRemoval,
-                    map_key,
-                }));
-            }
-        };
-        remaining_faction_id = Some(remaining);
-        if remaining <= 0 {
-            send_faction_application_cancel_notice(context, player_id);
-            notice_sent = true;
-        }
-    }
-
-    Some(Ok(OrganizingFactionApplicationCancelDispatch {
-        player_id,
-        previous_faction_id,
-        remaining_faction_id,
-        removal,
-        notice_sent,
-    }))
-}
-
-/// Выполняет `0x6010A`: три `Long`, manager-faction lookup, один local
-/// time snapshot и virtual `CFaction::DoJoin` без route/tail/wire ingress-а.
+/// Ветвь `0x6010A` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает join-effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_application_decision(
     message: &mut CMessage,
@@ -2118,13 +1777,6 @@ pub(crate) fn dispatch_faction_application_decision(
 ) -> Option<
     Result<OrganizingFactionApplicationDecisionDispatch, OrganizingFactionDoJoinBlock>,
 > {
-    if message.message_type() != FACTION_APPLICATION_DECISION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let manager_id = message.base_mut().get_long().unwrap_or(0);
-    let applicant_id = message.base_mut().get_long().unwrap_or(0);
-    let approve_flag = message.base_mut().get_long().unwrap_or(0);
     let mut effects = WorldFactionDoJoinEffects {
         game,
         village_war,
@@ -2136,28 +1788,18 @@ pub(crate) fn dispatch_faction_application_decision(
         update_player,
         write_faction_join_log,
     };
-    let outcome = match organizing.do_faction_join_by_manager(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_application_decision(
+        message,
         game,
+        organizing,
         parameters,
-        manager_id,
-        applicant_id,
-        approve_flag,
-        current_local_member_time,
         &mut effects,
-    ) {
-        Ok(outcome) => outcome,
-        Err(source) => return Some(Err(source)),
-    };
-    Some(Ok(OrganizingFactionApplicationDecisionDispatch {
-        manager_id,
-        applicant_id,
-        approve_flag,
-        outcome,
-    }))
+    )
 }
 
-/// Выполняет `0x6010B`: два `Long`, manager-faction lookup и virtual
-/// `CFaction::FireOut` без route/tail/wire ingress-а.
+/// Ветвь `0x6010B` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает fire-out effects адаптер старого пакета и передаёт
+/// ход realm-обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_fire_out(
     message: &mut CMessage,
@@ -2174,28 +1816,6 @@ pub(crate) fn dispatch_faction_fire_out(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionFireOutDispatch, OrganizingFactionFireOutBlock>> {
-    if message.message_type() != FACTION_FIRE_OUT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let manager_id = message.base_mut().get_long().unwrap_or(0);
-    let target_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(manager_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionFireOutBlock::ManagerMembership {
-                map_key,
-            }));
-        }
-    };
-    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
-        return Some(Ok(OrganizingFactionFireOutDispatch {
-            manager_id,
-            target_id,
-            outcome: OrganizingFactionFireOutOutcome::FactionNotFound { faction_id },
-        }));
-    };
     let mut effects = WorldFactionFireOutEffects {
         game,
         village_war,
@@ -2207,27 +1827,18 @@ pub(crate) fn dispatch_faction_fire_out(
         update_player,
         write_faction_fire_out_log,
     };
-    let outcome = match faction.fire_out(game, parameters, manager_id, target_id, &mut effects) {
-        Ok(outcome) => OrganizingFactionFireOutOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Err(source) => {
-            return Some(Err(OrganizingFactionFireOutBlock::FireOut {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionFireOutDispatch {
-        manager_id,
-        target_id,
-        outcome,
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_fire_out(
+        message,
+        game,
+        organizing,
+        parameters,
+        &mut effects,
+    )
 }
 
-/// Выполняет `0x6010C`: два `Long`, nullable `GetUnion(manager)`, virtual
-/// `CUnion::FireOut` и автоматический disband при member count `<= 1`.
+/// Ветвь `0x6010C` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает union effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 pub(crate) fn dispatch_union_fire_out(
     message: &mut CMessage,
     game: &CGame,
@@ -2236,33 +1847,20 @@ pub(crate) fn dispatch_union_fire_out(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingUnionFireOutDispatch, OrganizingUnionFireOutBlock>> {
-    if message.message_type() != UNION_FIRE_OUT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let manager_id = message.base_mut().get_long().unwrap_or(0);
-    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
     let mut effects = WorldUnionFireOutEffects { game, callbacks };
-    let outcome = match organizing.fire_out_union_by_master(
+    nebokrai_realm::app::organsysmessage::dispatch_union_fire_out(
+        message,
         game,
+        organizing,
         parameters,
-        manager_id,
-        target_faction_id,
         &mut effects,
         update_player,
-    ) {
-        Ok(outcome) => outcome,
-        Err(source) => return Some(Err(source)),
-    };
-    Some(Ok(OrganizingUnionFireOutDispatch {
-        manager_id,
-        target_faction_id,
-        outcome,
-    }))
+    )
 }
 
-/// Выполняет `0x6010D`: один `Long`, faction lookup и virtual
-/// `CFaction::Exit` без route/tail/wire ingress-а.
+/// Ветвь `0x6010D` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает exit effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_exit(
     message: &mut CMessage,
@@ -2278,24 +1876,6 @@ pub(crate) fn dispatch_faction_exit(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionExitDispatch, OrganizingFactionExitBlock>> {
-    if message.message_type() != FACTION_EXIT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionExitBlock::Membership { map_key }));
-        }
-    };
-    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
-        return Some(Ok(OrganizingFactionExitDispatch {
-            player_id,
-            outcome: OrganizingFactionExitOutcome::FactionNotFound { faction_id },
-        }));
-    };
     let mut effects = WorldFactionExitEffects {
         game,
         village_war,
@@ -2307,23 +1887,18 @@ pub(crate) fn dispatch_faction_exit(
         update_player,
         write_faction_quit_log,
     };
-    let outcome = match faction.exit(game, parameters, player_id, &mut effects) {
-        Ok(outcome) => OrganizingFactionExitOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Err(source) => {
-            return Some(Err(OrganizingFactionExitBlock::Exit {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionExitDispatch { player_id, outcome }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_exit(
+        message,
+        game,
+        organizing,
+        parameters,
+        &mut effects,
+    )
 }
 
-/// Выполняет `0x6010E`: один `Long`, player/faction/union lookup,
-/// virtual `CUnion::Exit` и automatic disband через `GetPlayerHeader`.
+/// Ветвь `0x6010E` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает union effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 pub(crate) fn dispatch_union_exit(
     message: &mut CMessage,
     game: &CGame,
@@ -2332,27 +1907,20 @@ pub(crate) fn dispatch_union_exit(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingUnionExitDispatch, OrganizingUnionExitBlock>> {
-    if message.message_type() != UNION_EXIT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
     let mut effects = WorldUnionFireOutEffects { game, callbacks };
-    let outcome = match organizing.exit_union_by_player(
+    nebokrai_realm::app::organsysmessage::dispatch_union_exit(
+        message,
         game,
+        organizing,
         parameters,
-        player_id,
         &mut effects,
         update_player,
-    ) {
-        Ok(outcome) => outcome,
-        Err(source) => return Some(Err(source)),
-    };
-    Some(Ok(OrganizingUnionExitDispatch { player_id, outcome }))
+    )
 }
 
-/// Выполняет `0x6010F`: два `Long`, faction lookup и virtual
-/// `CFaction::Demise` без route/tail/wire ingress-а.
+/// Ветвь `0x6010F` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает demise effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_demise(
     message: &mut CMessage,
@@ -2368,26 +1936,6 @@ pub(crate) fn dispatch_faction_demise(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionDemiseDispatch, OrganizingFactionDemiseBlock>> {
-    if message.message_type() != FACTION_DEMISE_MESSAGE_TYPE {
-        return None;
-    }
-
-    let old_master_id = message.base_mut().get_long().unwrap_or(0);
-    let new_master_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(old_master_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionDemiseBlock::Membership { map_key }));
-        }
-    };
-    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
-        return Some(Ok(OrganizingFactionDemiseDispatch {
-            old_master_id,
-            new_master_id,
-            outcome: OrganizingFactionDemiseOutcome::FactionNotFound { faction_id },
-        }));
-    };
     let mut effects = WorldFactionDemiseEffects {
         game,
         attack_city,
@@ -2398,33 +1946,18 @@ pub(crate) fn dispatch_faction_demise(
         update_player,
         write_faction_master_log,
     };
-    let outcome = match faction.demise(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_demise(
+        message,
         game,
+        organizing,
         parameters,
-        old_master_id,
-        new_master_id,
         &mut effects,
-    ) {
-        Ok(outcome) => OrganizingFactionDemiseOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Err(source) => {
-            return Some(Err(OrganizingFactionDemiseBlock::Demise {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionDemiseDispatch {
-        old_master_id,
-        new_master_id,
-        outcome,
-    }))
+    )
 }
 
-/// Выполняет `0x60110`: два полных `Long`, nullable
-/// `GetUnion(old master)` и virtual `CUnion::Demise(old, new faction)`.
+/// Ветвь `0x60110` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает union effects адаптер старого пакета и исходный
+/// tick-callback, передавая ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_union_demise(
     message: &mut CMessage,
     game: &CGame,
@@ -2432,129 +1965,24 @@ pub(crate) fn dispatch_union_demise(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingUnionDemiseDispatch, OrganizingUnionDemiseBlock>> {
-    if message.message_type() != UNION_DEMISE_MESSAGE_TYPE {
-        return None;
-    }
-
-    let old_master_player_id = message.base_mut().get_long().unwrap_or(0);
-    let new_master_faction_id = message.base_mut().get_long().unwrap_or(0);
     let mut effects = WorldUnionFireOutEffects { game, callbacks };
     let mut get_tick = legacy_tick_ms;
-    let outcome = match organizing.demise_union_by_master(
+    nebokrai_realm::app::organsysmessage::dispatch_union_demise(
+        message,
         game,
-        old_master_player_id,
-        new_master_faction_id,
+        organizing,
         &mut effects,
         &mut get_tick,
         update_player,
-    ) {
-        Ok(outcome) => outcome,
-        Err(source) => return Some(Err(source)),
-    };
-    Some(Ok(OrganizingUnionDemiseDispatch {
-        old_master_player_id,
-        new_master_faction_id,
-        outcome,
-    }))
+    )
 }
 
-/// Выполняет synchronous prefix `0x60111`: один `Long`, ordered
-/// `IsFreePlayer` и безусловный `DisbandFaction(player, faction)`.
-pub(crate) fn dispatch_faction_disband<Context>(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-    context: &mut Context,
-) -> Option<
-    Result<PendingOrganizingFactionDisbandDispatch, OrganizingFactionDisbandBlock>,
->
-where
-    Context: FactionDisbandContext,
-{
-    if message.message_type() != FACTION_DISBAND_MESSAGE_TYPE {
-        return None;
-    }
+// Ветвь `0x60111` disband и её finalize-continuation перенесены в realm
+// (`nebokrai_realm::app::organsysmessage`); имена доступны через glob re-export.
 
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionDisbandBlock::Membership { map_key }));
-        }
-    };
-    let outcome = match organizing.disband_faction(game, player_id, faction_id, context) {
-        Ok(outcome) => outcome,
-        Err(source) => {
-            return Some(Err(OrganizingFactionDisbandBlock::Disband {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(PendingOrganizingFactionDisbandDispatch {
-        player_id,
-        faction_id,
-        outcome,
-    }))
-}
-
-/// Завершает controller continuation: player flag, optional DB-log и
-/// немедленный Drop удалённого faction-owner-а.
-pub(crate) fn finalize_faction_disband_dispatch<ClearPlayer, WriteLog>(
-    pending: PendingOrganizingFactionDisbandDispatch,
-    faction_disband_log_enabled: bool,
-    mut clear_player: ClearPlayer,
-    mut write_log: WriteLog,
-) -> OrganizingFactionDisbandDispatch
-where
-    ClearPlayer: FnMut(i32) -> Option<OrganizingDisbandPlayer>,
-    WriteLog: FnMut(i32, &[u8], i32, &[u8]),
-{
-    let PendingOrganizingFactionDisbandDispatch {
-        player_id,
-        faction_id,
-        outcome,
-    } = pending;
-    let outcome = match outcome {
-        OrganizingDisbandOutcome::Rejected {
-            reason,
-            notice_sent,
-            cleared_city_war_enemies,
-        } => OrganizingFactionDisbandOutcome::Rejected {
-            reason,
-            notice_sent,
-            cleared_city_war_enemies,
-        },
-        OrganizingDisbandOutcome::Disbanded {
-            mut progress,
-            retired_faction,
-        } => {
-            progress.player = clear_player(player_id);
-            if faction_disband_log_enabled
-                && let Some(player) = progress.player.as_ref()
-            {
-                write_log(
-                    faction_id,
-                    legacy_c_string_prefix(retired_faction.name()),
-                    player.player_id,
-                    legacy_c_string_prefix(&player.player_name),
-                );
-                progress.log_written = true;
-            }
-            drop(retired_faction);
-            OrganizingFactionDisbandOutcome::Disbanded { progress }
-        }
-    };
-    OrganizingFactionDisbandDispatch {
-        player_id,
-        faction_id,
-        outcome,
-    }
-}
-
-/// Выполняет `0x60112`: один `Long`, nullable `GetUnion(player)`,
-/// virtual `GetID` и `DisbandConferation(player, union ID)`.
+/// Ветвь `0x60112` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает union effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 pub(crate) fn dispatch_union_disband(
     message: &mut CMessage,
     game: &CGame,
@@ -2563,43 +1991,20 @@ pub(crate) fn dispatch_union_disband(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingUnionDisbandDispatch, OrganizingUnionDisbandBlock>> {
-    if message.message_type() != UNION_DISBAND_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let union_id = match organizing.union_id_by_master_player(player_id) {
-        Ok(Some(union_id)) => union_id,
-        Ok(None) => {
-            return Some(Ok(OrganizingUnionDisbandDispatch {
-                player_id,
-                outcome: OrganizingUnionDisbandOutcome::UnionNotFound,
-            }));
-        }
-        Err(source) => return Some(Err(OrganizingUnionDisbandBlock::Lookup(source))),
-    };
     let mut effects = WorldUnionFireOutEffects { game, callbacks };
-    let outcome = match organizing.disband_confederation(
+    nebokrai_realm::app::organsysmessage::dispatch_union_disband(
+        message,
         game,
+        organizing,
         parameters,
-        player_id,
-        union_id,
         &mut effects,
         update_player,
-    ) {
-        Ok(outcome) => OrganizingUnionDisbandOutcome::Applied { union_id, outcome },
-        Err(source) => {
-            return Some(Err(OrganizingUnionDisbandBlock::Disband {
-                union_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingUnionDisbandDispatch { player_id, outcome }))
+    )
 }
 
-/// Выполняет `0x60113`: `(target, job-level, title[20], manager)`,
-/// faction lookup по manager и virtual `CFaction::DubAndSetJobLvl`.
+/// Ветвь `0x60113` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает dub effects адаптер старого пакета и передаёт ход
+/// realm-обработчику в исходных типах.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_dub(
     message: &mut CMessage,
@@ -2620,30 +2025,6 @@ pub(crate) fn dispatch_faction_dub(
     ),
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionDubDispatch, OrganizingFactionDubBlock>> {
-    if message.message_type() != FACTION_DUB_MESSAGE_TYPE {
-        return None;
-    }
-
-    let target_id = message.base_mut().get_long().unwrap_or(0);
-    let job_level = message.base_mut().get_long().unwrap_or(0);
-    let mut title = message.base_mut().get_str_bytes(20).unwrap_or_default();
-    let manager_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(manager_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionDubBlock::Membership { map_key }));
-        }
-    };
-    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
-        return Some(Ok(OrganizingFactionDubDispatch {
-            target_id,
-            job_level,
-            title,
-            manager_id,
-            outcome: OrganizingFactionDubOutcome::FactionNotFound { faction_id },
-        }));
-    };
     let mut effects = WorldFactionDubEffects {
         game,
         callbacks,
@@ -2652,36 +2033,17 @@ pub(crate) fn dispatch_faction_dub(
         faction_title_log_enabled,
         write_faction_title_log,
     };
-    let outcome = match faction.dub_and_set_job_level(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_dub(
+        message,
         game,
-        manager_id,
-        target_id,
-        &mut title,
-        job_level,
+        organizing,
         &mut effects,
-    ) {
-        Ok(outcome) => OrganizingFactionDubOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Err(source) => {
-            return Some(Err(OrganizingFactionDubBlock::Dub {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionDubDispatch {
-        target_id,
-        job_level,
-        title,
-        manager_id,
-        outcome,
-    }))
+    )
 }
 
-/// Выполняет парные `0x60114/0x60115`: три `Long`, faction lookup по
-/// manager и virtual grant/revoke owner без ingress-gates.
+/// Ветви `0x60114/0x60115` перенесены в realm
+/// (`nebokrai_realm::app::organsysmessage`); обвязка лишь собирает purview
+/// effects адаптер старого пакета и передаёт ход realm-обработчику.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_purview(
     message: &mut CMessage,
@@ -2693,30 +2055,6 @@ pub(crate) fn dispatch_faction_purview(
     revoke_log_enabled: bool,
     write_log: &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
 ) -> Option<Result<OrganizingFactionPurviewDispatch, OrganizingFactionPurviewBlock>> {
-    let change = match message.message_type() {
-        GRANT_FACTION_PURVIEW_MESSAGE_TYPE => FactionPurviewChange::Grant,
-        REVOKE_FACTION_PURVIEW_MESSAGE_TYPE => FactionPurviewChange::Revoke,
-        _ => return None,
-    };
-    let target_id = message.base_mut().get_long().unwrap_or(0);
-    let purview = message.base_mut().get_long().unwrap_or(0);
-    let manager_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(manager_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionPurviewBlock::Membership { map_key }));
-        }
-    };
-    let Some(faction) = organizing.faction_by_id_mut(faction_id) else {
-        return Some(Ok(OrganizingFactionPurviewDispatch {
-            change,
-            target_id,
-            purview,
-            manager_id,
-            outcome: OrganizingFactionPurviewOutcome::FactionNotFound { faction_id },
-        }));
-    };
     let mut effects = WorldFactionPurviewEffects {
         game,
         callbacks,
@@ -2725,41 +2063,12 @@ pub(crate) fn dispatch_faction_purview(
         revoke_log_enabled,
         write_log,
     };
-    let changed = match change {
-        FactionPurviewChange::Grant => faction.endue_right_to_member(
-            game,
-            manager_id,
-            target_id,
-            purview,
-            &mut effects,
-        ),
-        FactionPurviewChange::Revoke => faction.abolish_right_to_member(
-            game,
-            manager_id,
-            target_id,
-            purview,
-            &mut effects,
-        ),
-    };
-    let outcome = match changed {
-        Ok(outcome) => OrganizingFactionPurviewOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Err(source) => {
-            return Some(Err(OrganizingFactionPurviewBlock::Change {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionPurviewDispatch {
-        change,
-        target_id,
-        purview,
-        manager_id,
-        outcome,
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_purview(
+        message,
+        game,
+        organizing,
+        &mut effects,
+    )
 }
 
 pub(crate) fn dispatch_consumed_long(
@@ -2776,129 +2085,8 @@ pub(crate) fn dispatch_consumed_long(
     })
 }
 
-pub(crate) fn dispatch_declare_war_faction_list<Context>(
-    message: &mut CMessage,
-    organizing: &COrganizingCtrl,
-    faction_wars: &CFactionWarSys,
-    context: &mut Context,
-    sender: Option<&ServerCommandHandle>,
-) -> Option<
-    Result<OrganizingDeclareWarFactionListDispatch, OrganizingDeclareWarFactionListBlock>,
->
-where
-    Context: FactionOrganizingInfoContext,
-{
-    if message.message_type() != DECLARE_WAR_FACTION_LIST_MESSAGE_TYPE {
-        return None;
-    }
-
-    let socket_id = message.socket_id();
-    let request_id = message.base_mut().get_long64().unwrap_or(0);
-    let cookie = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let page = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => 0,
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingDeclareWarFactionListBlock::Membership { map_key }));
-        }
-    };
-
-    let outcome = if organizing.faction_by_id(faction_id).is_none() {
-        send_declare_war_faction_list_notice(
-            context,
-            player_id,
-            OrganizingDeclareWarFactionListNotice::MissingFaction,
-        );
-        OrganizingDeclareWarFactionListOutcome::Empty {
-            faction_id,
-            notice: OrganizingDeclareWarFactionListNotice::MissingFaction,
-            response: send_declare_war_faction_list_response(
-                sender, socket_id, player_id, 0, request_id, cookie, None,
-            ),
-        }
-    } else if organizing
-        .faction_by_id(faction_id)
-        .is_some_and(|faction| faction.is_master(player_id) == 0)
-    {
-        send_declare_war_faction_list_notice(
-            context,
-            player_id,
-            OrganizingDeclareWarFactionListNotice::MasterRequired,
-        );
-        OrganizingDeclareWarFactionListOutcome::Empty {
-            faction_id,
-            notice: OrganizingDeclareWarFactionListNotice::MasterRequired,
-            response: send_declare_war_faction_list_response(
-                sender, socket_id, player_id, 0, request_id, cookie, None,
-            ),
-        }
-    } else {
-        let total_factions = match organizing.declare_war_faction_count() {
-            Ok(total_factions) => total_factions,
-            Err(block) => {
-                return Some(Err(OrganizingDeclareWarFactionListBlock::Page(block)));
-            }
-        };
-        if total_factions == 0 {
-            send_declare_war_faction_list_notice(
-                context,
-                player_id,
-                OrganizingDeclareWarFactionListNotice::NoFactions,
-            );
-            OrganizingDeclareWarFactionListOutcome::Empty {
-                faction_id,
-                notice: OrganizingDeclareWarFactionListNotice::NoFactions,
-                response: send_declare_war_faction_list_response(
-                    sender, socket_id, player_id, 0, request_id, cookie, None,
-                ),
-            }
-        } else {
-            let start = page.wrapping_mul(11).wrapping_sub(11);
-            if start >= total_factions {
-                OrganizingDeclareWarFactionListOutcome::PageOutsideRange {
-                    faction_id,
-                    total_factions,
-                    page,
-                }
-            } else {
-                let page_data = match organizing.declare_war_faction_page(
-                    faction_id,
-                    page,
-                    faction_wars,
-                ) {
-                    Ok(page_data) => page_data,
-                    Err(block) => {
-                        return Some(Err(OrganizingDeclareWarFactionListBlock::Page(block)));
-                    }
-                };
-                let response = send_declare_war_faction_list_response(
-                    sender,
-                    socket_id,
-                    player_id,
-                    total_factions,
-                    request_id,
-                    cookie,
-                    Some(&page_data),
-                );
-                OrganizingDeclareWarFactionListOutcome::Page {
-                    faction_id,
-                    page: page_data,
-                    response,
-                }
-            }
-        }
-    };
-
-    Some(Ok(OrganizingDeclareWarFactionListDispatch {
-        request_id,
-        cookie,
-        player_id,
-        page,
-        outcome,
-    }))
-}
+// Ветвь `0x6011E` declare war faction list перенесена в realm
+// (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
 pub(crate) fn dispatch_declare_faction_war(
     message: &mut CMessage,
@@ -3061,6 +2249,12 @@ pub(crate) fn dispatch_faction_billboard(
     clippy::too_many_arguments,
     reason = "opcode использует прежние game/faction/goods/string/log singleton-ы"
 )]
+/// Ветвь `0x60126` пока остаётся локальной: realm-обработчику нужна `&mut`
+/// игра для чтения игрока из wire-хвоста одновременно с заранее построенным
+/// upgrade effects-адаптером, который держит ту же игру общим заёмом — два
+/// заёма одного `CGame` по границе вызова не разводятся без переделки
+/// CGame-адаптеров (см. отчёт волны; ближайшие родственники — `0x60139`,
+/// `0x6013A`).
 pub(crate) fn dispatch_faction_upgrade(
     message: &mut CMessage,
     game: &mut CGame,
@@ -3130,6 +2324,9 @@ pub(crate) fn dispatch_faction_upgrade(
     }))
 }
 
+/// Ветвь `0x60127` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает upload-icon effects адаптер старого пакета и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_faction_upload_icon(
     message: &mut CMessage,
     game: &CGame,
@@ -3137,41 +2334,18 @@ pub(crate) fn dispatch_faction_upload_icon(
     parameters: &COrganizingParam,
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
 ) -> Option<Result<OrganizingFactionUploadIconDispatch, FactionUploadIconBlock>> {
-    if message.message_type() != UPLOAD_FACTION_ICON_MESSAGE_TYPE {
-        return None;
-    }
-
-    let faction_id = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    if organizing.faction_by_id(faction_id).is_none() {
-        return Some(Ok(OrganizingFactionUploadIconDispatch {
-            faction_id,
-            player_id,
-            outcome: OrganizingFactionUploadIconOutcome::FactionMissing,
-        }));
-    }
-
-    let time = capture_local_tag_time();
     let mut effects = WorldFactionUploadIconEffects { game, callbacks };
-    let outcome = match organizing.upload_faction_icon(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_upload_icon(
+        message,
+        organizing,
         parameters,
-        faction_id,
-        player_id,
-        &time,
         &mut effects,
-    ) {
-        Ok(Some(outcome)) => OrganizingFactionUploadIconOutcome::UploadIcon { time, outcome },
-        Ok(None) => OrganizingFactionUploadIconOutcome::FactionMissing,
-        Err(source) => return Some(Err(source)),
-    };
-
-    Some(Ok(OrganizingFactionUploadIconDispatch {
-        faction_id,
-        player_id,
-        outcome,
-    }))
+    )
 }
 
+/// Ветвь `0x60128` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает contributor effects адаптер старого пакета и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_faction_contributor(
     message: &mut CMessage,
     game: &CGame,
@@ -3180,37 +2354,23 @@ pub(crate) fn dispatch_faction_contributor(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionContributorDispatch, OrganizingContributorBlock>> {
-    if message.message_type() != SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE {
-        return None;
-    }
-
-    let target_player_id = message.base_mut().get_long().unwrap_or(0);
-    let enabled_value = message.base_mut().get_long().unwrap_or(0);
-    let requester_player_id = message.base_mut().get_long().unwrap_or(0);
     let mut effects = WorldFactionContributorEffects {
         game,
         callbacks,
         update_player,
     };
-    Some(
-        organizing
-            .set_contributor_for_player(
-                game,
-                parameters,
-                requester_player_id,
-                target_player_id,
-                enabled_value != 0,
-                &mut effects,
-            )
-            .map(|outcome| OrganizingFactionContributorDispatch {
-                target_player_id,
-                enabled_value,
-                requester_player_id,
-                outcome,
-            }),
+    nebokrai_realm::app::organsysmessage::dispatch_faction_contributor(
+        message,
+        game,
+        organizing,
+        parameters,
+        &mut effects,
     )
 }
 
+/// Ветвь `0x60129` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь раскрывает скаляры log-callback старого пакета и передаёт
+/// ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_faction_experience(
     message: &mut CMessage,
     game: &CGame,
@@ -3218,226 +2378,21 @@ pub(crate) fn dispatch_faction_experience(
     use_log_system: bool,
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
 ) -> Option<Result<OrganizingFactionExperienceDispatch, FactionExperienceBlock>> {
-    if message.message_type() != ADD_FACTION_EXPERIENCE_MESSAGE_TYPE {
-        return None;
-    }
-
-    let faction_id = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let experience_delta = message.base_mut().get_long().unwrap_or(0);
-    let mutation = match organizing.add_contributor_experience(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_experience(
+        message,
         game,
-        faction_id,
-        player_id,
-        experience_delta,
-    ) {
-        Ok(mutation) => mutation,
-        Err(source) => return Some(Err(source)),
-    };
-    let (actual_faction_id, faction_name, before_experience, update) = match mutation {
-        OrganizingFactionExperienceMutation::FactionNotFound => {
-            return Some(Ok(OrganizingFactionExperienceDispatch {
-                faction_id,
-                player_id,
-                experience_delta,
-                outcome: OrganizingFactionExperienceOutcome::FactionMissing,
-            }));
-        }
-        OrganizingFactionExperienceMutation::PlayerNotContributor => {
-            return Some(Ok(OrganizingFactionExperienceDispatch {
-                faction_id,
-                player_id,
-                experience_delta,
-                outcome: OrganizingFactionExperienceOutcome::PlayerNotContributor,
-            }));
-        }
-        OrganizingFactionExperienceMutation::Applied {
-            faction_id,
-            faction_name,
-            before_experience,
-            update,
-        } => (faction_id, faction_name, before_experience, update),
-    };
-
-    let mut log_written = false;
-    if use_log_system && callbacks.faction_experience_log_enabled {
-        if let Some(player) = game.online_player_by_id(player_id as u32) {
-            (callbacks.write_faction_experience_log)(
-                actual_faction_id,
-                &faction_name,
-                player.get_id(),
-                player.get_name(),
-                before_experience,
-                experience_delta,
-            );
-            log_written = true;
-        }
-    }
-
-    Some(Ok(OrganizingFactionExperienceDispatch {
-        faction_id,
-        player_id,
-        experience_delta,
-        outcome: OrganizingFactionExperienceOutcome::Applied {
-            before_experience,
-            update,
-            log_written,
-        },
-    }))
+        organizing,
+        use_log_system,
+        callbacks.faction_experience_log_enabled,
+        &mut *callbacks.write_faction_experience_log,
+    )
 }
 
-pub(crate) fn dispatch_faction_member_state(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-) -> Option<OrganizingFactionMemberStateDispatch> {
-    if message.message_type() != CHANGE_FACTION_MEMBER_STATE_MESSAGE_TYPE {
-        return None;
-    }
+// Ветвь `0x6012A` изменение состояния члена перенесена в realm
+// (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
-    let faction_id = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let operation = message.base_mut().get_long().unwrap_or(0);
-    let outcome = organizing.change_faction_member_state(
-        game,
-        faction_id,
-        player_id,
-        operation,
-        || message.base_mut().get_long().unwrap_or(0),
-    );
-    Some(OrganizingFactionMemberStateDispatch {
-        faction_id,
-        player_id,
-        operation,
-        outcome,
-    })
-}
-
-pub(crate) fn dispatch_faction_tax<Context>(
-    message: &mut CMessage,
-    organizing: &COrganizingCtrl,
-    attack_city: &CAttackCitySys,
-    village_war: &CVillageWarSys,
-    context: &mut Context,
-    sender: Option<&ServerCommandHandle>,
-) -> Option<Result<OrganizingFactionTaxDispatch, OrganizingFactionTaxBlock>>
-where
-    Context: FactionOrganizingInfoContext,
-{
-    let request_type = message.message_type();
-    let response_type = match request_type {
-        OPERATE_FACTION_TAX_MESSAGE_TYPE => OPERATE_FACTION_TAX_RESPONSE_TYPE,
-        ADJUST_FACTION_TAX_MESSAGE_TYPE => ADJUST_FACTION_TAX_RESPONSE_TYPE,
-        _ => return None,
-    };
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => {
-            return Some(Ok(OrganizingFactionTaxDispatch {
-                request_type,
-                player_id,
-                region_id,
-                outcome: OrganizingFactionTaxOutcome::FactionNotFound,
-            }));
-        }
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingFactionTaxBlock::Membership { map_key }));
-        }
-    };
-    if organizing.faction_by_id(faction_id).is_none() {
-        return Some(Ok(OrganizingFactionTaxDispatch {
-            request_type,
-            player_id,
-            region_id,
-            outcome: OrganizingFactionTaxOutcome::FactionNotFound,
-        }));
-    }
-
-    if attack_city.get_city_state(region_id) == ECityState::Fight {
-        send_faction_tax_notice(context, player_id, b"WS0126");
-        return Some(Ok(OrganizingFactionTaxDispatch {
-            request_type,
-            player_id,
-            region_id,
-            outcome: OrganizingFactionTaxOutcome::AttackCityFight,
-        }));
-    }
-    if village_war.get_region_state(region_id) == ECityState::Fight {
-        send_faction_tax_notice(context, player_id, b"WS0127");
-        return Some(Ok(OrganizingFactionTaxDispatch {
-            request_type,
-            player_id,
-            region_id,
-            outcome: OrganizingFactionTaxOutcome::VillageWarFight,
-        }));
-    }
-
-    let operation = match organizing.operate_faction_tax(faction_id, player_id, region_id) {
-        Ok(Some(operation)) => operation,
-        Ok(None) => {
-            return Some(Ok(OrganizingFactionTaxDispatch {
-                request_type,
-                player_id,
-                region_id,
-                outcome: OrganizingFactionTaxOutcome::FactionNotFound,
-            }));
-        }
-        Err(source) => {
-            return Some(Err(OrganizingFactionTaxBlock::Operation {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    let outcome = match operation {
-        FactionOperationOutcome::Rejected(reason) => OrganizingFactionTaxOutcome::Rejected {
-            faction_id,
-            reason,
-        },
-        FactionOperationOutcome::Authorized => {
-            message.set_message_type(response_type);
-            let socket_id = message.socket_id();
-            let wire = message.as_wire_bytes().to_vec();
-            let delivery = message.send_to_socket(sender, socket_id);
-            OrganizingFactionTaxOutcome::Authorized {
-                faction_id,
-                response: OrganizingFactionTaxResponse {
-                    socket_id,
-                    wire,
-                    delivery,
-                },
-            }
-        }
-    };
-    Some(Ok(OrganizingFactionTaxDispatch {
-        request_type,
-        player_id,
-        region_id,
-        outcome,
-    }))
-}
-
-fn send_faction_tax_notice<Context>(
-    context: &mut Context,
-    player_id: i32,
-    first_string_id: &'static [u8],
-) where
-    Context: FactionOrganizingInfoContext,
-{
-    let first_text = context.world_string(first_string_id).unwrap_or_default();
-    let second_text = context.world_string(b"WS0121").unwrap_or_default();
-    context.send_organizing_info(FactionMemberInfoRequest {
-        recipient_player_id: player_id,
-        first_text: legacy_c_string_prefix(&first_text),
-        second_text: legacy_c_string_prefix(&second_text),
-        information_type: -1,
-        color: 0xFFDA_EDFE,
-        trailing_value: 0,
-    });
-}
+// Ветви `0x6012B/0x6012C` operate/adjust tax перенесены в realm
+// (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
 // `OrganizingRegionParamDispatch` и `dispatch_region_param_update` перенесены в
 // realm (`nebokrai_realm::app::organsysmessage`) первой без-организационной
@@ -3463,72 +2418,8 @@ pub(crate) fn dispatch_region_route(
     })
 }
 
-pub(crate) fn dispatch_city_gate(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &COrganizingCtrl,
-) -> Option<Result<OrganizingCityGateDispatch, OrganizingCityGateBlock>> {
-    if message.message_type() != OPERATE_CITY_GATE_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => {
-            return Some(Ok(OrganizingCityGateDispatch {
-                player_id,
-                region_id,
-                outcome: OrganizingCityGateOutcome::FactionNotFound,
-            }));
-        }
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingCityGateBlock::Membership { map_key }));
-        }
-    };
-    let operation = match organizing.operate_faction_city_gate(faction_id, player_id, region_id) {
-        Ok(Some(operation)) => operation,
-        Ok(None) => {
-            return Some(Ok(OrganizingCityGateDispatch {
-                player_id,
-                region_id,
-                outcome: OrganizingCityGateOutcome::FactionNotFound,
-            }));
-        }
-        Err(source) => {
-            return Some(Err(OrganizingCityGateBlock::Operation {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    let outcome = match operation {
-        FactionOperationOutcome::Rejected(reason) => OrganizingCityGateOutcome::Rejected {
-            faction_id,
-            reason,
-        },
-        FactionOperationOutcome::Authorized => {
-            message.set_message_type(OPERATE_CITY_GATE_RESPONSE_TYPE);
-            let game_server_number = game.game_server_number_by_region_id(region_id);
-            let wire = message.as_wire_bytes().to_vec();
-            let delivery = game.send_msg_to_game_server(game_server_number, message);
-            OrganizingCityGateOutcome::Authorized {
-                faction_id,
-                response: OrganizingCityGateResponse {
-                    game_server_number,
-                    wire,
-                    delivery,
-                },
-            }
-        }
-    };
-    Some(Ok(OrganizingCityGateDispatch {
-        player_id,
-        region_id,
-        outcome,
-    }))
-}
+// Ветвь `0x6012F` operate city gate перенесена в realm
+// (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
 pub(crate) fn dispatch_city_transfer<Effects>(
     message: &mut CMessage,
@@ -3572,77 +2463,9 @@ where
     }))
 }
 
-pub(crate) fn dispatch_admission_permit(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-) -> Option<Result<OrganizingAdmissionPermitDispatch, OrganizingAdmissionPermitBlock>> {
-    if message.message_type() != SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let requested_value = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.is_free_player(player_id) {
-        FreePlayerLookup::NoFaction => {
-            return Some(Ok(OrganizingAdmissionPermitDispatch {
-                requested_value,
-                player_id,
-                faction_id: None,
-                outcome: None,
-            }));
-        }
-        FreePlayerLookup::Faction(faction_id) => faction_id,
-        FreePlayerLookup::BlockedNullFaction { map_key } => {
-            return Some(Err(OrganizingAdmissionPermitBlock::Membership { map_key }));
-        }
-    };
-    let outcome = organizing
-        .set_faction_admission_permit(game, faction_id, player_id, requested_value != 0)
-        .map_err(|source| OrganizingAdmissionPermitBlock::Permit { faction_id, source });
-    Some(outcome.map(|outcome| OrganizingAdmissionPermitDispatch {
-        requested_value,
-        player_id,
-        faction_id: Some(faction_id),
-        outcome,
-    }))
-}
-
-pub(crate) fn dispatch_attack_city_end<Effects>(
-    message: &mut CMessage,
-    game: &CGame,
-    organizing: &mut COrganizingCtrl,
-    effects: &mut Effects,
-    update_player: &mut dyn FnMut(i32),
-) -> Option<Result<OrganizingAttackCityEndDispatch, AttackCityEndBlock>>
-where
-    Effects: AttackCityEndEffects,
-{
-    if message.message_type() != ATTACK_CITY_END_MESSAGE_TYPE {
-        return None;
-    }
-
-    let result = message.base_mut().get_long().unwrap_or(0);
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let attacker_player_id = message.base_mut().get_long().unwrap_or(0);
-    let defender_faction_id = message.base_mut().get_long().unwrap_or(0);
-    let outcome = organizing.on_attack_city_end(
-        game,
-        result,
-        region_id,
-        attacker_player_id,
-        defender_faction_id,
-        effects,
-        update_player,
-    );
-    Some(outcome.map(|outcome| OrganizingAttackCityEndDispatch {
-        result,
-        region_id,
-        attacker_player_id,
-        defender_faction_id,
-        outcome,
-    }))
-}
+// Ветви `0x60132` admission permit и `0x60133` attack city end перенесены в
+// realm (`nebokrai_realm::app::organsysmessage`); имена доступны через glob
+// re-export.
 
 struct WorldVillageWarApplicationContext<'game, 'callbacks, 'effects> {
     game: &'game CGame,
@@ -4936,6 +3759,11 @@ pub(crate) fn dispatch_goods_war_command(
     Some(Ok(OrganizingGoodsWarCommandDispatch { operation, outcome }))
 }
 
+// Ветвь `0x6013A` пока остаётся локальной: её goods-war member адаптер
+// вынужденно владеет `&mut COrganizingCtrl` (см. `WorldGoodsWarMemberContext`),
+// а winner-снимок читает фракцию через общий view того же владельца — два
+// заёма одного owner-а нельзя развести по границе вызова без переделки
+// CGame-адаптеров (см. отчёт волны; ближайший родственник — `0x60139`).
 pub(crate) fn dispatch_goods_war_faction_win(
     message: &mut CMessage,
     game: &CGame,
@@ -5043,6 +3871,9 @@ pub(crate) fn dispatch_player_run_script(
     })
 }
 
+/// Ветвь `0x6013E` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
+/// обвязка лишь собирает set-parameter effects адаптер старого пакета и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_faction_parameter(
     message: &mut CMessage,
     game: &CGame,
@@ -5051,62 +3882,18 @@ pub(crate) fn dispatch_faction_parameter(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionParameterDispatch, OrganizingFactionParameterBlock>> {
-    if message.message_type() != SET_FACTION_PARAMETER_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let parameter = message
-        .base_mut()
-        .get_str_bytes(FACTION_PARAMETER_NAME_CAPACITY)
-        .expect("literal 0x32 исключает zero-capacity GetStr");
-    let value = message.base_mut().get_long().unwrap_or(0);
-    let faction_id = match organizing.faction_id_by_master_player(player_id) {
-        Ok(faction_id) => faction_id,
-        Err(source) => {
-            return Some(Err(OrganizingFactionParameterBlock::FactionMaster(source)));
-        }
-    };
-    if faction_id < 1 {
-        return Some(Ok(OrganizingFactionParameterDispatch {
-            player_id,
-            parameter,
-            value,
-            outcome: OrganizingFactionParameterOutcome::FactionMissing,
-        }));
-    }
-
     let mut effects = WorldFactionSetParameterEffects {
         game,
         callbacks,
         update_player,
     };
-    let outcome = match organizing.set_faction_parameter(
+    nebokrai_realm::app::organsysmessage::dispatch_faction_parameter(
+        message,
         game,
+        organizing,
         parameters,
-        faction_id,
-        &parameter,
-        value,
         &mut effects,
-    ) {
-        Ok(Some(outcome)) => OrganizingFactionParameterOutcome::Applied {
-            faction_id,
-            outcome,
-        },
-        Ok(None) => OrganizingFactionParameterOutcome::FactionMissing,
-        Err(source) => {
-            return Some(Err(OrganizingFactionParameterBlock::SetParameter {
-                faction_id,
-                source,
-            }));
-        }
-    };
-    Some(Ok(OrganizingFactionParameterDispatch {
-        player_id,
-        parameter,
-        value,
-        outcome,
-    }))
+    )
 }
 
 pub(crate) fn dispatch_change_region_router(
@@ -5394,121 +4181,8 @@ pub(crate) fn dispatch_village_war_result<Callback: Copy>(
     })
 }
 
-fn send_declare_war_faction_list_notice<Context>(
-    context: &mut Context,
-    player_id: i32,
-    notice: OrganizingDeclareWarFactionListNotice,
-) where
-    Context: FactionOrganizingInfoContext,
-{
-    let first_string_id = match notice {
-        OrganizingDeclareWarFactionListNotice::MissingFaction => b"WS0122".as_slice(),
-        OrganizingDeclareWarFactionListNotice::MasterRequired => b"WS0123".as_slice(),
-        OrganizingDeclareWarFactionListNotice::NoFactions => b"WS0124".as_slice(),
-    };
-    let first_text = context.world_string(first_string_id).unwrap_or_default();
-    let second_text = context.world_string(b"WS0121").unwrap_or_default();
-    context.send_organizing_info(FactionMemberInfoRequest {
-        recipient_player_id: player_id,
-        first_text: legacy_c_string_prefix(&first_text),
-        second_text: legacy_c_string_prefix(&second_text),
-        information_type: -1,
-        color: 0xFFDA_EDFE,
-        trailing_value: 0,
-    });
-}
-
-fn send_faction_list_empty_notice<Context>(context: &mut Context, player_id: i32)
-where
-    Context: FactionOrganizingInfoContext,
-{
-    let first_text = context.world_string(b"WS0120").unwrap_or_default();
-    let second_text = context.world_string(b"WS0119").unwrap_or_default();
-    context.send_organizing_info(FactionMemberInfoRequest {
-        recipient_player_id: player_id,
-        first_text: legacy_c_string_prefix(&first_text),
-        second_text: legacy_c_string_prefix(&second_text),
-        information_type: -1,
-        color: 0xFFDA_EDFE,
-        trailing_value: 0,
-    });
-}
-
-fn send_faction_application_cancel_notice<Context>(context: &mut Context, player_id: i32)
-where
-    Context: FactionOrganizingInfoContext,
-{
-    let first_text = context.world_string(b"WS0125").unwrap_or_default();
-    let second_text = context.world_string(b"WS0119").unwrap_or_default();
-    context.send_organizing_info(FactionMemberInfoRequest {
-        recipient_player_id: player_id,
-        first_text: legacy_c_string_prefix(&first_text),
-        second_text: legacy_c_string_prefix(&second_text),
-        information_type: -1,
-        color: 0xFFDA_EDFE,
-        trailing_value: 0,
-    });
-}
-
-fn send_faction_list_response(
-    sender: Option<&ServerCommandHandle>,
-    socket_id: i32,
-    player_id: i32,
-    total_factions: i32,
-    request_id: i64,
-    cookie: i32,
-    page: Option<(i32, i32, &FactionListPage)>,
-) -> OrganizingFactionListResponse {
-    let mut response = CMessage::new(FACTION_LIST_RESPONSE_TYPE);
-    response.base_mut().add_long(player_id);
-    response.base_mut().add_long(total_factions);
-    response.base_mut().add_long64(request_id);
-    response.base_mut().add_long(cookie);
-    if let Some((requested_page, applied_faction_id, page_data)) = page {
-        response.base_mut().add_long(requested_page);
-        response.base_mut().add_long(applied_faction_id);
-        response.base_mut().add(&page_data.payload);
-    }
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send_to_socket(sender, socket_id);
-    OrganizingFactionListResponse {
-        socket_id,
-        total_factions,
-        included_page: page.map(|(requested_page, _, _)| requested_page),
-        applied_faction_id: page.map(|(_, applied_faction_id, _)| applied_faction_id),
-        wire,
-        delivery,
-    }
-}
-
-fn send_declare_war_faction_list_response(
-    sender: Option<&ServerCommandHandle>,
-    socket_id: i32,
-    player_id: i32,
-    total_factions: i32,
-    request_id: i64,
-    cookie: i32,
-    page: Option<&DeclareWarFactionPage>,
-) -> OrganizingDeclareWarFactionListResponse {
-    let mut response = CMessage::new(DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE);
-    response.base_mut().add_long(player_id);
-    response.base_mut().add_long(total_factions);
-    response.base_mut().add_long64(request_id);
-    response.base_mut().add_long(cookie);
-    if let Some(page) = page {
-        response.base_mut().add_long(page.requested_page);
-        response.base_mut().add(&page.payload);
-    }
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send_to_socket(sender, socket_id);
-    OrganizingDeclareWarFactionListResponse {
-        socket_id,
-        total_factions,
-        included_page: page.map(|page| page.requested_page),
-        wire,
-        delivery,
-    }
-}
+// notice/response хелперы ветвей faction list, cancel application и declare
+// war faction list перенесены в realm вместе с их диспетчерами.
 
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     let end = value
