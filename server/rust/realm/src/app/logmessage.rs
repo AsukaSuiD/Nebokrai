@@ -11,12 +11,15 @@
 //! несовпадение map переводит игрока в offline, а совпавший маршрут кодирует
 //! полный снимок до повторной публикации online. Player-return декодирует
 //! subtype-`1`, отвечает LoginServer и снимает login/online до уведомления
-//! друзей. Список персонажей `0x4FB01` живёт в соседнем `player_base.rs`;
-//! все ветви диспетчера перенесены сюда, старый пакет вызывает их
-//! dispatcher-адаптером.
+//! друзей. Список персонажей `0x4FB01` живёт в соседнем `player_base.rs`.
+//! Вместе с ветвями сюда перенесён и сам match-диспетчер `OnLogMessage`:
+//! прежний dispatcher-адаптер старого пакета (`appworld/message/logmessage.rs`)
+//! удалён каскадом вместе с mod-декларацией, маршрут Log-сообщений идёт из
+//! единственного callsite-а `process_world_message` через dyn-швы seam.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 
+use crate::app::player_base::WorldPlayerBaseOutcome;
 use crate::app::world_game_view::{
     WorldCountryView, WorldCreateRoleDbView, WorldCreateRoleLaunchFailure,
     WorldCreateRoleLaunchGate, WorldCreateRoleOrganizingView, WorldDeleteRoleCountryGate,
@@ -36,6 +39,7 @@ use crate::organizations::organizingctrl::{
     OrganizingDeleteRoleBlock, OrganizingDeleteRoleOutcome, WorldDeleteRoleOrganizingGate,
 };
 use crate::organizations::organizingparam::COrganizingParam;
+use crate::persistence::rsplayer::RsPlayerOwner;
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::{WorldPlayerDeleteLogWrite, WorldWriteLogCommand};
 use crate::sessions::csessionfactory::CSessionFactory;
@@ -68,6 +72,7 @@ pub enum WorldCreateRoleAppendCollision {
     ExistingMapOwner,
 }
 
+pub const PLAYER_BASE_REQUEST: i32 = 0x0004_FB01;
 pub const CREATE_ROLE_REQUEST: i32 = 0x0004_FB04;
 pub const CREATE_ROLE_RESPONSE: i32 = 0x0001_FF03;
 pub const CREATE_ROLE_INVALID_STATUS: i8 = 0x01;
@@ -1445,5 +1450,183 @@ pub fn on_player_detail<G: WorldPlayerDetailGameView>(
         login_removed,
         offline_removal_completed: true,
         online_inserted,
+    }
+}
+
+/// Match-поверхность исходного `OnLogMessage` диспетчера `logmessage.cpp`:
+/// opcode выбирает ветвь, нераспознанный opcode фиксируется `NoOp` без
+/// побочных эффектов, маршрут `Handled/Pending` сохранён для цепочки
+/// владельцев старого пакета (`process_world_message`). Порядок рукавов
+/// повторяет прежний диспетчер буквально.
+#[derive(Debug)]
+pub enum WorldLogMessageOutcome {
+    NoOp {
+        request_type: i32,
+    },
+    PlayerBase(WorldPlayerBaseOutcome),
+    DeleteRole(WorldDeleteRoleOutcome),
+    RestoreRole(WorldRestoreRoleOutcome),
+    CreateRole(WorldCreateRoleOutcome),
+    PlayerSelect(WorldPlayerSelectOutcome),
+    AccountLoginCleanup(WorldAccountLoginCleanupOutcome),
+    AccountDisconnect(WorldAccountDisconnectOutcome),
+    PlayerDetail(WorldPlayerDetailOutcome),
+    PlayerReturn(WorldPlayerReturnOutcome),
+}
+
+pub enum WorldLogMessageDispatch {
+    Handled(WorldLogMessageOutcome),
+    Pending(CMessage),
+}
+
+/// Диспетчер `OnLogMessage` целиком: один вызов ветви на сообщение в прежнем
+/// порядке match-рукавов. Страновые gate/view и организационный view приходят
+/// dyn-швами от callsite-а, чтобы владельцы таблиц старого пакета не входили
+/// в сигнатуру; `delete_log_enabled` и обвязки журнала/tick сохраняют прежние
+/// точки снятия `_time` и errno-log по `_time`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "границы один к одному соответствуют owner-ам прежнего dispatcher-адаптера старого пакета"
+)]
+pub async fn on_log_message<G, D>(
+    game: &mut G,
+    organizing: &mut G::OrganizingContext,
+    organizing_parameters: &COrganizingParam,
+    country_gate: &mut dyn WorldDeleteRoleCountryGate,
+    country_view: &dyn WorldCountryView,
+    country_parameters: &mut CCountryParam,
+    player_list: &mut CPlayerList,
+    session_factory: &mut CSessionFactory,
+    registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    coefficients: &PlayerPropertyCoefficients,
+    load_player_largess: &mut dyn FnMut(&mut CPlayer),
+    globe_setup: &GlobeSetupSnapshot,
+    db: &mut D,
+    player_database: Option<&mut WorldTdsClient>,
+    delete_log_enabled: bool,
+    add_log_text: &mut dyn FnMut(&[u8]),
+    get_tick: &mut dyn FnMut() -> u32,
+    random: &mut dyn FnMut(i32) -> i32,
+    message: CMessage,
+) -> WorldLogMessageDispatch
+where
+    G: WorldPlayerSelectGameView
+        + WorldPlayerReturnGameView
+        + WorldPlayerDetailGameView
+        + WorldCreateRoleLaunchGate,
+    G::OrganizingContext: WorldDeleteRoleOrganizingGate + WorldCreateRoleOrganizingView,
+    D: RsPlayerOwner<CPlayer>
+        + WorldDeleteRoleDbView
+        + WorldCreateRoleDbView
+        + WorldPlayerSelectDbView,
+{
+    match message.message_type() {
+        PLAYER_BASE_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::PlayerBase(
+                crate::app::player_base::on_player_base(
+                    game,
+                    organizing,
+                    registry,
+                    coefficients,
+                    globe_setup,
+                    db,
+                    player_database,
+                    message,
+                )
+                .await,
+            ),
+        ),
+        DELETE_ROLE_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::DeleteRole(
+                on_delete_role(
+                    game,
+                    organizing,
+                    country_gate,
+                    organizing_parameters,
+                    globe_setup,
+                    db,
+                    player_database,
+                    delete_log_enabled,
+                    message,
+                )
+                .await,
+            ))
+        }
+        PLAYER_DETAIL_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerDetail(
+                on_player_detail(game, organizing, registry, coefficients, add_log_text, message),
+            ))
+        }
+        PLAYER_RETURN_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerReturn(
+                on_player_return(
+                    game,
+                    organizing,
+                    session_factory,
+                    registry,
+                    coefficients,
+                    add_log_text,
+                    message,
+                ),
+            ))
+        }
+        RESTORE_ROLE_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::RestoreRole(
+                on_restore_role(game, message),
+            ))
+        }
+        CREATE_ROLE_REQUEST => {
+            let organizing_view: &dyn WorldCreateRoleOrganizingView = &*organizing;
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
+                on_create_role(
+                    game,
+                    organizing_view,
+                    country_view,
+                    db,
+                    player_list,
+                    registry,
+                    original_name_index,
+                    country_parameters,
+                    coefficients,
+                    globe_setup,
+                    player_database,
+                    random,
+                    add_log_text,
+                    message,
+                )
+                .await,
+            ))
+        }
+        PLAYER_SELECT_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerSelect(
+                on_player_select(
+                    game,
+                    organizing,
+                    registry,
+                    coefficients,
+                    db,
+                    player_database,
+                    load_player_largess,
+                    get_tick,
+                    add_log_text,
+                    message,
+                )
+                .await,
+            ))
+        }
+        ACCOUNT_LOGIN_CLEANUP_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountLoginCleanup(
+                on_account_login_cleanup(game, session_factory, message),
+            ),
+        ),
+        ACCOUNT_DISCONNECT_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountDisconnect(
+                on_account_disconnect(game, session_factory, message),
+            ),
+        ),
+        request_type => WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::NoOp {
+            request_type,
+        }),
     }
 }

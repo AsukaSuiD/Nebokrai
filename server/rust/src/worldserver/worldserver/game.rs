@@ -40,9 +40,10 @@ use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::app::world_game_view::{
-    WorldCountryKingGateBlock, WorldCountryWarGate, WorldCreateRoleLaunchFailure,
-    WorldCreateRoleLaunchSuccess, WorldPlayerSelectRouteBlock, WorldPlayerSelectRouteError,
-    WorldPlayerSelectRouteOutcome,
+    WorldCountryKingGateBlock, WorldCountryView, WorldCountryWarGate,
+    WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldCreateRoleOrganizingLookupBlock,
+    WorldCreateRoleOrganizingView, WorldDeleteRoleCountryGate, WorldPlayerSelectRouteBlock,
+    WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
 };
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
@@ -140,9 +141,9 @@ use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
-    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryNewTermContext,
-    CountryGovernanceContextBlock, CountryKingSaveLimits, CountryOnlinePlayer,
-    CountryPlayersListContext, CountryPlayersListContextBlock,
+    CountryExileTarget, CountryExileTextArgument, CountryFactionSnapshot, CountryHasJobContext,
+    CountryNewTermContext, CountryGovernanceContextBlock, CountryKingSaveLimits,
+    CountryOnlinePlayer, CountryPlayersListContext, CountryPlayersListContextBlock,
     CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
 };
 use crate::worldserver::appworld::country::countryhandler::{
@@ -221,7 +222,7 @@ use crate::worldserver::appworld::message::gmamessage::{
 use crate::worldserver::appworld::message::gmmessage::{
     WorldGmMessageDispatch, WorldGmMessageOutcome, on_gm_message,
 };
-use crate::worldserver::appworld::message::logmessage::{
+use nebokrai_realm::app::logmessage::{
     WorldLogMessageDispatch, WorldLogMessageOutcome, on_log_message,
 };
 use crate::worldserver::appworld::message::onmsg_m2w_auction::{
@@ -314,9 +315,10 @@ use crate::worldserver::appworld::message::organsysmessage::{
     dispatch_village_war_application, dispatch_village_war_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
-    WorldLoginClientReplacement, WorldServerMessageDispatch, WorldServerMessageError,
-    WorldServerMessageOutcome, WorldInitialConfigurationRunCompletion,
-    WorldInitialConfigurationRunReport, on_login_client_reconnected, on_server_message,
+    WorldCompletedSaveResponseLaunchReport, WorldLoginClientReplacement,
+    WorldServerMessageDispatch, WorldServerMessageError, WorldServerMessageOutcome,
+    WorldInitialConfigurationRunCompletion, WorldInitialConfigurationRunReport,
+    on_login_client_reconnected, on_server_message,
 };
 use crate::worldserver::appworld::message::servermessage as servermessage;
 use crate::worldserver::appworld::message::teammessage::{
@@ -5232,11 +5234,7 @@ pub(crate) use nebokrai_realm::app::worldserver::{
     WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerConnectionState {
-    pub(crate) index: u32,
-    pub(crate) previous_connected: bool,
-}
+pub(crate) use nebokrai_realm::app::world_game_view::WorldGameServerConnectionState;
 
 pub(crate) use nebokrai_realm::app::worldserver::{WorldGlobeVariables, WorldGlobeVariablesDelivery};
 
@@ -5310,33 +5308,17 @@ pub(crate) use nebokrai_realm::app::world_game_view::WorldOnlineAccountPlayerRou
 // Data/handle-типы save-batch `tagDBData` (snapshot удалённого игрока,
 // accumulator `WorldDbData` с session facade и отделённый batch owner)
 // перенесены в Realm persistence вместе с impl session-а. Здесь реэкспорт
-// для остающихся inherent точек, save-trigger-а и worker-сборки; тип
-// `WorldSaveThreadJob` остаётся ниже до переноса `SaveDataLifecycleState`.
+// для остающихся inherent точек, save-trigger-а и worker-сборки.
 pub(crate) use nebokrai_realm::persistence::savedata::{
     DeletionPlayerSnapshot, WorldDbData, WorldDbDataSaveSession, WorldSaveDataOwner,
 };
 
 pub(crate) use nebokrai_realm::app::worldserver::{WorldGenerateDbDataBlock, WorldGenerateDbDataReport};
 
-/// Полный frozen-вход одного системного `SaveThreadFunc`.
-///
-/// Изменяемые данные следующего MainLoop-прохода остаются у process-owner-ов;
-/// worker получает только снимки, которые исходный поток читал после launch.
-pub(crate) struct WorldSaveThreadJob {
-    pub(crate) save: WorldSaveDataOwner,
-    pub(crate) variables: CVariableList,
-    pub(crate) registry: GoodsBasePropertiesRegistry,
-    pub(crate) honor_ranks: CHonorRanks,
-    pub(crate) gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
-    pub(crate) gods_battle_npc_factions: Vec<GodsBattleNpcFactionSnapshot>,
-    pub(crate) use_old_save_largess_way: bool,
-    pub(crate) save_info_time_ms: u32,
-    pub(crate) lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
-    pub(crate) server_name: Vec<u8>,
-    pub(crate) server_id: i32,
-    pub(crate) world_number_bits: u32,
-    pub(crate) write_log_queue: WorldWriteLogQueue,
-}
+// Frozen-вход системного `SaveThreadFunc` перенесён в Realm
+// persistence/savedb вместе с цитируемым им `SaveDataLifecycleState`;
+// здесь реэкспорт для save-trigger-а, worker-сборки и worker-связи.
+pub(crate) use nebokrai_realm::persistence::savedb::WorldSaveThreadJob;
 
 pub(crate) enum WorldCreationPlayerAppendOutcome {
     Inserted {
@@ -6824,12 +6806,21 @@ impl CGame {
         {
             blocked!("CDaKongXiangQian");
         }
+        macro_rules! game_sender {
+            () => {
+                self.current_game_server_sender()
+            };
+        }
+
         let prefix = servermessage::continue_game_server_initial_configuration_prefix(
-            self,
+            game_sender!().as_ref(),
             socket_id,
             servermessage::WorldGameServerInitialConfigurationPrefix {
                 da_kong_xiang_qian: &da_kong,
                 goods_registry: registry,
+                string_table: self.get_string_table_byte_array(),
+                words_filter: self.words_filter(),
+                thing_setup: self.thing_setup(),
             },
         );
         deliveries.extend(prefix.deliveries);
@@ -6842,7 +6833,7 @@ impl CGame {
 
         let (monster_registry, monster_drop_registry) = context.monster_registries();
         let monsters = servermessage::continue_game_server_monster_configuration(
-            self,
+            game_sender!().as_ref(),
             socket_id,
             monster_registry,
             monster_drop_registry,
@@ -6856,76 +6847,84 @@ impl CGame {
         ) {
             blocked!("CMonsterList");
         }
-        optional_step!(servermessage::continue_game_server_hit_level_configuration(self, socket_id), servermessage::WorldHitLevelConfigurationCompletion::PlayerListPending { .. }, "CHitLevelSetup");
-        optional_step!(servermessage::continue_game_server_player_list_configuration(self, socket_id, player_list), servermessage::WorldPlayerListConfigurationCompletion::EmotionPending { .. }, "CPlayerList");
-        optional_step!(servermessage::continue_game_server_emotion_configuration(self, socket_id), servermessage::WorldEmotionConfigurationCompletion::SkillFactoryPending { .. }, "CEmotion");
-        optional_step!(servermessage::continue_game_server_skill_configuration(self, socket_id, skills), servermessage::WorldSkillConfigurationCompletion::TradeListPending { .. }, "CSkillFactory");
-        optional_step!(servermessage::continue_game_server_trade_list_configuration(self, socket_id), servermessage::WorldTradeListConfigurationCompletion::IncrementShopListPending { .. }, "CTradeList");
-        optional_step!(servermessage::continue_game_server_increment_shop_configuration(self, socket_id), servermessage::WorldIncrementShopConfigurationCompletion::ContributeSetupPending { .. }, "CIncrementShopList");
-        optional_step!(servermessage::continue_game_server_contribute_configuration(self, socket_id), servermessage::WorldContributeConfigurationCompletion::PrisonConfigurationPending { .. }, "CContributeSetup");
-        optional_step!(servermessage::continue_game_server_prison_configuration(self, socket_id), servermessage::WorldPrisonConfigurationCompletion::PreciousBoxConfigurationPending { .. }, "PrisonConf");
-        optional_step!(servermessage::continue_game_server_precious_box_configuration(self, socket_id, context.precious_box_conf()), servermessage::WorldPreciousBoxConfigurationCompletion::FairyExpConfigurationPending { .. }, "PreciousBoxConf");
-        optional_step!(servermessage::continue_game_server_fairy_exp_configuration(self, socket_id, context.fairy_exp_conf()), servermessage::WorldFairyExpConfigurationCompletion::SynthesisConfigurationPending { .. }, "CFairyExpConf");
-        optional_step!(servermessage::continue_game_server_synthesis_configuration(self, socket_id, context.synthesis()), servermessage::WorldSynthesisConfigurationCompletion::EquipmentComposeConfigurationPending { .. }, "CSynthesis");
-        optional_step!(servermessage::continue_game_server_equipment_compose_configuration(self, socket_id), servermessage::WorldEquipmentComposeConfigurationCompletion::NewSkillMonsterConfigurationPending { .. }, "EquipmentComposeList");
-        optional_step!(servermessage::continue_game_server_new_skill_monster_configuration(self, socket_id, context.new_skill_monster_conf()), servermessage::WorldNewSkillMonsterConfigurationCompletion::GoodsDestroyConfigurationPending { .. }, "CNewSkillMonsterConf");
-        optional_step!(servermessage::continue_game_server_goods_destroy_configuration(self, socket_id, context.goods_destroy_setup()), servermessage::WorldGoodsDestroyConfigurationCompletion::GlobeSetupConfigurationPending { .. }, "CGoodsDestroySetup");
-        optional_step!(servermessage::continue_game_server_globe_setup_configuration(self, socket_id, globe_setup, region_router), servermessage::WorldGlobeSetupConfigurationCompletion::LogSystemConfigurationPending { .. }, "CGlobeSetup");
-        optional_step!(servermessage::continue_game_server_log_system_configuration(self, socket_id, context.log_system()), servermessage::WorldLogSystemConfigurationCompletion::CountryParamConfigurationPending { .. }, "CLogSystem");
-        optional_step!(servermessage::continue_game_server_country_param_configuration(self, socket_id, country_parameters), servermessage::WorldCountryParamConfigurationCompletion::CountryHandlerConfigurationPending { .. }, "CCountryParam");
-        optional_step!(servermessage::continue_game_server_country_handler_configuration(self, socket_id, country_handler), servermessage::WorldCountryHandlerConfigurationCompletion::GodsBattleConfigurationPending { .. }, "CCountryHandler");
-        optional_step!(servermessage::continue_game_server_gods_battle_configuration(self, socket_id, gods_battle), servermessage::WorldGodsBattleConfigurationCompletion::RegionSnapshotsPending { .. }, "CGodsBattleConf");
+        optional_step!(servermessage::continue_game_server_hit_level_configuration(game_sender!().as_ref(), socket_id, self.hit_level_setup()), servermessage::WorldHitLevelConfigurationCompletion::PlayerListPending { .. }, "CHitLevelSetup");
+        optional_step!(servermessage::continue_game_server_player_list_configuration(game_sender!().as_ref(), socket_id, player_list), servermessage::WorldPlayerListConfigurationCompletion::EmotionPending { .. }, "CPlayerList");
+        optional_step!(servermessage::continue_game_server_emotion_configuration(game_sender!().as_ref(), socket_id, self.emotion()), servermessage::WorldEmotionConfigurationCompletion::SkillFactoryPending { .. }, "CEmotion");
+        optional_step!(servermessage::continue_game_server_skill_configuration(game_sender!().as_ref(), socket_id, skills), servermessage::WorldSkillConfigurationCompletion::TradeListPending { .. }, "CSkillFactory");
+        optional_step!(servermessage::continue_game_server_trade_list_configuration(game_sender!().as_ref(), socket_id, self.trade_list()), servermessage::WorldTradeListConfigurationCompletion::IncrementShopListPending { .. }, "CTradeList");
+        optional_step!(servermessage::continue_game_server_increment_shop_configuration(game_sender!().as_ref(), socket_id, self.increment_shop_list()), servermessage::WorldIncrementShopConfigurationCompletion::ContributeSetupPending { .. }, "CIncrementShopList");
+        optional_step!(servermessage::continue_game_server_contribute_configuration(game_sender!().as_ref(), socket_id, self.contribute_setup()), servermessage::WorldContributeConfigurationCompletion::PrisonConfigurationPending { .. }, "CContributeSetup");
+        optional_step!(servermessage::continue_game_server_prison_configuration(game_sender!().as_ref(), socket_id, self.prison_conf()), servermessage::WorldPrisonConfigurationCompletion::PreciousBoxConfigurationPending { .. }, "PrisonConf");
+        optional_step!(servermessage::continue_game_server_precious_box_configuration(game_sender!().as_ref(), socket_id, context.precious_box_conf()), servermessage::WorldPreciousBoxConfigurationCompletion::FairyExpConfigurationPending { .. }, "PreciousBoxConf");
+        optional_step!(servermessage::continue_game_server_fairy_exp_configuration(game_sender!().as_ref(), socket_id, context.fairy_exp_conf()), servermessage::WorldFairyExpConfigurationCompletion::SynthesisConfigurationPending { .. }, "CFairyExpConf");
+        optional_step!(servermessage::continue_game_server_synthesis_configuration(game_sender!().as_ref(), socket_id, context.synthesis()), servermessage::WorldSynthesisConfigurationCompletion::EquipmentComposeConfigurationPending { .. }, "CSynthesis");
+        optional_step!(servermessage::continue_game_server_equipment_compose_configuration(game_sender!().as_ref(), socket_id, self.equipment_compose_list()), servermessage::WorldEquipmentComposeConfigurationCompletion::NewSkillMonsterConfigurationPending { .. }, "EquipmentComposeList");
+        optional_step!(servermessage::continue_game_server_new_skill_monster_configuration(game_sender!().as_ref(), socket_id, context.new_skill_monster_conf()), servermessage::WorldNewSkillMonsterConfigurationCompletion::GoodsDestroyConfigurationPending { .. }, "CNewSkillMonsterConf");
+        optional_step!(servermessage::continue_game_server_goods_destroy_configuration(game_sender!().as_ref(), socket_id, context.goods_destroy_setup()), servermessage::WorldGoodsDestroyConfigurationCompletion::GlobeSetupConfigurationPending { .. }, "CGoodsDestroySetup");
+        optional_step!(servermessage::continue_game_server_globe_setup_configuration(game_sender!().as_ref(), socket_id, globe_setup, region_router), servermessage::WorldGlobeSetupConfigurationCompletion::LogSystemConfigurationPending { .. }, "CGlobeSetup");
+        optional_step!(servermessage::continue_game_server_log_system_configuration(game_sender!().as_ref(), socket_id, context.log_system()), servermessage::WorldLogSystemConfigurationCompletion::CountryParamConfigurationPending { .. }, "CLogSystem");
+        optional_step!(servermessage::continue_game_server_country_param_configuration(game_sender!().as_ref(), socket_id, country_parameters), servermessage::WorldCountryParamConfigurationCompletion::CountryHandlerConfigurationPending { .. }, "CCountryParam");
+
+        let mut country_handler_payload = Vec::new();
+        let country_handler_payload = country_handler
+            .add_to_byte_array(&mut country_handler_payload)
+            .map(|()| country_handler_payload);
+        optional_step!(servermessage::continue_game_server_country_handler_configuration(game_sender!().as_ref(), socket_id, country_handler_payload), servermessage::WorldCountryHandlerConfigurationCompletion::GodsBattleConfigurationPending { .. }, "CCountryHandler");
+        optional_step!(servermessage::continue_game_server_gods_battle_configuration(game_sender!().as_ref(), socket_id, gods_battle), servermessage::WorldGodsBattleConfigurationCompletion::RegionSnapshotsPending { .. }, "CGodsBattleConf");
 
         let regions = servermessage::continue_game_server_region_configurations(
-            self,
+            game_sender!().as_ref(),
             socket_id,
-            game_server_index,
+            |visit| self.visit_initial_region_snapshots(game_server_index, visit),
             |milliseconds| std::thread::sleep(Duration::from_millis(u64::from(milliseconds))),
         );
         deliveries.extend(regions.deliveries.into_iter().map(|entry| entry.delivery));
         if !matches!(regions.completion, servermessage::WorldRegionConfigurationCompletion::RegionSetupConfigurationPending { .. }) {
             blocked!("CWorldRegion");
         }
-        optional_step!(servermessage::continue_game_server_region_setup_configuration(self, socket_id, context.region_setup()), servermessage::WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending { .. }, "CRegionSetup");
-        optional_step!(servermessage::continue_game_server_dupli_region_configuration(self, socket_id), servermessage::WorldDupliRegionConfigurationCompletion::HonorEliminateConfigurationPending { .. }, "CDupliRegionSetup");
+        optional_step!(servermessage::continue_game_server_region_setup_configuration(game_sender!().as_ref(), socket_id, context.region_setup()), servermessage::WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending { .. }, "CRegionSetup");
+        optional_step!(servermessage::continue_game_server_dupli_region_configuration(game_sender!().as_ref(), socket_id, self.dupli_region_setup()), servermessage::WorldDupliRegionConfigurationCompletion::HonorEliminateConfigurationPending { .. }, "CDupliRegionSetup");
 
-        let honor_eliminate = servermessage::continue_game_server_honor_eliminate_configuration(self, socket_id, *context.honor_eliminate_config());
+        let honor_eliminate = servermessage::continue_game_server_honor_eliminate_configuration(game_sender!().as_ref(), socket_id, *context.honor_eliminate_config());
         deliveries.push(honor_eliminate.delivery);
-        let honor = servermessage::continue_game_server_honor_ranks_configuration(self, socket_id, honor_ranks);
+        let honor = servermessage::continue_game_server_honor_ranks_configuration(game_sender!().as_ref(), socket_id, honor_ranks);
         deliveries.extend(honor.deliveries.into_iter().map(|entry| entry.delivery));
         if !matches!(honor.completion, servermessage::WorldHonorRanksConfigurationCompletion::FunctionListPending { .. }) {
             blocked!("CHonorRanks");
         }
-        let raw_scripts = servermessage::continue_game_server_raw_script_lists_configuration(self, socket_id);
+        let raw_scripts = servermessage::continue_game_server_raw_script_lists_configuration(game_sender!().as_ref(), socket_id, self.function_list_file_data(), self.variable_list_file_data());
         deliveries.extend(raw_scripts.deliveries.into_iter().map(|entry| entry.delivery));
         if !matches!(raw_scripts.completion, servermessage::WorldRawScriptListsConfigurationCompletion::GeneralVariableListPending { .. }) {
             blocked!("raw script lists");
         }
-        optional_step!(servermessage::continue_game_server_general_variable_configuration(self, socket_id, general_variables), servermessage::WorldGeneralVariableConfigurationCompletion::ScriptFilesPending { .. }, "CVariableList");
-        let scripts = servermessage::continue_game_server_script_files_configuration(self, socket_id);
+        optional_step!(servermessage::continue_game_server_general_variable_configuration(game_sender!().as_ref(), socket_id, general_variables), servermessage::WorldGeneralVariableConfigurationCompletion::ScriptFilesPending { .. }, "CVariableList");
+        let script_files: Vec<(&[u8], &[u8])> = self.initial_script_files().collect();
+        let scripts = servermessage::continue_game_server_script_files_configuration(game_sender!().as_ref(), socket_id, &script_files);
         deliveries.extend(scripts.deliveries.into_iter().map(|entry| entry.delivery));
         if !matches!(scripts.completion, servermessage::WorldScriptFilesConfigurationCompletion::QuestSystemPending { .. }) {
             blocked!("script files");
         }
-        optional_step!(servermessage::continue_game_server_quest_configuration(self, socket_id), servermessage::WorldQuestConfigurationCompletion::PlayerRanksPending { .. }, "CQuestSystem");
-        optional_step!(servermessage::continue_game_server_player_ranks_configuration(self, socket_id, player_ranks), servermessage::WorldPlayerRanksConfigurationCompletion::GmListPending { .. }, "CPlayerRanks");
-        optional_step!(servermessage::continue_game_server_gm_list_configuration(self, socket_id, game_server_index, context.gm_list()), servermessage::WorldGmListConfigurationCompletion::GameServerIndexPending { .. }, "CGMList");
+        optional_step!(servermessage::continue_game_server_quest_configuration(game_sender!().as_ref(), socket_id, self.quest_system()), servermessage::WorldQuestConfigurationCompletion::PlayerRanksPending { .. }, "CQuestSystem");
+        optional_step!(servermessage::continue_game_server_player_ranks_configuration(game_sender!().as_ref(), socket_id, player_ranks), servermessage::WorldPlayerRanksConfigurationCompletion::GmListPending { .. }, "CPlayerRanks");
+        optional_step!(servermessage::continue_game_server_gm_list_configuration(game_sender!().as_ref(), socket_id, game_server_index, context.gm_list()), servermessage::WorldGmListConfigurationCompletion::GameServerIndexPending { .. }, "CGMList");
 
-        let index = servermessage::continue_game_server_index_configuration(self, socket_id, game_server_index);
+        let index = servermessage::continue_game_server_index_configuration(game_sender!().as_ref(), socket_id, game_server_index);
         deliveries.push(index.delivery);
-        optional_step!(servermessage::continue_game_server_four_nation_war_configuration(self, socket_id, four_nation_war), servermessage::WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending { .. }, "CFourNationWarSys");
-        optional_step!(servermessage::continue_game_server_battle_fairy_exp_configuration(self, socket_id, context.battle_fairy_exp_config()), servermessage::WorldBattleFairyExpConfigurationCompletion::BattleFairyPropertyPending { .. }, "CBattleFairyExpConfig");
-        optional_step!(servermessage::continue_game_server_battle_fairy_property_configuration(self, socket_id, context.battle_fairy_property()), servermessage::WorldBattleFairyPropertyConfigurationCompletion::CiQingLingBaoConfigurationPending { .. }, "CBattleFairyProperty");
-        optional_step!(servermessage::continue_game_server_ciqing_ling_bao_configuration(self, socket_id, context.ling_bao_setup()), servermessage::WorldCiQingLingBaoConfigurationCompletion::TaoZhuangConfigurationPending { .. }, "CCiQingSetup/CLingBaoSetup");
-        optional_step!(servermessage::continue_game_server_tao_zhuang_configuration(self, socket_id), servermessage::WorldTaoZhuangConfigurationCompletion::AttackCityConfigurationPending { .. }, "CTaoZhuangSetup");
+        optional_step!(servermessage::continue_game_server_four_nation_war_configuration(game_sender!().as_ref(), socket_id, four_nation_war), servermessage::WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending { .. }, "CFourNationWarSys");
+        optional_step!(servermessage::continue_game_server_battle_fairy_exp_configuration(game_sender!().as_ref(), socket_id, context.battle_fairy_exp_config()), servermessage::WorldBattleFairyExpConfigurationCompletion::BattleFairyPropertyPending { .. }, "CBattleFairyExpConfig");
+        optional_step!(servermessage::continue_game_server_battle_fairy_property_configuration(game_sender!().as_ref(), socket_id, context.battle_fairy_property()), servermessage::WorldBattleFairyPropertyConfigurationCompletion::CiQingLingBaoConfigurationPending { .. }, "CBattleFairyProperty");
+        optional_step!(servermessage::continue_game_server_ciqing_ling_bao_configuration(game_sender!().as_ref(), socket_id, self.ci_qing_setup(), context.ling_bao_setup()), servermessage::WorldCiQingLingBaoConfigurationCompletion::TaoZhuangConfigurationPending { .. }, "CCiQingSetup/CLingBaoSetup");
+        optional_step!(servermessage::continue_game_server_tao_zhuang_configuration(game_sender!().as_ref(), socket_id, self.tao_zhuang_setup()), servermessage::WorldTaoZhuangConfigurationCompletion::AttackCityConfigurationPending { .. }, "CTaoZhuangSetup");
 
-        let attack = servermessage::continue_game_server_attack_city_configuration(self, socket_id, attack_city);
+        let attack = servermessage::continue_game_server_attack_city_configuration(game_sender!().as_ref(), socket_id, attack_city);
         deliveries.push(attack.delivery);
-        let village = servermessage::continue_game_server_village_war_configuration(self, socket_id, village_war);
+        let village = servermessage::continue_game_server_village_war_configuration(game_sender!().as_ref(), socket_id, village_war);
         deliveries.push(village.delivery);
-        let country = servermessage::continue_game_server_country_war_configuration(self, socket_id, country_war);
+        let mut country_war_payload = Vec::new();
+        let _legacy_success = country_war.add_to_byte_array(&mut country_war_payload);
+        let country = servermessage::continue_game_server_country_war_configuration(game_sender!().as_ref(), socket_id, &country_war_payload);
         deliveries.push(country.delivery);
-        let identity = servermessage::finish_game_server_initial_configuration(self, socket_id);
+        let identity = servermessage::finish_game_server_initial_configuration(game_sender!().as_ref(), socket_id, self.configured_world_number(), self.login_server_id());
         if let Some(delivery) = identity.delivery {
             deliveries.push(delivery);
         }
@@ -8721,6 +8720,58 @@ impl CGame {
         let resulting_handle = save_runtime.launch(&launch, job);
         *save_thread_handle = resulting_handle;
         Ok(WorldRunSaveLaunchReport {
+            snapshot,
+            launch,
+            resulting_handle,
+        })
+    }
+
+ /// Выполняет snapshot/cleanup хвост завершённой ветви `0x5FA03`.
+ ///
+ /// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и передача
+ /// job process save-owner-у достигаются только после успешных
+ /// snapshot/cleanup. Тело переехало из бывшего
+ /// `appworld/message/servermessage.rs` вместе с тем же save-хвостом
+ /// `materialize_run_save_snapshot`; различие — только обязательный
+ /// player-prefix в генераторе.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "исходный handler повторно обращался к тем же singleton/static владельцам"
+    )]
+    pub(crate) fn materialize_completed_save_response_snapshot(
+        &mut self,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing_ctrl: &mut COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+        faction_war_sys: &CFactionWarSys,
+        country_handler: &CCountryHandler,
+        country_limits: CountryKingSaveLimits,
+        variables: &CVariableList,
+        honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+        lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
+        save_thread_handle: &mut WorldSaveThreadHandleState,
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
+    ) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock> {
+        let snapshot = self.generate_db_data(
+            registry,
+            organizing_ctrl,
+            coefficients,
+            faction_war_sys,
+            country_handler,
+            country_limits,
+            honor_ranks,
+        )?;
+        self.clear_map_player_for_offline();
+        self.clear_restore_player();
+        self.clear_creation_player();
+        self.clear_deletion_player();
+        self.clear_offline_player();
+        let launch = prepare_save_thread_launch(save_thread_handle);
+        let job = self.take_save_thread_job(variables, registry, honor_ranks, gods_battle, lifecycle);
+        let resulting_handle = save_runtime.launch(&launch, job);
+        *save_thread_handle = resulting_handle;
+        Ok(WorldCompletedSaveResponseLaunchReport {
             snapshot,
             launch,
             resulting_handle,
@@ -16522,6 +16573,250 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
     ) -> Option<PlayerExploitUpdate> {
         CGame::add_map_player_exploit_wrapping(self, player_id, increment)
     }
+
+    fn create_connect_login_thread(
+        &mut self,
+        runtime: tokio::runtime::Handle,
+    ) -> WorldLoginReconnectThreadRestart {
+        CGame::create_connect_login_thread(self, runtime)
+    }
+
+    fn begin_game_server_ping(&mut self) -> (usize, u32) {
+        CGame::begin_game_server_ping(self)
+    }
+
+    fn assign_login_server_id(&mut self, login_server_id: i32) -> i32 {
+        CGame::assign_login_server_id(self, login_server_id)
+    }
+
+    fn connect_game_server_by_address(
+        &mut self,
+        ip: &[u8],
+        port: u32,
+    ) -> Result<Option<WorldGameServerConnectionState>, WorldGameServerLookupError> {
+        CGame::connect_game_server_by_address(self, ip, port)
+    }
+
+    fn send_globe_variables_to_game_server(
+        &self,
+        socket_id: i32,
+    ) -> WorldGlobeVariablesDelivery {
+        CGame::send_globe_variables_to_game_server(self, socket_id)
+    }
+
+    fn region_assignment_exists(&self, region_id: i32) -> bool {
+        self.region(region_id).is_some()
+    }
+
+    fn region_game_server_route(
+        &self,
+        region_id: i32,
+    ) -> Option<nebokrai_realm::app::world_game_view::WorldRegionGameServerRoute> {
+        CGame::get_region_game_server(self, region_id).map(|entry| {
+            nebokrai_realm::app::world_game_view::WorldRegionGameServerRoute {
+                connected: entry.connected,
+                index: entry.index,
+                ip: entry.ip.clone(),
+                port: entry.port,
+            }
+        })
+    }
+
+    fn set_team_player_owner_region(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        region_id: i32,
+    ) -> WorldRegionChangeTeamUpdate {
+        CGame::set_team_player_owner_region(self, factory, session_id, owner_type, owner_id, region_id)
+    }
+
+    fn decord_server_snapshot_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldServerSnapshotPlayerDecode, PlayerCodecError> {
+        CGame::decord_server_snapshot_player(
+            self,
+            requested_player_id,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        )
+    }
+
+    fn decord_reconnected_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReconnectedPlayerDecode, PlayerCodecError> {
+        CGame::decord_reconnected_player(
+            self,
+            requested_player_id,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        )
+    }
+
+    fn record_player_save_response(
+        &mut self,
+        completion_counted: bool,
+    ) -> WorldPlayerSaveResponseProgress {
+        CGame::record_player_save_response(self, completion_counted)
+    }
+
+    fn increment_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterUpdate> {
+        CGame::increment_online_player_murder_counters(self, player_id)
+    }
+
+    fn decode_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> WorldRegionParamDecodeOutcome {
+        CGame::decode_region_param_from_game_server(self, region_id, source, cursor)
+    }
+
+    fn reset_received_player_data(
+        &mut self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataUpdate {
+        CGame::reset_received_player_data(self, game_server_index)
+    }
+
+    fn increment_received_player_data(
+        &mut self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataUpdate {
+        CGame::increment_received_player_data(self, game_server_index)
+    }
+
+    fn received_player_data(&self, game_server_index: i32) -> WorldReceivedPlayerDataRead {
+        CGame::received_player_data(self, game_server_index)
+    }
+
+    fn record_game_server_ping(&mut self, response: WorldPingGameServerInfo) -> usize {
+        CGame::record_game_server_ping(self, response)
+    }
+
+    fn send_cdkey_to_login_server(
+        &self,
+    ) -> Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError> {
+        CGame::send_cdkey_to_login_server(self)
+    }
+
+    fn replace_login_client(&mut self, client: CMyNetClient) -> bool {
+        CGame::replace_login_client(self, client)
+    }
+
+    fn world_number_after_cdkey_snapshot(&self) -> u32 {
+        CGame::world_number_after_cdkey_snapshot(self)
+    }
+
+    fn world_name(&self) -> &[u8] {
+        CGame::world_name(self)
+    }
+
+    fn current_login_client_mut(&mut self) -> Option<&mut CMyNetClient> {
+        CGame::current_login_client_mut(self)
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldServerMessageGameView for CGame {
+    fn transition_online_player_region(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        requested_player_id: u32,
+        target_region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<WorldRegionChangePlayerTransition>, PlayerCodecError> {
+        CGame::transition_online_player_region(
+            self,
+            organizing,
+            requested_player_id,
+            target_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        )
+    }
+
+    fn append_online_player_id(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        player_id: i32,
+    ) -> WorldOnlinePlayerAppendOutcome {
+        CGame::append_online_player_id(self, organizing, player_id)
+    }
+}
+
+/// Gate-адаптер хвоста завершённой save-волны ветви `0x5FA03`: owners,
+/// остающиеся в старом пакете (faction war, страновая таблица, lifecycle и
+/// runtime save-потока), связываются один раз у вызова dispatcher-а; игра,
+/// organizing и realm-владельцы приходят параметрами. Порядок цепочки
+/// сохранён inherent `CGame::materialize_completed_save_response_snapshot`.
+pub(crate) struct WorldCompletedSaveResponseMaterializationAdapter<'a> {
+    faction_war_sys: &'a CFactionWarSys,
+    country_handler: &'a CCountryHandler,
+    country_limits: CountryKingSaveLimits,
+    lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
+    save_thread_handle: &'a mut WorldSaveThreadHandleState,
+    save_runtime: &'a mut dyn WorldSaveRuntimeContext,
+}
+
+impl nebokrai_realm::app::world_game_view::WorldCompletedSaveResponseMaterialization<CGame>
+    for WorldCompletedSaveResponseMaterializationAdapter<'_>
+{
+    fn materialize_completed_save_response_snapshot(
+        &mut self,
+        game: &mut CGame,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing: &mut COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+        variables: &CVariableList,
+        honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+    ) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock> {
+        game.materialize_completed_save_response_snapshot(
+            registry,
+            organizing,
+            coefficients,
+            self.faction_war_sys,
+            self.country_handler,
+            self.country_limits,
+            variables,
+            honor_ranks,
+            gods_battle,
+            Arc::clone(&self.lifecycle),
+            self.save_thread_handle,
+            self.save_runtime,
+        )
+    }
 }
 
 impl nebokrai_realm::app::world_game_view::WorldPlayerFactionInfoUpdateView for CGame {
@@ -18178,6 +18473,101 @@ impl CountryWarTopInfoContext for WorldCountryWarEffects<'_> {
     }
 }
 
+/// Контекст форматирования строк удаляемой должности ветви delete-role:
+/// связка `globe_setup` + game-view прежнего `DeleteRoleCountryEffects` из
+/// dispatcher-адаптера, перенесена вместе с gate-мостом к единственному
+/// callsite-у Log-диспетчера.
+struct DeleteRoleCountryEffects<'a> {
+    game: &'a (dyn nebokrai_realm::app::world_game_view::WorldGameView + 'a),
+    globe_setup: &'a GlobeSetupSnapshot,
+}
+
+impl CountryHasJobContext for DeleteRoleCountryEffects<'_> {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        self.globe_setup
+            .country_name(country_id)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                CountryExileTextArgument::Text(value) => UnionFormatArgument::Text(value),
+                CountryExileTextArgument::Signed(value) => UnionFormatArgument::Signed(*value),
+            })
+            .collect::<Vec<_>>();
+        self.game.format_world_string(string_id, &arguments)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        put_string_to_file("king", text);
+    }
+}
+
+/// Адаптер странового gate ветви delete-role: повторяет исходную цепочку
+/// `country_handler.get_country → country_state.has_job` буквально, игра
+/// приходит через короткий перезайм view от обработчика.
+struct DeleteRoleCountryGateBridge<'a> {
+    country_handler: &'a CCountryHandler,
+    globe_setup: &'a GlobeSetupSnapshot,
+}
+
+impl WorldDeleteRoleCountryGate for DeleteRoleCountryGateBridge<'_> {
+    fn country_has_job(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        country: u8,
+        player_id: i32,
+    ) -> bool {
+        let Some(country_state) = self.country_handler.get_country(country) else {
+            return false;
+        };
+        let mut effects = DeleteRoleCountryEffects {
+            game,
+            globe_setup: self.globe_setup,
+        };
+        country_state.has_job(player_id, &mut effects) != 0
+    }
+}
+
+/// Адаптер страновой таблицы ветви create-role: ровно
+/// `get_country(...).is_some()` прежнего обработчика без переноса самого
+/// `CCountryHandler` в сигнатуру диспетчера. Прямой impl трейта для
+/// `CCountryHandler` здесь невозможен (и трейт, и тип уже в Realm —
+/// orphan-правило), поэтому seam остаётся у единого владельца — этого
+/// callsite-а.
+struct CreateRoleCountryViewAdapter<'a> {
+    handler: &'a CCountryHandler,
+}
+
+impl WorldCountryView for CreateRoleCountryViewAdapter<'_> {
+    fn country_exists(&self, country: u8) -> bool {
+        self.handler.get_country(country).is_some()
+    }
+}
+
+/// Организационный lookup ветви create-role у владельца: делегирует
+/// `COrganizingCtrl::organizing_by_name(...).map(|m| m.is_some())` с тем же
+/// отклонением технического дефекта в seam-блок, что давал прежний
+/// `CreateRoleOrganizingViewAdapter`.
+impl WorldCreateRoleOrganizingView for COrganizingCtrl {
+    fn name_exists(
+        &self,
+        name: &[u8],
+    ) -> Result<bool, WorldCreateRoleOrganizingLookupBlock> {
+        match self.organizing_by_name(name) {
+            Ok(matched) => Ok(matched.is_some()),
+            Err(_source) => Err(WorldCreateRoleOrganizingLookupBlock::NullOwner),
+        }
+    }
+}
+
 async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     game: &mut CGame,
     honor_ranks: &mut CHonorRanks,
@@ -18277,19 +18667,22 @@ where
     let legacy_run_result = message.run(&mut selector);
 
     if selector.owner == Some(WorldMessageOwner::Server) {
+        let mut save_materialization = WorldCompletedSaveResponseMaterializationAdapter {
+            faction_war_sys,
+            country_handler,
+            country_limits,
+            lifecycle: Arc::clone(&save_lifecycle),
+            save_thread_handle,
+            save_runtime,
+        };
         match on_server_message(
             game,
             message,
             registry,
             coefficients,
             organizing,
-            faction_war_sys,
-            country_handler,
-            country_limits,
             honor_ranks,
-            Arc::clone(&save_lifecycle),
-            save_thread_handle,
-            save_runtime,
+            &mut save_materialization,
             add_log_text,
             session_factory,
             general_variables.as_deref_mut(),
@@ -18371,11 +18764,26 @@ where
 
     if selector.owner == Some(WorldMessageOwner::Log) {
         let delete_log_enabled = game.setup.use_log_system && delete_log_enabled;
+        // Gate-мост и обвязки журнала/tick собираются до диспетчера: побочных
+        // эффектов у них нет, а порядок ветвей и точки снятия `_time`/
+        // errno-log сохранены внутри Realm-диспетчера.
+        let mut country_gate = DeleteRoleCountryGateBridge {
+            country_handler,
+            globe_setup,
+        };
+        let country_view = CreateRoleCountryViewAdapter {
+            handler: country_handler,
+        };
+        let mut log_wrapper = |bytes: &[u8]| {
+            let _ = add_log_text(bytes);
+        };
+        let mut get_tick = legacy_tick_ms;
         match on_log_message(
             game,
             organizing,
             organizing_parameters,
-            country_handler,
+            &mut country_gate,
+            &country_view,
             country_parameters,
             player_list,
             session_factory,
@@ -18387,7 +18795,8 @@ where
             rs_player,
             player_database.as_deref_mut(),
             delete_log_enabled,
-            add_log_text,
+            &mut log_wrapper,
+            &mut get_tick,
             &mut *application_callbacks.random,
             message,
         )
@@ -21540,45 +21949,9 @@ fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, val
     message.add_byte(0);
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ShowSaveInfoDisposition {
-    Suppressed,
-    Logged(AddLogTextDisposition),
-}
-
-/// Выполняет gate и два последовательных formatting-владельца.
-///
-/// `formatted_message` — результат первого variadic call-site форматирования
-/// без конечного NUL. При выключенном `show_save_info` значение сознательно не
-/// читается, как и в исходном теле.
-pub(crate) fn show_save_info<GetTick, GetLocalTime, PutLogInfo>(
-    show_save_info: bool,
-    formatted_message: &[u8],
-    save_info_time_ms: u32,
-    log: &mut WorldLogTextOwner,
-    get_tick: GetTick,
-    get_local_time: GetLocalTime,
-    put_log_info: PutLogInfo,
-) -> ShowSaveInfoDisposition
-where
-    GetTick: FnMut() -> u32,
-    GetLocalTime: FnMut() -> WorldLogLocalTime,
-    PutLogInfo: FnMut(&[u8]),
-{
-    if !show_save_info {
-        return ShowSaveInfoDisposition::Suppressed;
-    }
-
-    let formatted_message = legacy_c_string_prefix(formatted_message);
-    ShowSaveInfoDisposition::Logged(log.add_log_text_no_arguments(
-        formatted_message,
-        save_info_time_ms,
-        get_tick,
-        get_local_time,
-        put_log_info,
-    ))
-}
-
+// Gate `ShowSaveInfo` перенесён в Realm persistence/savedb вместе со своей
+// единственной save-публикующей семьёй; старый пакет получает его через
+// реэкспорт модуля `savedb`.
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     let end = value
         .iter()
