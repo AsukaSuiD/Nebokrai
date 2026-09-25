@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm app: process-glue WorldServer 25 сентября 2026
+
+Технические функции process-owner-а исторического WorldServer перенесены из `src/worldserver/worldserver/worldserver.rs` в [`realm/app/worldserver.rs`](../../server/rust/realm/src/app/worldserver.rs): `WorldLogTextOwner` с operator-log адаптерами (byte-exact `Start Save Log`/`End Save Log` рамки, различие штатной ошибки/retained owner/безопасной остановки), refresh-info текст с typed ticks/local-time callbacks и save-state. Файл зависит только от std и `parking_lot` — швов не потребовалось, перенос скриптован (cp + одна строка шапки + видимость), diff — одна строка. Старый файл стал glob-шимом; потребители поимённо (appworld `countrymessage`/`gmamessage`/`logmessage`/`othermessage`/`servermessage`/`writelogmessage`, world `game`, `savedb` — все импортируют `AddLogTextDisposition` и log-helpers) работают через шим без правок.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): строки `Start Save Log` и `End Save Log` присутствуют в той же сборке. Byte-exact форматы и различие расположений ошибок сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm access: runtime AuthServer 25 сентября 2026
 
 Generic `CGame<Handler>` AuthServer с bound `AuthMessageHandler` (accept/io/release порядок как у login hub) перенесён из `src/authserver/src/cgame.rs` в [`realm/access/authgame.rs`](../../server/rust/realm/src/access/authgame.rs). Все связи уже имели владельцев: auth-кластер (`message_func`, `configreader`, `dbqueue`, `kl_ipfilter`, `authproc`, `networkconfig`, `dbcontext`) → realm access, auth-край → realm app (`auth_message`/`auth_server`/`auth_server_client`), accept/runtime примитивы → Shared network. Две ранее вставленные self-crate строки re-export (`AuthNetworkConfig`, `AuthDbContext`) приведены к `crate::access` путям — требование крейта, семантически эквивалентно. Старый файл стал glob-шимом; потребители (`process/authserver`, type alias `AuthGame` в authserver/mod.rs) не тронуты. Перенос скриптован (cp + точечные правки), diff — только шапка и импорты.
