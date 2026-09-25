@@ -17041,6 +17041,26 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::map_player(self, player_id)
     }
 
+    fn online_player_id_by_name(&self, name: &[u8]) -> u32 {
+        CGame::online_player_id_by_name(self, name)
+    }
+
+    fn online_player_by_cdkey(&self, cdkey: &[u8]) -> Option<&CPlayer> {
+        CGame::online_player_by_cdkey(self, cdkey)
+    }
+
+    fn configured_world_number(&self) -> Option<u32> {
+        CGame::configured_world_number(self)
+    }
+
+    fn current_login_client(&self) -> Option<&CMyNetClient> {
+        CGame::current_login_client(self)
+    }
+
+    fn game_server_number_by_player_id(&self, player_id: i32) -> i32 {
+        CGame::game_server_number_by_player_id(self, player_id)
+    }
+
     fn legacy_tick_ms(&self) -> u32 {
         legacy_tick_ms()
     }

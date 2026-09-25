@@ -24,6 +24,7 @@ pub mod miscservermessage;
 pub mod onbillserver;
 pub mod othermessage;
 pub mod setup;
+pub mod gmamessage;
 pub mod playermessage;
 pub mod teammessage;
 pub mod jjcsysmessage;

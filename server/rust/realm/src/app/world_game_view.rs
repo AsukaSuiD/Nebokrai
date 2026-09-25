@@ -2,6 +2,7 @@
 
 use nebokrai_shared::network::ServerCommandHandle;
 
+use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::characters::player::CPlayer;
 
@@ -33,6 +34,16 @@ pub trait WorldGameView {
     fn player_game_server(&self, player_id: i32) -> Option<WorldGameServerSnapshot>;
 
     fn map_player(&self, player_id: u32) -> Option<&CPlayer>;
+
+    fn online_player_id_by_name(&self, name: &[u8]) -> u32;
+
+    fn online_player_by_cdkey(&self, cdkey: &[u8]) -> Option<&CPlayer>;
+
+    fn configured_world_number(&self) -> Option<u32>;
+
+    fn current_login_client(&self) -> Option<&CMyNetClient>;
+
+    fn game_server_number_by_player_id(&self, player_id: i32) -> i32;
 
     fn legacy_tick_ms(&self) -> u32;
 
