@@ -40,7 +40,10 @@ use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
-use nebokrai_realm::app::world_game_view::{WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess};
+use nebokrai_realm::app::world_game_view::{
+    WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldPlayerSelectRouteBlock,
+    WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
+};
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
     normalize_script_path,
@@ -2154,26 +2157,13 @@ pub(crate) struct WorldMainLoopSessionFactoryStageReport {
     pub(crate) next_stage_started_at_ms: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerDataQueueRejectReason {
-    NullPlayer,
-    MissingRegion {
-        region_id: i32,
-    },
-    MissingOrDisconnectedGameServer {
-        region_id: i32,
-        game_server_index: u32,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFriendPresenceUpdate {
-    pub(crate) friend_index: usize,
-    pub(crate) player_id: u32,
-    pub(crate) online: bool,
-    pub(crate) target_game_server_index: Option<u32>,
-    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
-}
+// Диагностические типы player-data маршрута и player-load FIFO перевезены в
+// Realm world_game_view вместе с ветвью select; здесь реэкспорт для
+// оставшейся queue-обработки и producer-ов присутствия.
+pub(crate) use nebokrai_realm::app::world_game_view::{
+    WorldFriendPresenceUpdate, WorldPlayerDataQueueRejectReason, WorldPlayerLoadRequestBlock,
+    WorldPlayerLoadRequestOutcome,
+};
 
 /// Два подтверждённых порядка одного route: direct `GetPlayerData` публикует
 /// player до friend-loop, а `ProcessPlayerDataQueue` — после него.
@@ -2224,17 +2214,6 @@ pub(crate) struct WorldProcessPlayerDataQueueError {
     pub(crate) null_pops: u32,
     pub(crate) player_id: u32,
     pub(crate) block: WorldProcessPlayerDataQueueBlock,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadRequestBlock {
-    pub(crate) account_length: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerLoadRequestOutcome {
-    Queued,
-    Duplicate,
 }
 
 /// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
@@ -16907,6 +16886,23 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::online_player_route_by_account(self, account)
     }
 
+    fn validate_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool {
+        CGame::validate_player_id_in_cdkey(self, account, player_id)
+    }
+
+    fn validate_db_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool {
+        CGame::validate_db_player_id_in_cdkey(self, account, player_id)
+    }
+
+    fn push_player_load_request(
+        &self,
+        account: &[u8],
+        player_id: u32,
+        client_ip: u32,
+    ) -> Result<WorldPlayerLoadRequestOutcome, WorldPlayerLoadRequestBlock> {
+        CGame::push_player_load_request(self, account, player_id, client_ip)
+    }
+
     fn exit_team_player(
         &mut self,
         factory: &mut CSessionFactory,
@@ -17187,6 +17183,83 @@ impl nebokrai_realm::app::player_base::WorldPlayerBaseGameView for CGame {
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
         CGame::clone_saving_player(self, player_id, registry, organizing, coefficients)
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldPlayerSelectGameView for CGame {
+    #[allow(clippy::too_many_arguments, reason = "точная форма route-вызова ветки select")]
+    fn route_select_player(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        queue_player_id: u32,
+        client_ip: u32,
+        cdkey: &[u8],
+        player: Option<Box<CPlayer>>,
+        after_login_send: &mut dyn FnMut(&mut CPlayer),
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> Result<WorldPlayerSelectRouteOutcome, WorldPlayerSelectRouteError> {
+        match CGame::route_loaded_player(
+            self,
+            organizing,
+            0,
+            0,
+            queue_player_id,
+            client_ip,
+            cdkey,
+            player,
+            WorldLoadedPlayerRouteOrder::Direct,
+            after_login_send,
+            get_tick,
+        ) {
+            Ok(WorldProcessPlayerDataQueueOutcome::Rejected {
+                reason,
+                login_delivery,
+                ..
+            }) => Ok(WorldPlayerSelectRouteOutcome::Rejected {
+                reason,
+                login_delivery,
+            }),
+            Ok(WorldProcessPlayerDataQueueOutcome::Accepted {
+                game_server_index,
+                login_delivery,
+                friend_updates,
+                online_removal,
+                replaced_existing_player,
+                login_time_ms,
+                ..
+            }) => Ok(WorldPlayerSelectRouteOutcome::Accepted {
+                game_server_index,
+                login_delivery,
+                friend_updates,
+                online_removed_occurrences: online_removal.removed_occurrences,
+                replaced_existing_player,
+                login_time_ms,
+            }),
+            // `route_loaded_player` возвращает только Rejected/Accepted;
+            // NoRecord ставится единолично `process_player_data_queue`.
+            Ok(WorldProcessPlayerDataQueueOutcome::NoRecord { .. }) => {
+                unreachable!("route_loaded_player не возвращает NoRecord")
+            }
+            Err(error) => Err(WorldPlayerSelectRouteError {
+                player_id: error.player_id,
+                block: match error.block {
+                    WorldProcessPlayerDataQueueBlock::Organizing(source) => {
+                        WorldPlayerSelectRouteBlock::Organizing(source)
+                    }
+                    WorldProcessPlayerDataQueueBlock::UninitializedGameServerPort {
+                        game_server_index,
+                    } => WorldPlayerSelectRouteBlock::UninitializedGameServerPort {
+                        game_server_index,
+                    },
+                    // `UnterminatedCdkey` ставится только при разборе записи
+                    // очереди в `process_player_data_queue`; сам маршрут его
+                    // не производит.
+                    WorldProcessPlayerDataQueueBlock::UnterminatedCdkey => {
+                        unreachable!("route_loaded_player не возвращает UnterminatedCdkey")
+                    }
+                },
+            }),
+        }
     }
 }
 

@@ -1364,6 +1364,40 @@ impl nebokrai_realm::app::world_game_view::WorldCreateRoleDbView for TiberiusRsP
     }
 }
 
+impl nebokrai_realm::app::world_game_view::WorldPlayerSelectDbView for TiberiusRsPlayer {
+    fn validate_player_id_in_cdkey<'a>(
+        &'a mut self,
+        account: &'a [u8],
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::validate_player_id_in_cdkey(
+                self,
+                account,
+                player_id,
+                active_transaction,
+            )
+            .await
+        })
+    }
+
+    fn get_player_deletion_date<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::get_player_deletion_date(
+                self,
+                player_id,
+                active_transaction,
+            )
+            .await
+        })
+    }
+}
+
 impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
     fn load_player<J, G, WeekDay>(
         &mut self,

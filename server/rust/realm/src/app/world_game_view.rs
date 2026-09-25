@@ -19,11 +19,12 @@ use crate::app::worldothermessage::{
 };
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
+use crate::app::player_base::WorldPlayerBaseGameView;
 use crate::characters::player::{
     CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
     PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerFactionInfoUpdateBlock,
-    PlayerFactionInfoUpdateReport, PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome,
-    PlayerPropertyCoefficients,
+    PlayerFactionInfoUpdateReport, PlayerOrganizingUpdateError, PlayerOriginEquipmentBlock,
+    PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
 };
 use crate::content::countryparam::CCountryParam;
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
@@ -219,6 +220,24 @@ pub trait WorldGameView {
     fn append_offline_player_id(&mut self, player_id: u32) -> bool;
 
     fn online_player_route_by_account(&self, account: &[u8]) -> Option<WorldOnlineAccountPlayerRoute>;
+
+    /// Проверки связки player↔cdkey ветки `player_select`: live-карта и
+    /// frozen save-map владельца игры. Реализации делегируют одноимённым
+    /// inherent-предикатам (`_strcmpi` над c-string префиксами); выбор слоя,
+    /// DB-fallback и отказ `0x1C` остаются у обработчика.
+    fn validate_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool;
+
+    fn validate_db_player_id_in_cdkey(&self, account: &[u8], player_id: u32) -> bool;
+
+    /// Постановка player-load FIFO ветки `player_select` при полном miss.
+    /// Реализация делегирует одноимённый inherent-метод с той же проверкой
+    /// cdkey-capacity; `Duplicate` остаётся диагностикой без перепостановки.
+    fn push_player_load_request(
+        &self,
+        account: &[u8],
+        player_id: u32,
+        client_ip: u32,
+    ) -> Result<WorldPlayerLoadRequestOutcome, WorldPlayerLoadRequestBlock>;
 
     /// Проверки обработчика `create_role`: занятость имени в live-карте и в
     /// двух слоях загруженных DB-данных. Реализации делегируют одноимённым
@@ -463,5 +482,136 @@ pub trait WorldDeleteRoleCountryGate {
         country: u8,
         player_id: i32,
     ) -> bool;
+}
+
+/// Причина отказа player-data маршрута владельца игры. Тип перевезён из
+/// `game.rs` вместе с ветвью select, чтобы typed seam маршрута жил в Realm;
+/// старый пакет реэкспортирует его для оставшейся queue-обработки.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldPlayerDataQueueRejectReason {
+    NullPlayer,
+    MissingRegion {
+        region_id: i32,
+    },
+    MissingOrDisconnectedGameServer {
+        region_id: i32,
+        game_server_index: u32,
+    },
+}
+
+/// Единичное уведомление о присутствии друга при маршруте загруженного
+/// игрока. Тип перевезён из `game.rs` вместе с ветвью select; старый пакет
+/// реэкспортирует его для оставшихся producer-ов присутствия.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldFriendPresenceUpdate {
+    pub friend_index: usize,
+    pub player_id: u32,
+    pub online: bool,
+    pub target_game_server_index: Option<u32>,
+    pub delivery: Option<Result<i32, SendMessageError>>,
+}
+
+/// Отклонение постановки player-load FIFO: c-string префикс cdkey не
+/// помещается в фиксированную ёмкость записи. Тип перевезён из `game.rs`
+/// вместе с ветвью select; старый пакет реэкспортирует.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldPlayerLoadRequestBlock {
+    pub account_length: usize,
+}
+
+/// Итог постановки player-load FIFO: новая запись или уже стоящий дубликат
+/// без перепостановки. Тип перевезён из `game.rs` вместе с ветвью select;
+/// старый пакет реэкспортирует.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldPlayerLoadRequestOutcome {
+    Queued,
+    Duplicate,
+}
+
+/// Технический дефект direct-маршрута ветки select: organizing set или
+/// неинициализированный порт game server-а. Форма повторяет
+/// `WorldProcessPlayerDataQueueBlock` исходного `route_loaded_player` без
+/// ветки `UnterminatedCdkey` — она ставится только при разборе записи очереди
+/// в `process_player_data_queue`, чтение самого маршрута её не производит.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldPlayerSelectRouteBlock {
+    Organizing(PlayerOrganizingUpdateError),
+    UninitializedGameServerPort { game_server_index: u32 },
+}
+
+/// Отказ direct-маршрута ветки select до любого ответа: исходные
+/// `initial_size`/`null_pops` фиксированы нулевыми на этом call-site и не
+/// дублируются, `player_id` — id клонированного игрока.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldPlayerSelectRouteError {
+    pub player_id: u32,
+    pub block: WorldPlayerSelectRouteBlock,
+}
+
+/// Решение direct-маршрута ветки select. Поля повторяют ветви Rejected и
+/// Accepted `WorldProcessPlayerDataQueueOutcome` исходного вызова
+/// `route_loaded_player` с фиксированными `initial_size = 0`, `null_pops = 0`
+/// и Direct-порядком; входные `queue_player_id`/`client_ip` обработчик хранит
+/// в своём `request`, поэтому здесь они не дублируются. Организационный исход
+/// снятия online-записей (`PlayerExitGameOutcome` у владельца организаций
+/// старого пакета) seam сворачивает в число удалённых вхождений: владелец
+/// организаций пока не переносится ради одной ветки.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldPlayerSelectRouteOutcome {
+    Rejected {
+        reason: WorldPlayerDataQueueRejectReason,
+        login_delivery: Result<i32, SendMessageError>,
+    },
+    Accepted {
+        game_server_index: u32,
+        login_delivery: Result<i32, SendMessageError>,
+        friend_updates: Vec<WorldFriendPresenceUpdate>,
+        online_removed_occurrences: usize,
+        replaced_existing_player: bool,
+        login_time_ms: u32,
+    },
+}
+
+/// Шов direct-маршрута ветки `player_select`: вся связная мутация маршрута
+/// (organizing set, отказ либо login-ответ `0x1FF01` + Largess-вызов,
+/// publish map/login, оповещение друзей и сброс login-flags) остаётся одним
+/// вызовом inherent `route_loaded_player` у владельца игры. Реализация живёт
+/// на `CGame` старого пакета, фиксирует исходную форму вызова select-ветки
+/// (`initial_size = 0`, `null_pops = 0`, `Direct`) и делегирует без
+/// перестановки. Семантика клонирования и organizing-context наследуется от
+/// спискового view без второй реализации.
+pub trait WorldPlayerSelectGameView: WorldPlayerBaseGameView {
+    #[allow(clippy::too_many_arguments, reason = "точная форма route-вызова ветки select")]
+    fn route_select_player(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        queue_player_id: u32,
+        client_ip: u32,
+        cdkey: &[u8],
+        player: Option<Box<CPlayer>>,
+        after_login_send: &mut dyn FnMut(&mut CPlayer),
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> Result<WorldPlayerSelectRouteOutcome, WorldPlayerSelectRouteError>;
+}
+
+/// Узкий dyn-заменитель двух DB-запросов ветки выбора роли: проверка связки
+/// ID↔cdkey в базе и дата постановки на удаление. По той же причине dyn-
+/// несовместимости `RsPlayerOwner`, что и у [`WorldRenameDbView`], оба запроса
+/// публикуются boxed future по ADR-0013; реализация живёт у владельца игрока
+/// в старом пакете и делегирует одноимённым методам `RsPlayerOwner::<CPlayer>`.
+#[allow(clippy::type_complexity, reason = "boxed-формы повторяют параметры owner-методов один к одному")]
+pub trait WorldPlayerSelectDbView {
+    fn validate_player_id_in_cdkey<'a>(
+        &'a mut self,
+        account: &'a [u8],
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
+
+    fn get_player_deletion_date<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = i32> + 'a>>;
 }
 

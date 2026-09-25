@@ -3,19 +3,26 @@
 //!
 //! Перенесённые ветви диспетчера `OnLogMessage`: списки восстановления и
 //! удаления, вход и отключение аккаунта изменяются в исходном порядке до
-//! wire-ответа LoginServer; форма payload не меняется. Остальные ветки
-//! Список персонажей `0x4FB01` живёт в соседнем `player_base.rs`; остальные
-//! пока не перенесённые ветви остаются у владельца старого пакета.
+//! wire-ответа LoginServer; форма payload не меняется. Create-role выполняет
+//! limit, sex/occupation, country, filter и name checks до выдачи ID и
+//! equipment. Select сначала проверяет live map, frozen save-map и лишь затем
+//! DB; direct-маршрут клона остаётся одним вызовом у владельца игры. Список
+//! персонажей `0x4FB01` живёт в соседнем `player_base.rs`; остальные пока не
+//! перенесённые ветви остаются у владельца старого пакета.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 
 use crate::app::world_game_view::{
     WorldCountryView, WorldCreateRoleDbView, WorldCreateRoleLaunchFailure,
     WorldCreateRoleLaunchGate, WorldCreateRoleOrganizingView, WorldDeleteRoleCountryGate,
-    WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit,
+    WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit, WorldPlayerLoadRequestBlock,
+    WorldPlayerLoadRequestOutcome, WorldPlayerSelectDbView, WorldPlayerSelectGameView,
+    WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
 };
 use crate::app::world_message::{CMessage, SendMessageError};
-use crate::characters::player::{PlayerBaseWireSnapshot, PlayerPropertyCoefficients};
+use crate::characters::player::{
+    CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerPropertyCoefficients,
+};
 use crate::content::countryparam::CCountryParam;
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
 use crate::content::goods::GoodsBasePropertiesRegistry;
@@ -70,6 +77,9 @@ pub const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 pub const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 pub const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
 pub const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
+pub const PLAYER_SELECT_REQUEST: i32 = 0x0004_FB05;
+pub const PLAYER_SELECT_RESPONSE: i32 = 0x0001_FF01;
+pub const PLAYER_SELECT_REJECTED_STATUS: i8 = 0x1C;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct WorldRestoreRoleOutcome {
@@ -801,5 +811,279 @@ pub async fn on_create_role<G: WorldGameView + WorldCreateRoleLaunchGate>(
             }
         }
         Err(source) => WorldCreateRoleOutcome::Blocked { request, source },
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldPlayerSelectRequest {
+    pub player_id: u32,
+    pub account: Vec<u8>,
+    pub client_ip: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldPlayerSelectValidationOwner {
+    LiveMap,
+    FrozenDbMap,
+    PersistentDatabase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldPlayerSelectCloneOwner {
+    LiveMap,
+    FrozenDbMap,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldPlayerSelectRejectReason {
+    InvalidBinding,
+    Deleted,
+}
+
+#[derive(Debug)]
+pub enum WorldPlayerSelectBlock {
+    Clone(PlayerCodecError),
+    Route(WorldPlayerSelectRouteError),
+    LoadRequest(WorldPlayerLoadRequestBlock),
+}
+
+/// Конечный outcome ветки выбора роли. Rejected повторяет исходный отказ
+/// `0x1C` до любой мутации; Routed и Queued фиксируют direct-маршрут клона и
+/// постановку player-load FIFO; Blocked изолирует технический дефект до
+/// ответа LoginServer. Строка журнала InvalidBinding отправляется через
+/// `add_log_text` в форме прежнего обработчика без переноса disposition —
+/// аналог wrapper-а ветки create-role.
+#[derive(Debug)]
+pub enum WorldPlayerSelectOutcome {
+    Rejected {
+        request: WorldPlayerSelectRequest,
+        reason: WorldPlayerSelectRejectReason,
+        response_type: i32,
+        status: i8,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    Routed {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        clone_owner: WorldPlayerSelectCloneOwner,
+        route: WorldPlayerSelectRouteOutcome,
+    },
+    Queued {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        queue: WorldPlayerLoadRequestOutcome,
+    },
+    Blocked {
+        request: WorldPlayerSelectRequest,
+        validation_owner: WorldPlayerSelectValidationOwner,
+        source: WorldPlayerSelectBlock,
+    },
+}
+
+fn append_c_string(message: &mut nebokrai_shared::network::CBaseMessage, value: &[u8]) {
+    let visible = value.iter().position(|byte| *byte == 0).unwrap_or(value.len());
+    message.add(&value[..visible]);
+    message.add_char(0);
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "typed outcome сохраняет все наблюдаемые поля одного exact ответа"
+)]
+fn send_player_select_rejection<G: WorldGameView + ?Sized>(
+    game: &mut G,
+    request: WorldPlayerSelectRequest,
+    reason: WorldPlayerSelectRejectReason,
+    log_payload: Option<&[u8]>,
+    add_log_text: &mut dyn FnMut(&[u8]),
+) -> WorldPlayerSelectOutcome {
+    let mut response = CMessage::new(PLAYER_SELECT_RESPONSE);
+    response.base_mut().add_char(PLAYER_SELECT_REJECTED_STATUS);
+    append_c_string(response.base_mut(), &request.account);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    if let Some(payload) = log_payload {
+        add_log_text(payload);
+    }
+    WorldPlayerSelectOutcome::Rejected {
+        request,
+        reason,
+        response_type: PLAYER_SELECT_RESPONSE,
+        status: PLAYER_SELECT_REJECTED_STATUS,
+        wire,
+        delivery,
+    }
+}
+
+/// Ветвь `0x4FB05`: сначала live map, затем frozen save-map и лишь потом DB
+/// для связки ID↔cdkey; отказ `0x1C` до любой мутации. Clone из live map или
+/// frozen savedb-FIFO уходит в direct-маршрут владельца игры — Largess/login/
+/// map публикуются до friends и сброса flags внутри game-шва; при полном miss
+/// ставится player-load FIFO. Порядок вызовов и предикатов скопирован из
+/// исходного обработчика буквально; organizing-context и clone/mаршрут
+/// наследуют общий списковый view без второй реализации.
+#[allow(clippy::too_many_arguments, reason = "границы один к одному соответствуют owner-ам ветки select")]
+pub async fn on_player_select<G: WorldPlayerSelectGameView>(
+    game: &mut G,
+    organizing: &mut G::OrganizingContext,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    db: &mut dyn WorldPlayerSelectDbView,
+    mut player_database: Option<&mut WorldTdsClient>,
+    load_player_largess: &mut dyn FnMut(&mut CPlayer),
+    get_tick: &mut dyn FnMut() -> u32,
+    add_log_text: &mut dyn FnMut(&[u8]),
+    mut message: CMessage,
+) -> WorldPlayerSelectOutcome {
+    let request = WorldPlayerSelectRequest {
+        player_id: message.base_mut().get_long().unwrap_or(0) as u32,
+        account: message
+            .base_mut()
+            .get_str_bytes(0x14)
+            .unwrap_or_default(),
+        client_ip: message.base_mut().get_long().unwrap_or(0) as u32,
+    };
+
+    let validation_owner = if game.validate_player_id_in_cdkey(
+        &request.account,
+        request.player_id,
+    ) {
+        Some(WorldPlayerSelectValidationOwner::LiveMap)
+    } else if game.validate_db_player_id_in_cdkey(&request.account, request.player_id) {
+        Some(WorldPlayerSelectValidationOwner::FrozenDbMap)
+    } else if db
+        .validate_player_id_in_cdkey(
+            &request.account,
+            request.player_id,
+            player_database.as_deref_mut(),
+        )
+        .await
+    {
+        Some(WorldPlayerSelectValidationOwner::PersistentDatabase)
+    } else {
+        None
+    };
+
+    let Some(validation_owner) = validation_owner else {
+        let mut log_payload = format!(
+            "==[L2W Invalid Request]== ID <{}> Not Bound To Cdkey <",
+            request.player_id,
+        )
+        .into_bytes();
+        let account_end = request
+            .account
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(request.account.len());
+        log_payload.extend_from_slice(&request.account[..account_end]);
+        log_payload.extend_from_slice(b"> !");
+        return send_player_select_rejection(
+            game,
+            request,
+            WorldPlayerSelectRejectReason::InvalidBinding,
+            Some(&log_payload),
+            add_log_text,
+        );
+    };
+
+    if !game.is_restore_player_exist(request.player_id) {
+        let mut deletion_time = game.deletion_player_time(request.player_id);
+        if deletion_time == 0 {
+            deletion_time = db
+                .get_player_deletion_date(
+                    request.player_id,
+                    player_database.as_deref_mut(),
+                )
+                .await;
+        }
+        if deletion_time != 0 {
+            return send_player_select_rejection(
+                game,
+                request,
+                WorldPlayerSelectRejectReason::Deleted,
+                None,
+                add_log_text,
+            );
+        }
+    }
+
+    let (clone_owner, player) = match game.clone_map_player_for_base(
+        request.player_id,
+        registry,
+        organizing,
+        coefficients,
+    ) {
+        Ok(Some(player)) => (Some(WorldPlayerSelectCloneOwner::LiveMap), Some(player)),
+        Ok(None) => match game.clone_saving_player_for_base(
+            request.player_id,
+            registry,
+            organizing,
+            coefficients,
+        ) {
+            Ok(Some(player)) => {
+                (Some(WorldPlayerSelectCloneOwner::FrozenDbMap), Some(player))
+            }
+            Ok(None) => (None, None),
+            Err(source) => {
+                return WorldPlayerSelectOutcome::Blocked {
+                    request,
+                    validation_owner,
+                    source: WorldPlayerSelectBlock::Clone(source),
+                };
+            }
+        },
+        Err(source) => {
+            return WorldPlayerSelectOutcome::Blocked {
+                request,
+                validation_owner,
+                source: WorldPlayerSelectBlock::Clone(source),
+            };
+        }
+    };
+
+    if let (Some(clone_owner), Some(player)) = (clone_owner, player) {
+        let route = game.route_select_player(
+            organizing,
+            request.player_id,
+            request.client_ip,
+            &request.account,
+            Some(player),
+            load_player_largess,
+            get_tick,
+        );
+        return match route {
+            Ok(route) => WorldPlayerSelectOutcome::Routed {
+                request,
+                validation_owner,
+                clone_owner,
+                route,
+            },
+            Err(source) => WorldPlayerSelectOutcome::Blocked {
+                request,
+                validation_owner,
+                source: WorldPlayerSelectBlock::Route(source),
+            },
+        };
+    }
+
+    match game.push_player_load_request(
+        &request.account,
+        request.player_id,
+        request.client_ip,
+    ) {
+        Ok(queue) => WorldPlayerSelectOutcome::Queued {
+            request,
+            validation_owner,
+            queue,
+        },
+        Err(source) => WorldPlayerSelectOutcome::Blocked {
+            request,
+            validation_owner,
+            source: WorldPlayerSelectBlock::LoadRequest(source),
+        },
     }
 }
