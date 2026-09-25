@@ -845,24 +845,12 @@ pub(crate) use nebokrai_realm::app::worldserver::{
     WorldOnlinePlayerRemoveOutcome, WorldPlayerSaveResponseProgress,
 };
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldLostGameServerPlayer {
-    pub(crate) player_id: u32,
-    pub(crate) player_name: Vec<u8>,
-    pub(crate) online_removal: WorldOnlinePlayerRemoveOutcome,
-    pub(crate) login_removed: bool,
-    pub(crate) offline_inserted: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldGameServerLostReport {
-    pub(crate) game_server_index: u32,
-    pub(crate) affected_region_ids: Vec<i32>,
-    pub(crate) skipped_null_region_owners: usize,
-    pub(crate) players: Vec<WorldLostGameServerPlayer>,
-    pub(crate) login_notice_type: i32,
-    pub(crate) login_notice_delivery: Result<i32, SendMessageError>,
-}
+// Отчёты терминала `on_game_server_lost` перевезены в Realm
+// `app::worldserver` вместе со швом ветви `0x3FC02`; здесь реэкспорт для
+// inherent-метода.
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldGameServerLostReport, WorldLostGameServerPlayer,
+};
 
 pub(crate) use nebokrai_realm::app::worldserver::{
     WorldCdkeySnapshotError, WorldRegionChangePlayerTransition,
@@ -4542,6 +4530,10 @@ pub(crate) use nebokrai_realm::app::worldserver::{
 };
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldGameServerConnectionState;
+
+// Снимок disconnect-мутации реестра ветви `0x3FC02` перевезён в Realm
+// world_game_view вместе с швом; здесь реэкспорт для inherent-метода.
+pub(crate) use nebokrai_realm::app::world_game_view::WorldGameServerDisconnectionState;
 
 pub(crate) use nebokrai_realm::app::worldserver::{WorldGlobeVariables, WorldGlobeVariablesDelivery};
 
@@ -13498,6 +13490,27 @@ impl CGame {
         }))
     }
 
+ /// Помечает запись GameServer disconnected ветви `0x3FC02`.
+ ///
+ /// Найденная запись получает `connected = false`, как исходное
+ /// `mov byte ptr [esi], 0`; owned-снимок несёт поля операторского
+ /// лога исходного layout `tagGameServer`. `None` — записи с таким
+ /// identity нет (Unknown-ветвь диспетчера).
+    pub(crate) fn disconnect_game_server(
+        &mut self,
+        game_server_index: u32,
+    ) -> Option<WorldGameServerDisconnectionState> {
+        let game_server = self.game_servers.get_mut(&game_server_index)?;
+        let previous_connected = game_server.connected;
+        game_server.connected = false;
+        Some(WorldGameServerDisconnectionState {
+            index: game_server.index,
+            previous_connected,
+            ip: game_server.ip.clone(),
+            port: game_server.port,
+        })
+    }
+
     pub(crate) fn game_server(&self, index: u32) -> Option<&WorldGameServerEntry> {
         self.game_servers.get(&index)
     }
@@ -14218,6 +14231,10 @@ impl CGame {
  /// удаление всех online-дубликатов, organizing exit, `AddPlayerList`, удаление
  /// первой login-записи и unique offline append. В конце Login получает
  /// `0x1FE03`, signed count и C-string имена в том же player-list order.
+ ///
+ /// Вызывающая цепочка — ветвь `0x3FC02` Realm-диспетчера через шов
+ /// `WorldServerMessageGameView::on_game_server_lost` (обе концовки
+ /// машинной ветви завершают `OnGameServerLost(K)`).
     pub(crate) fn on_game_server_lost<AddPlayerList>(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -15714,6 +15731,13 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::connect_game_server_by_address(self, ip, port)
     }
 
+    fn disconnect_game_server(
+        &mut self,
+        game_server_index: u32,
+    ) -> Option<WorldGameServerDisconnectionState> {
+        CGame::disconnect_game_server(self, game_server_index)
+    }
+
     fn send_globe_variables_to_game_server(
         &self,
         socket_id: i32,
@@ -15889,6 +15913,15 @@ impl nebokrai_realm::app::world_game_view::WorldServerMessageGameView for CGame 
         player_id: i32,
     ) -> WorldOnlinePlayerAppendOutcome {
         CGame::append_online_player_id(self, organizing, player_id)
+    }
+
+    fn on_game_server_lost(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        game_server_index: u32,
+        add_player_list: &mut dyn FnMut(&[u8]),
+    ) -> WorldGameServerLostReport {
+        CGame::on_game_server_lost(self, organizing, game_server_index, add_player_list)
     }
 }
 

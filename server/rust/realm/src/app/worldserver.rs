@@ -14,8 +14,9 @@
 //! В конце файла собраны data-контракты бывшего `CGame`, цитируемые полями
 //! диспетчерских outcome/report-типов `app::servermessage`: CD-key snapshot,
 //! reconnect/region transition/save response записи, ping/region decode итоги и
-//! запуск save-thread. Их fn-владельцы и trait `WorldSaveRuntimeContext`
-//! остаются у process-owner-а `game.rs`.
+//! запуск save-thread; completion-волна добавила отчёт offline-миграции
+//! терминала ветви `0x3FC02` (`WorldGameServerLostReport`). Их fn-владельцы и
+//! trait `WorldSaveRuntimeContext` остаются у process-owner-а `game.rs`.
 //!
 //! Там же свободный monitoring-owner `SendErrLog` (`send_err_log_to_login` +
 //! `WorldErrorLogDelivery`): исходная cdecl-функция принадлежит коду процесса
@@ -819,6 +820,33 @@ pub struct WorldPlayerSaveResponseProgress {
 pub struct WorldOnlinePlayerRemoveOutcome {
     pub removed_occurrences: usize,
     pub organizing: PlayerExitGameOutcome,
+}
+
+/// Игрок потерянного GameServer терминала ветви `0x3FC02`: полный набор
+/// side effects снятия online/login записи и постановки offline.
+/// Тип перевезён из `game.rs` вместе со швом `on_game_server_lost`; старый
+/// пакет реэкспортирует его для inherent-метода.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldLostGameServerPlayer {
+    pub player_id: u32,
+    pub player_name: Vec<u8>,
+    pub online_removal: WorldOnlinePlayerRemoveOutcome,
+    pub login_removed: bool,
+    pub offline_inserted: bool,
+}
+
+/// Отчёт терминала `OnGameServerLost` ветви `0x3FC02`: affected region ID в
+/// signed map-order, побочные эффекты по каждому затронутому игроку и итог
+/// login-нотификации `0x1FE03`. Тип перевезён из `game.rs` вместе со швом;
+/// старый пакет реэкспортирует.
+#[derive(Debug)]
+pub struct WorldGameServerLostReport {
+    pub game_server_index: u32,
+    pub affected_region_ids: Vec<i32>,
+    pub skipped_null_region_owners: usize,
+    pub players: Vec<WorldLostGameServerPlayer>,
+    pub login_notice_type: i32,
+    pub login_notice_delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Debug, Eq, PartialEq)]

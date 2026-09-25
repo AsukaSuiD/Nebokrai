@@ -21,6 +21,29 @@
 //! legacy-ноль без сдвига курсора; безопасные проверки длины останавливают
 //! только чтение, которое в оригинале выходило бы за буфер.
 //!
+//! Ветвь `0x3FC02` (GameServer disconnect, синтетическое close-сообщение
+//! `CMyServerClient::OnClose`) закрыта completion-порцией по машинной
+//! разборке той же точной пары (VA секции 1): `0x4ADD6F` decode
+//! `CBaseMessage::GetDWord` (`0x423790`) → `GetGame` (`0x4017A0`) →
+//! `CGame::GetGameServer(K)` (`0x4132A0`, pub `1:0x122A0`). Not-found
+//! (`0x4ADE76`) — AddLogText (`0x41E630`) формата `0x5473AC`
+//! (`!!!!!Unknown GameServer Lost!!!!!!!!![index = %d]`). Found — `0x4ADD94`
+//! `connected=0` (байт `tagGameServer+0`), sprintf (`0x51AFC0`) формата
+//! `0x5473FC` (`%s [%d]`, `strIP` `+0xC`, port `+0x24`) с удалением строки
+//! из Win32 listbox (`LB_FINDSTRINGEXACT 0x18F` → `LB_DELETESTRING 0x182` —
+//! UI-эффект вне wire, сознательно не воспроизводится, как и `LB_ADDSTRING
+//! 0x181` ветви `0x5FA01`), AddLogText формата `0x5473E0` (`GameServer %s
+//! [%d] lost!`); при `[esi+4]==5` (аукционный slot) — `CMessage(0x80403)`
+//! (`0x422DA0`) + `Add<ulong>(0)` (`0x423C00`) + `SendAll` (`0x423170`,
+//! game-server отправитель `g_Game+0x174`). Обе концовки завершают
+//! `CGame::OnGameServerLost(K)` (`0x411340`, pub `1:0x10340`) — миграция
+//! игроков offline и login-нотификация `0x1FE03` остаются inherent-методом
+//! владельца игры через шов `WorldServerMessageGameView`; его Win32
+//! player-listbox `AddPlayerList` подставлен no-op sink-ом по тому же
+//! принципу исключения. Статус контракта ветви — VERIFIED_DISASSEMBLY;
+//! legacy-неинициализированный port моделируется `Option`, при `None`
+//! модель печатает `%d` нулём и несёт исходный `Option` в отчёте.
+//!
 //! Игровой контекст диспетчер получает через [`WorldGameView`]; organizing-
 //! переходы игрока и save-материализацию — через [`WorldServerMessageGameView`]
 //! с ассоциированными типами владельцев старого пакета (generic-форма других
@@ -50,12 +73,14 @@ use crate::activities::villagewarsys::CVillageWarSys;
 use crate::app::loginreconnectworker::WorldLoginReconnectThreadRestart;
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_game_view::{
-    WorldCompletedSaveResponseMaterialization, WorldGameView, WorldServerMessageGameView,
+    WorldCompletedSaveResponseMaterialization, WorldGameServerDisconnectionState, WorldGameView,
+    WorldServerMessageGameView,
 };
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::app::worldserver::{
     AddLogTextDisposition, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGenerateDbDataBlock,
-    WorldGenerateDbDataReport, WorldGlobeVariablesDelivery, WorldInitialRegionSnapshot,
+    WorldGenerateDbDataReport, WorldGameServerLostReport, WorldGlobeVariablesDelivery,
+    WorldInitialRegionSnapshot,
     WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind, WorldOnlinePlayerAppendOutcome,
     WorldPingGameServerInfo, WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead,
     WorldReceivedPlayerDataUpdate, WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition,
@@ -1252,11 +1277,39 @@ pub struct WorldLoginServerClosed {
     pub reconnect: WorldLoginReconnectThreadRestart,
 }
 
+/// Наблюдаемые эффекты ветви `0x3FC02` — синтетического disconnect-сообщения,
+/// опубликованного `CMyServerClient::OnClose` (`0x42BC50`). Машинный порядок
+/// `0x4ADD6F...0x4ADE8C`: decode map identity → registry disconnect-мутация →
+/// операторский лог → auction-бroadcast → терминал `OnGameServerLost`.
+#[derive(Debug)]
+pub struct WorldGameServerDisconnected {
+    pub map_id: i32,
+    pub map_id_complete: bool,
+    pub disposition: WorldGameServerDisconnectedDisposition,
+    pub lost: WorldGameServerLostReport,
+}
+
+#[derive(Debug)]
+pub enum WorldGameServerDisconnectedDisposition {
+    /// Registry не знает такого identity: ветвь `0x4ADE76`, AddLogText
+    /// `!!!!!Unknown GameServer Lost!!!!!!!!![index = %d]`.
+    UnknownGameServer { log: AddLogTextDisposition },
+    /// Запись найдена и помечена `connected = 0`: listbox-снятие вне wire не
+    /// воспроизводится, AddLogText `GameServer %s [%d] lost!`; auction-slot
+    /// (`index == 5`) дополнительно получает broadcast `0x80403 + AddLong(0)`.
+    Lost {
+        disconnection: WorldGameServerDisconnectionState,
+        log: AddLogTextDisposition,
+        auction_broadcast: Option<WorldGameServerAuctionBroadcast>,
+    },
+}
+
 #[derive(Debug)]
 pub enum WorldServerMessageOutcome {
     NoOp { request_type: i32 },
     GameServerConnection(WorldGameServerConnectionReport),
     GameServerBroadcast(WorldGameServerBroadcast),
+    GameServerDisconnected(WorldGameServerDisconnected),
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
     GameServerPingStarted(WorldGameServerPingStart),
     GodsBattle(WorldGodsBattleMessage),
@@ -1567,6 +1620,55 @@ where
             let reconnect = game.create_connect_login_thread(tokio::runtime::Handle::current());
             WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::LoginServerClosed(
                 WorldLoginServerClosed { log, reconnect },
+            ))
+        }
+        0x0003_FC02 => {
+            let decoded = message.base_mut().get_long();
+            let map_id = decoded.unwrap_or(0);
+            let disposition = match game.disconnect_game_server(map_id as u32) {
+                None => {
+                    let log = add_log_text(
+                        format!("!!!!!Unknown GameServer Lost!!!!!!!!![index = {map_id}]")
+                            .as_bytes(),
+                    );
+                    WorldGameServerDisconnectedDisposition::UnknownGameServer { log }
+                }
+                Some(disconnection) => {
+                    // sprintf `%s [%d]` строился только для поиска строки в
+                    // Win32 listbox; сам UI-эффект вне wire не воспроизводится.
+                    let mut text = b"GameServer ".to_vec();
+                    text.extend_from_slice(&disconnection.ip);
+                    text.extend_from_slice(
+                        format!(" [{}] lost!", disconnection.port.unwrap_or(0)).as_bytes(),
+                    );
+                    let log = add_log_text(&text);
+                    let auction_broadcast = (disconnection.index == 5).then(|| {
+                        let mut notice = CMessage::new(0x0008_0403);
+                        notice.base_mut().add_ulong(0);
+                        let sender = game.current_game_server_sender();
+                        WorldGameServerAuctionBroadcast {
+                            message_type: 0x0008_0403,
+                            enabled: false,
+                            delivery: notice.send_all(sender.as_ref()),
+                        }
+                    });
+                    WorldGameServerDisconnectedDisposition::Lost {
+                        disconnection,
+                        log,
+                        auction_broadcast,
+                    }
+                }
+            };
+            // Обе концовки исходной ветви завершают `OnGameServerLost(K)`;
+            // player-listbox add подставлен no-op sink-ом (UI-эффект вне wire).
+            let lost = game.on_game_server_lost(organizing, map_id as u32, &mut |_| {});
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GameServerDisconnected(
+                WorldGameServerDisconnected {
+                    map_id,
+                    map_id_complete: decoded.is_some(),
+                    disposition,
+                    lost,
+                },
             ))
         }
         0x0004_FC01 => {

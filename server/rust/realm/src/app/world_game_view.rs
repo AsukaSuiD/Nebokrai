@@ -4,6 +4,11 @@
 //! [`on_server_message`](crate::app::servermessage::on_server_message) и шов
 //! [`WorldServerMessageGameView`] с ассоциированными типами владельцев, которые
 //! пока остаются в старом пакете (организации, страна, save-пайплайн).
+//! Completion-волна ветви `0x3FC02` добавила рядом с connect-регистрацией
+//! disconnect-мутацию реестра [`WorldGameView::disconnect_game_server`] и шов
+//! [`WorldServerMessageGameView::on_game_server_lost`]: связная миграция
+//! игроков потерянного GameServer в offline с login-нотификацией `0x1FE03`
+//! остаётся inherent-методом `CGame` старого пакета.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -21,9 +26,9 @@ use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQueueBlock};
 use crate::app::worldserver::{
     WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
-    WorldGenerateDbDataBlock, WorldGlobeVariablesDelivery, WorldOnlinePlayerAppendOutcome,
-    WorldOnlinePlayerRemoveOutcome, WorldPingGameServerInfo, WorldReceivedPlayerDataRead,
-    WorldReceivedPlayerDataUpdate,
+    WorldGameServerLostReport, WorldGenerateDbDataBlock, WorldGlobeVariablesDelivery,
+    WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldPingGameServerInfo,
+    WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
     WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate,
     WorldRegionParamDecodeOutcome, WorldPlayerSaveResponseProgress, WorldReloadContext,
     WorldReloadResult, WorldServerSnapshotPlayerDecode,
@@ -101,6 +106,20 @@ pub struct WorldGameServerSnapshot {
 pub struct WorldGameServerConnectionState {
     pub index: u32,
     pub previous_connected: bool,
+}
+
+/// Итог disconnect-мутации реестра GameServer ветви `0x3FC02`: найденная
+/// запись помечена `connected = 0`, как исходное `mov byte ptr [esi], 0`.
+/// Owned-снимок несёт поля операторского лога по layout `tagGameServer`
+/// (`strIP` `+0xC`, port `+0x24`, оба подтверждены машинной разборкой
+/// `OnServerMessage` `0x4ADD6F...0x4ADE15` той же точной пары, что у файла
+/// [`crate::app::world_message`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldGameServerDisconnectionState {
+    pub index: u32,
+    pub previous_connected: bool,
+    pub ip: Vec<u8>,
+    pub port: Option<u32>,
 }
 
 /// Owned-снимок маршрута региона ветви `0x5FA02`: фильтр `connected` и
@@ -455,6 +474,15 @@ pub trait WorldGameView {
         port: u32,
     ) -> Result<Option<WorldGameServerConnectionState>, WorldGameServerLookupError>;
 
+    /// Disconnect-мутация реестра GameServer ветви `0x3FC02`: найденная
+    /// запись помечается disconnected до операторского лога; `None` — записи
+    /// с таким identity нет (Unknown-ветвь диспетчера). Реализация делегирует
+    /// одноимённый inherent-метод владельца реестра.
+    fn disconnect_game_server(
+        &mut self,
+        game_server_index: u32,
+    ) -> Option<WorldGameServerDisconnectionState>;
+
     /// Выброс globe-переменных на один socket ветви `0x5FA01`; порядок
     /// значений snapshot-а сохранён у владельца.
     fn send_globe_variables_to_game_server(&self, socket_id: i32) -> WorldGlobeVariablesDelivery;
@@ -592,6 +620,20 @@ pub trait WorldServerMessageGameView: WorldPlayerBaseGameView {
         organizing: &mut Self::OrganizingContext,
         player_id: i32,
     ) -> WorldOnlinePlayerAppendOutcome;
+
+    /// Терминал обеих концовок ветви `0x3FC02` (`CGame::OnGameServerLost`):
+    /// миграция игроков потерянного GameServer в offline и login-нотификация
+    /// `0x1FE03` остаются одной связной мутацией владельца игры. Win32
+    /// player-listbox `AddPlayerList` приходит callback-ом; диспетчер
+    /// подставляет no-op sink — UI-эффект вне wire сознательно исключён,
+    /// наблюдаемый результат несёт отчёт. Реализация делегирует одноимённому
+    /// inherent-методу (inherent priority исключает рекурсию).
+    fn on_game_server_lost(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        game_server_index: u32,
+        add_player_list: &mut dyn FnMut(&[u8]),
+    ) -> WorldGameServerLostReport;
 }
 
 /// Шов хвоста завершённой save-волны ветви `0x5FA03`: snapshot БД-данных,
