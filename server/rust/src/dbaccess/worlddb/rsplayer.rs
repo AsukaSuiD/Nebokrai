@@ -36,7 +36,7 @@ use crate::dbaccess::worlddb::rssetup::{
     WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
-use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing};
+use crate::setup::leitingsetup::CThingSetup;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::player::{CPlayer, PlayerLoadDataOwner};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
@@ -45,9 +45,6 @@ use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBl
 const CREATE_PLAYER_BASE_PREFIX: &[u8] = b"INSERT INTO CSL_PLAYER_BASE (id,name,Account,levels,occupation,sex,Country,HEAD,\t\t\t\t\t HELM,BODY,GLOV,BOOT,WEAPON,BACK,\t\t\t\t\t HEADGEAR,FROCK,WING,MANTEAU,FAIRY,\t\t\t\t\t HelmLevel,BodyLevel,GlovLevel,BootLevel,WeaponLevel,BackLevel,\t\t\t\t\t HEADGEARLevel,FROCKLevel,WINGLevel,MANTEAULevel,FAIRYLevel,\t\t\t\t\t Region) \t\t\t\t VALUES (";
 const SAVE_PLAYER_BASE_SQL: &str = "IF EXISTS (SELECT TOP 1 id FROM CSL_PLAYER_BASE WHERE id = @P30) BEGIN UPDATE TOP (1) CSL_PLAYER_BASE SET [Name] = @P1, [Levels] = @P2, [Occupation] = @P3, [Sex] = @P4, [Country] = @P5, [HEAD] = @P6, [HELM] = @P7, [BODY] = @P8, [GLOV] = @P9, [BOOT] = @P10, [WEAPON] = @P11, [BACK] = @P12, [HEADGEAR] = @P13, [FROCK] = @P14, [WING] = @P15, [MANTEAU] = @P16, [FAIRY] = @P17, [HelmLevel] = @P18, [BodyLevel] = @P19, [GlovLevel] = @P20, [BootLevel] = @P21, [WeaponLevel] = @P22, [BackLevel] = @P23, [HEADGEARLevel] = @P24, [FROCKLevel] = @P25, [WINGLevel] = @P26, [MANTEAULevel] = @P27, [FAIRYLevel] = @P28, [Region] = @P29 WHERE id = @P30; SELECT CAST(@@ROWCOUNT AS int) AS UpdatedRows END ELSE SELECT CAST(0 AS int) AS UpdatedRows";
 const VALUE_GROUP_BREAK: &[u8] = b",\t\t\t\t\t ";
-const LEI_TING_RESET_SELECT_SQL: &str = "SELECT ID, LTUp60Cnt, basefyEnergy, baseblfyenergy, dwLT60Stamp, wRemainJLDanCnt, ListThing FROM csl_player_ability";
-const LEI_TING_DAILY_RESET_SQL: &str = "UPDATE CSL_PLAYER_ABILITY SET ListThing=@P1,dwLT60Stamp=@P2,basefyEnergy=@P3,wRemainJLDanCnt=@P4,baseblfyenergy=@P5 WHERE ID=@P6";
-const LEI_TING_MONTHLY_RESET_SQL: &str = "UPDATE CSL_PLAYER_ABILITY SET ListThing=@P1,dwLT60Stamp=@P2,basefyEnergy=@P3,wRemainJLDanCnt=@P4,LTUp60Cnt=@P5,baseblfyenergy=@P6 WHERE ID=@P7";
 
 const HONOR_RANKS_SELECT_PREFIX: &str = "select * from CSL_HonorRanks where SortDate = '";
 const HONOR_RANKS_INSERT_PREFIX: &str = "insert into CSL_HonorRanks(SortDate) values('";
@@ -825,31 +822,6 @@ pub(crate) trait RsPlayerOwner {
 pub(crate) struct TiberiusRsPlayer {
     settings: WorldDatabaseSettings,
     notices: VecDeque<RsPlayerNotice>,
-}
-
-/// Исходный двух-DWORD payload `ResetAllLeitingInDB`.
-///
-/// В EXE worker принимает его как `void *`: первое слово — kind, второе —
-/// signed `mktime` stamp. Rust не переносит heap-allocation без владельца,
-/// но сохраняет порядок и ширину обоих полей в явном значении.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LeiTingDatabaseResetRequest {
-    pub(crate) update_kind: u32,
-    pub(crate) stamp: i32,
-}
-
-#[derive(Debug)]
-pub(crate) enum LeiTingDatabaseResetOutcome {
-    ReturnedTrue { updated_rows: usize },
-    ReturnedFalse(LeiTingDatabaseResetFailure),
-}
-
-#[derive(Debug)]
-pub(crate) enum LeiTingDatabaseResetFailure {
-    UnsupportedUpdateKind(u32),
-    Connection(WorldDatabaseConnectionError),
-    Database(tiberius::error::Error),
-    MissingRequiredValue { column: &'static str },
 }
 
 pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
@@ -1665,17 +1637,6 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
 }
 
-fn encode_lei_ting_daily_things(things: &VecDeque<LeiTingDailyThing>) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(things.len() * 8);
-    for thing in things {
-        bytes.extend_from_slice(&thing.thing_id.to_le_bytes());
-        bytes.extend_from_slice(&thing.count.to_le_bytes());
-        bytes.extend_from_slice(&thing.max_count.to_le_bytes());
-        bytes.extend_from_slice(&thing.point.to_le_bytes());
-    }
-    bytes
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerAbilityBlobDecodeBlock {
     HotKeySize {
@@ -2193,124 +2154,6 @@ impl TiberiusRsPlayer {
             settings: settings.clone(),
             notices: VecDeque::new(),
         }
-    }
-
- /// Выполняет один фоновый проход `DbLetTingUpdate` на отдельном соединении.
- ///
- /// Оригинал строит `ListThing` до `CreateCn/OpenCn`, затем без
- /// transaction проходит updatable recordset `csl_player_ability`; успешные
- /// ранние строки сохраняются даже если последующая строка даёт ошибку.
- /// TDS не предоставляет этот ADO recordset API, поэтому `ID` добавлен
- /// только как технический ключ текущей строки, а каждый `UPDATE` остаётся
- /// отдельным statement в том же исходном порядке без `ORDER BY` и rollback.
- /// Снятие list происходит внутри worker-вызова, а не при его постановке.
-    pub(crate) async fn db_lei_ting_update(
-        &self,
-        request: LeiTingDatabaseResetRequest,
-        thing_setup: &CThingSetup,
-        total_jing_li_dan_count: u16,
-    ) -> LeiTingDatabaseResetOutcome {
-        if request.update_kind != 1 && request.update_kind != 2 {
-            return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                LeiTingDatabaseResetFailure::UnsupportedUpdateKind(request.update_kind),
-            );
-        }
-
-        let mut daily_things = VecDeque::new();
-        thing_setup.get_daily_thing_list(
-            || Local::now().weekday().num_days_from_sunday() as u16,
-            &mut daily_things,
-        );
-        let list_thing = encode_lei_ting_daily_things(&daily_things);
-
-        let mut connection = match self.settings.connect().await {
-            Ok(connection) => connection,
-            Err(error) => {
-                return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                    LeiTingDatabaseResetFailure::Connection(error),
-                );
-            }
-        };
-        let rows = match connection.simple_query(LEI_TING_RESET_SELECT_SQL).await {
-            Ok(stream) => match stream.into_first_result().await {
-                Ok(rows) => rows,
-                Err(error) => {
-                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                        LeiTingDatabaseResetFailure::Database(error),
-                    );
-                }
-            },
-            Err(error) => {
-                return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                    LeiTingDatabaseResetFailure::Database(error),
-                );
-            }
-        };
-
-        let mut updated_rows = 0;
-        for row in rows {
-            let player_id = match get_value::<i32>(&row, "ID") {
-                Ok(Some(value)) => value,
-                Ok(None) => {
-                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                        LeiTingDatabaseResetFailure::MissingRequiredValue { column: "ID" },
-                    );
-                }
-                Err(error) => {
-                    return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                        LeiTingDatabaseResetFailure::Database(error),
-                    );
-                }
-            };
-            let base_bl_fy_energy = if request.update_kind == 1 {
-                match get_value::<i32>(&row, "baseblfyenergy") {
-                    Ok(Some(value)) => value as u32,
-                    Ok(None) => {
-                        return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                            LeiTingDatabaseResetFailure::MissingRequiredValue {
-                                column: "baseblfyenergy",
-                            },
-                        );
-                    }
-                    Err(error) => {
-                        return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                            LeiTingDatabaseResetFailure::Database(error),
-                        );
-                    }
-                }
-            } else {
-                0
-            };
-
-            let query = if request.update_kind == 1 {
-                let mut query = Query::new(LEI_TING_DAILY_RESET_SQL);
-                query.bind(list_thing.as_slice());
-                query.bind(request.stamp);
-                query.bind(0_i64);
-                query.bind(i32::from(total_jing_li_dan_count));
-                query.bind(i64::from(base_bl_fy_energy & !0x0f));
-                query.bind(player_id);
-                query
-            } else {
-                let mut query = Query::new(LEI_TING_MONTHLY_RESET_SQL);
-                query.bind(list_thing.as_slice());
-                query.bind(request.stamp);
-                query.bind(0_i64);
-                query.bind(i32::from(total_jing_li_dan_count));
-                query.bind(0_i64);
-                query.bind(0_i64);
-                query.bind(player_id);
-                query
-            };
-            if let Err(error) = query.execute(&mut connection).await {
-                return LeiTingDatabaseResetOutcome::ReturnedFalse(
-                    LeiTingDatabaseResetFailure::Database(error),
-                );
-            }
-            updated_rows += 1;
-        }
-
-        LeiTingDatabaseResetOutcome::ReturnedTrue { updated_rows }
     }
 
     pub(crate) async fn load_player_ability_row(

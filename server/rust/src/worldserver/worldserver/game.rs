@@ -39,6 +39,7 @@ use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
+use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
     find_script_files, normalize_script_path,
@@ -72,7 +73,7 @@ use crate::dbaccess::worlddb::rsgodsbattle::{
 };
 use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
 use crate::dbaccess::worlddb::rsplayer::{
-    HonorRanksLoadOutcome, LeiTingDatabaseResetRequest, PlayerRanksStatBlock,
+    HonorRanksLoadOutcome, PlayerRanksStatBlock,
     PlayerRanksStatOutcome, RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rsregion::{

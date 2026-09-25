@@ -38,8 +38,9 @@ use crate::dbaccess::worlddb::rsgenvar::TiberiusRsGenVar;
 use crate::dbaccess::worlddb::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::dbaccess::worlddb::rsjjcsys::{RsJjcSysOwner, TiberiusRsJjcSys};
 use crate::dbaccess::worlddb::rsplayer::{
-    LeiTingDatabaseResetRequest, TiberiusPlayerLoadData, TiberiusRsPlayer,
+    TiberiusPlayerLoadData, TiberiusRsPlayer,
 };
+use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use crate::dbaccess::worlddb::rsregion::{
     RegionParametersLoadOutcome, RsRegionOwner, TiberiusRsRegion,
 };
