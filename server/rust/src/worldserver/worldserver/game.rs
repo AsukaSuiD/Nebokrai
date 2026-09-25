@@ -16878,6 +16878,30 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::online_player_count(self)
     }
 
+    fn is_restore_player_exist(&self, player_id: u32) -> bool {
+        CGame::is_restore_player_exist(self, player_id)
+    }
+
+    fn delete_restore_player(&mut self, player_id: u32) {
+        CGame::delete_restore_player(self, player_id)
+    }
+
+    fn deletion_player_time(&self, player_id: u32) -> i32 {
+        CGame::deletion_player_time(self, player_id)
+    }
+
+    fn delete_deletion_player(&mut self, player_id: u32) {
+        CGame::delete_deletion_player(self, player_id)
+    }
+
+    fn append_restore_player(&mut self, player_id: u32) {
+        CGame::append_restore_player(self, player_id)
+    }
+
+    fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32) {
+        CGame::append_deletion_player(self, player_id, deletion_time)
+    }
+
     fn replace_online_player_silience_time(
         &mut self,
         player_id: u32,

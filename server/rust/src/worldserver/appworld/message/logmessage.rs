@@ -87,16 +87,7 @@ const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
 const PLAYER_FRIEND_OFFLINE_RESPONSE: i32 = 0x0007_F905;
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRestoreRoleOutcome {
-    pub(crate) account: Vec<u8>,
-    pub(crate) player_id: u32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) response_type: i32,
-    pub(crate) status: i8,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
+pub(crate) use nebokrai_realm::app::logmessage::WorldRestoreRoleOutcome;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldCreateRoleRequest {
@@ -486,7 +477,11 @@ pub(crate) async fn on_log_message(
             add_error_log_text,
             message,
         ),
-        RESTORE_ROLE_REQUEST => restore_role(game, message),
+        RESTORE_ROLE_REQUEST => {
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::RestoreRole(
+                nebokrai_realm::app::logmessage::on_restore_role(game, message),
+            ))
+        }
         CREATE_ROLE_REQUEST => {
             create_role(
                 game,

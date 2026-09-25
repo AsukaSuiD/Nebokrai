@@ -28,6 +28,7 @@ pub mod auction;
 pub mod gmamessage;
 pub mod gmmessage;
 pub mod jjcsysmessage;
+pub mod logmessage;
 pub mod onmsg_m2w_auction;
 pub mod organsysmessage;
 pub mod playermessage;

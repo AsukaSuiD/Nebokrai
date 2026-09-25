@@ -155,6 +155,21 @@ pub trait WorldGameView {
 
     fn online_player_count(&self) -> usize;
 
+    /// In-memory списки `restore_players`/`deletion_players` при restore-role
+    /// ходе: заявленные взаимные семантики delete/append сохраняют прежний
+    /// порядок и повторный gate; id хранится как u32 на время заявки.
+    fn is_restore_player_exist(&self, player_id: u32) -> bool;
+
+    fn delete_restore_player(&mut self, player_id: u32);
+
+    fn deletion_player_time(&self, player_id: u32) -> i32;
+
+    fn delete_deletion_player(&mut self, player_id: u32);
+
+    fn append_restore_player(&mut self, player_id: u32);
+
+    fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32);
+
     fn replace_online_player_silience_time(&mut self, player_id: u32, silience_time: i32) -> Option<i32>;
 
     /// Единственный владелец перезагрузки мира: реализация делегирует
