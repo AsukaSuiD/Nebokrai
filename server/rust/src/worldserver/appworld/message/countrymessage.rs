@@ -20,16 +20,26 @@
 //! source/tail checks. Явный main-loop context и safe codec заменяют singleton
 //! и overread без изменения вызовов.
 //!
-//! Наблюдаемые data-контракты ветвей перенесены в
-//! `nebokrai_realm::app::countrymessage` и здесь реэкспортированы. У этого
-//! владельца временно остаются `WorldCountryWarDeclarationSync`,
-//! `WorldCountryWarVictorySync` и связка
-//! `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch`: они цитируют
-//! `CountryWarDeclarationReport`/`CountryWarVictoryReport` из
+//! Наблюдаемые data-контракты ветвей и обработчики независимых ветвей
+//! (хвостовой `on_country_message`: `0x6030F`, `0x6031B`, `0x60314..0x60316`,
+//! relay `0x60310`/`0x60311`, no-op; four-nation dispatch
+//! `0x60319`/`0x6031C`/`0x6031D`; decode `0x6031A`) перенесены в
+//! `nebokrai_realm::app::countrymessage` и здесь реэкспортированы. Хвостовой
+//! вызов идёт через адаптер [`WorldCountryMutGate`] поверх живого
+//! `CCountryHandler`; exploit `0x6031A` целиком обслуживается realm
+//! async-обработчиком от точки вызова в `game.rs`. У этого владельца временно
+//! остаются `WorldCountryWarDeclarationSync`, `WorldCountryWarVictorySync` и
+//! связка `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch`: они
+//! цитируют `CountryWarDeclarationReport`/`CountryWarVictoryReport` из
 //! `countrywarsys.rs` до переноса war-систем.
 
+use nebokrai_realm::app::world_game_view::WorldCountryMutGate;
+use nebokrai_realm::content::countryparam::CountryParameterUnavailable;
+use nebokrai_realm::organizations::country::{
+    CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate,
+};
+
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
     CountryCanAbsolveDisposition, CountryCanAppointMinisterDisposition,
@@ -40,9 +50,6 @@ use crate::worldserver::appworld::country::country::{
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::country::king::set_control_point;
-use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationCountryFailContext, FourNationWarResultContext,
-};
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
 use super::super::country::countrywarsys::{
@@ -102,175 +109,97 @@ pub(crate) enum WorldCountryMessageDispatch {
     Pending(CMessage),
 }
 
+/// Адаптер [`WorldCountryMutGate`] поверх живого `CCountryHandler`: ровно те
+/// же `get_country_mut`/`get_country` цепочки, что выполнял прежний
+/// диспетчер. Тик `legacy_tick_ms` для exile-lookup снимается в исходной
+/// позиции — внутри ветки найденной страны, до вызова
+/// `CCountry::exile_remaining_time`; отсутствующая страна тик не тратит.
+struct CountryHandlerMutGate<'a> {
+    handler: &'a mut CCountryHandler,
+}
+
+impl WorldCountryMutGate for CountryHandlerMutGate<'_> {
+    fn apply_server_scalar(
+        &mut self,
+        country: u8,
+        selector: i8,
+        value: i32,
+        country_parameters: &CCountryParam,
+    ) -> Option<Result<Option<CountryScalarUpdate>, CountryParameterUnavailable>> {
+        self.handler
+            .get_country_mut(country)
+            .map(|country| country.apply_server_scalar(selector, value, country_parameters))
+    }
+
+    fn set_quest_switch(
+        &mut self,
+        country: u8,
+        job: u8,
+        enabled: bool,
+    ) -> Option<Option<CountryQuestSwitchUpdate>> {
+        self.handler
+            .get_country_mut(country)
+            .map(|country| country.set_quest_switch(job, enabled))
+    }
+
+    fn exile_remaining_time(
+        &self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+    ) -> Option<Result<CountryExileTimeLookup, CountryParameterUnavailable>> {
+        self.handler.get_country(country).map(|country| {
+            country.exile_remaining_time(player_id, legacy_tick_ms(), country_parameters)
+        })
+    }
+}
+
+/// Хвостовые ветви `OnCountryMessage` (`0x6030F`, `0x6031B`,
+/// `0x60314..0x60316`, relay `0x60310`/`0x60311`, no-op) перенесены в realm
+/// `nebokrai_realm::app::countrymessage::on_country_message`; здесь только
+/// отображение tail-исходов на общий `WorldCountryMessageOutcome`, который
+/// пока цитирует war-типы старого `countrywarsys.rs`.
 pub(crate) fn on_country_message(
     game: &CGame,
     country_handler: &mut CCountryHandler,
     country_parameters: &CCountryParam,
     globe_setup: &GlobeSetupSnapshot,
-    mut message: CMessage,
+    message: CMessage,
 ) -> WorldCountryMessageDispatch {
-    let request_type = message.message_type();
-    if request_type == 0x0006_030f {
-        return WorldCountryMessageDispatch::Handled(
-            WorldCountryMessageOutcome::IgnoredGovernanceRequest { request_type },
-        );
-    }
-    if request_type == 0x0006_031b {
-        let source_map_id = message.map_id();
-        let source_socket_id = message.socket_id();
-        let decoded_country = message.base_mut().get_long();
-        let country = decoded_country.unwrap_or(0);
-        return WorldCountryMessageDispatch::Handled(
-            WorldCountryMessageOutcome::FourNationSignUp(WorldFourNationSignUpSync {
-                country,
-                country_complete: decoded_country.is_some(),
-                source_map_id,
-                source_socket_id,
-                disposition: CFourNationWarSys::one_country_sign_up(country),
-            }),
-        );
-    }
-    if request_type == 0x0006_0314 {
-        let decoded_country_id = message.base_mut().get_byte();
-        let country_id = decoded_country_id.unwrap_or(0);
-        let decoded_selector = message.base_mut().get_char();
-        let selector = decoded_selector.unwrap_or(0);
-        let decoded_value = message.base_mut().get_long();
-        let value = decoded_value.unwrap_or(0);
-        let disposition = match country_handler.get_country_mut(country_id) {
-            None => WorldCountryScalarDisposition::CountryMissing,
-            Some(country) => match country.apply_server_scalar(selector, value, country_parameters)
-            {
-                Ok(Some(update)) => WorldCountryScalarDisposition::Updated(update),
-                Ok(None) => WorldCountryScalarDisposition::SelectorIgnored,
-                Err(block) => WorldCountryScalarDisposition::ParameterUnavailable(block),
-            },
-        };
-        return WorldCountryMessageDispatch::Handled(
-            WorldCountryMessageOutcome::ScalarSynchronized(WorldCountryScalarSync {
-                country_id,
-                country_id_complete: decoded_country_id.is_some(),
-                selector,
-                selector_complete: decoded_selector.is_some(),
-                value,
-                value_complete: decoded_value.is_some(),
-                disposition,
-            }),
-        );
-    }
-    if request_type == 0x0006_0315 {
-        let decoded_country_id = message.base_mut().get_byte();
-        let country_id = decoded_country_id.unwrap_or(0);
-        let decoded_job = message.base_mut().get_byte();
-        let job = decoded_job.unwrap_or(0);
-        let decoded_raw_switch = message.base_mut().get_byte();
-        let raw_switch = decoded_raw_switch.unwrap_or(0);
-
-        let update = country_handler
-            .get_country_mut(country_id)
-            .map(|country| country.set_quest_switch(job, raw_switch != 0));
-        let (disposition, log) = match update {
-            None => (WorldCountryQuestSwitchDisposition::CountryMissing, None),
-            Some(None) => (WorldCountryQuestSwitchDisposition::OfficerMissing, None),
-            Some(Some(update)) => {
-                let country_name = globe_setup.country_name(country_id);
-                let line = country_quest_switch_log_line(
-                    country_name.unwrap_or_default(),
-                    job,
-                    raw_switch,
-                );
-                put_string_to_file("king", &line);
-                (
-                    WorldCountryQuestSwitchDisposition::Updated(update),
-                    Some(WorldCountryQuestSwitchLog {
-                        country_name_complete: country_name.is_some(),
-                        line,
-                    }),
-                )
-            }
-        };
-        return WorldCountryMessageDispatch::Handled(
-            WorldCountryMessageOutcome::QuestSwitchSynchronized(
-                WorldCountryQuestSwitchSync {
-                    country_id,
-                    country_id_complete: decoded_country_id.is_some(),
-                    job,
-                    job_complete: decoded_job.is_some(),
-                    raw_switch,
-                    raw_switch_complete: decoded_raw_switch.is_some(),
-                    disposition,
-                    log,
-                },
-            ),
-        );
-    }
-    if request_type == 0x0006_0316 {
-        let decoded_player_id = message.base_mut().get_long();
-        let player_id = decoded_player_id.unwrap_or(0);
-        let decoded_country_id = message.base_mut().get_byte();
-        let country_id = decoded_country_id.unwrap_or(0);
-
-        let disposition = match country_handler.get_country(country_id) {
-            None => WorldCountryExileTimeDisposition::CountryMissing,
-            Some(country) => {
-                let sampled_at_ms = legacy_tick_ms();
-                match country.exile_remaining_time(
-                    player_id,
-                    sampled_at_ms,
-                    country_parameters,
-                ) {
-                    Err(block) => {
-                        WorldCountryExileTimeDisposition::ParameterUnavailable(block)
-                    }
-                    Ok(lookup) if game.online_player_by_id(player_id as u32).is_none() => {
-                        WorldCountryExileTimeDisposition::PlayerMissing { lookup }
-                    }
-                    Ok(lookup) => {
-                        let mut response = CMessage::new(0x0007_FF15);
-                        response.base_mut().add_long(lookup.remaining_seconds);
-                        response.base_mut().add_long(player_id);
-                        let wire = response.as_wire_bytes().to_vec();
-                        let delivery =
-                            response.send_all(game.current_game_server_sender().as_ref());
-                        WorldCountryExileTimeDisposition::Broadcast {
-                            lookup,
-                            wire,
-                            delivery,
-                        }
-                    }
-                }
-            }
-        };
-        return WorldCountryMessageDispatch::Handled(
-            WorldCountryMessageOutcome::ExileTimeSynchronized(WorldCountryExileTimeSync {
-                player_id,
-                player_id_complete: decoded_player_id.is_some(),
-                country_id,
-                country_id_complete: decoded_country_id.is_some(),
-                disposition,
-            }),
-        );
-    }
-    let response_type = match request_type {
-        COUNTRY_RELAY_FIRST => 0x0007_FF11,
-        COUNTRY_RELAY_SECOND => 0x0007_FF12,
-        _ => {
-            return WorldCountryMessageDispatch::Handled(WorldCountryMessageOutcome::NoOp {
-                request_type,
-            });
-        }
+    let mut gate = CountryHandlerMutGate {
+        handler: country_handler,
     };
-    message.set_message_type(response_type);
-    let wire = message.as_wire_bytes().to_vec();
-    let delivery = message.send_all(game.current_game_server_sender().as_ref());
-    WorldCountryMessageDispatch::Handled(WorldCountryMessageOutcome::Relay(
-        WorldCountryRelayOutcome {
-            request_type,
-            response_type,
-            wire,
-            delivery,
+    WorldCountryMessageDispatch::Handled(
+        match nebokrai_realm::app::countrymessage::on_country_message(
+            game,
+            &mut gate,
+            country_parameters,
+            globe_setup,
+            message,
+        ) {
+            WorldCountryMessageTailOutcome::NoOp { request_type } => {
+                WorldCountryMessageOutcome::NoOp { request_type }
+            }
+            WorldCountryMessageTailOutcome::IgnoredGovernanceRequest { request_type } => {
+                WorldCountryMessageOutcome::IgnoredGovernanceRequest { request_type }
+            }
+            WorldCountryMessageTailOutcome::Relay(outcome) => {
+                WorldCountryMessageOutcome::Relay(outcome)
+            }
+            WorldCountryMessageTailOutcome::ScalarSynchronized(sync) => {
+                WorldCountryMessageOutcome::ScalarSynchronized(sync)
+            }
+            WorldCountryMessageTailOutcome::QuestSwitchSynchronized(sync) => {
+                WorldCountryMessageOutcome::QuestSwitchSynchronized(sync)
+            }
+            WorldCountryMessageTailOutcome::ExileTimeSynchronized(sync) => {
+                WorldCountryMessageOutcome::ExileTimeSynchronized(sync)
+            }
+            WorldCountryMessageTailOutcome::FourNationSignUp(sync) => {
+                WorldCountryMessageOutcome::FourNationSignUp(sync)
+            }
         },
-    ))
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1005,105 +934,6 @@ pub(crate) fn dispatch_country_war_declaration_message<
     })
 }
 
-pub(crate) fn dispatch_four_nation_war_result_message<
-    Context: FourNationWarResultContext + ?Sized,
->(
-    message: &mut CMessage,
-    four_nation_war: &mut CFourNationWarSys,
-    context: &mut Context,
-) -> Option<WorldFourNationWarResultSync> {
-    if message.message_type() != 0x60319 {
-        return None;
-    }
-    let source_map_id = message.map_id();
-    let source_socket_id = message.socket_id();
-    let report = four_nation_war.receive_result_from_game_server(message, context);
-    Some(WorldFourNationWarResultSync {
-        source_map_id,
-        source_socket_id,
-        report,
-    })
-}
-
-pub(crate) fn dispatch_four_nation_war_time_message<
-    Context: FourNationWarResultContext + ?Sized,
->(
-    message: &mut CMessage,
-    four_nation_war: &mut CFourNationWarSys,
-    context: &mut Context,
-) -> Option<WorldFourNationWarTimeSync> {
-    if message.message_type() != 0x6031c {
-        return None;
-    }
-    let source_map_id = message.map_id();
-    let source_socket_id = message.socket_id();
-    let decoded_player_id = message.base_mut().get_long();
-    let player_id = decoded_player_id.unwrap_or(0);
-    let decoded_war_time = message.base_mut().get_long();
-    let war_time = decoded_war_time.unwrap_or(0) as u32;
-    let decoded_country = message.base_mut().get_long();
-    let country = decoded_country.unwrap_or(0);
-    let report = four_nation_war.send_player_war_time_to_game_server(
-        player_id, war_time, country, context,
-    );
-    Some(WorldFourNationWarTimeSync {
-        source_map_id,
-        source_socket_id,
-        numeric_payload_complete: [
-            decoded_player_id.is_some(),
-            decoded_war_time.is_some(),
-            decoded_country.is_some(),
-        ],
-        report,
-    })
-}
-
-pub(crate) fn dispatch_four_nation_country_fail_message<
-    Context: FourNationCountryFailContext + ?Sized,
->(
-    message: &mut CMessage,
-    four_nation_war: &CFourNationWarSys,
-    context: &mut Context,
-) -> Option<WorldFourNationCountryFailSync> {
-    if message.message_type() != 0x6031d {
-        return None;
-    }
-    let source_map_id = message.map_id();
-    let source_socket_id = message.socket_id();
-    let decoded_country = message.base_mut().get_long();
-    let country = decoded_country.unwrap_or(0);
-    let decoded_failed_country = message.base_mut().get_long();
-    let failed_country = decoded_failed_country.unwrap_or(0);
-    let report = four_nation_war.one_country_fail(country, failed_country, context);
-    Some(WorldFourNationCountryFailSync {
-        source_map_id,
-        source_socket_id,
-        numeric_payload_complete: [
-            decoded_country.is_some(),
-            decoded_failed_country.is_some(),
-        ],
-        report,
-    })
-}
-
-pub(crate) fn decode_four_nation_exploit_message(
-    message: &mut CMessage,
-) -> Option<WorldFourNationExploitRequest> {
-    if message.message_type() != 0x6031a {
-        return None;
-    }
-    let source_map_id = message.map_id();
-    let source_socket_id = message.socket_id();
-    let decoded_player_id = message.base_mut().get_long();
-    let player_id = decoded_player_id.unwrap_or(0);
-    let decoded_increment = message.base_mut().get_long();
-    let increment = decoded_increment.unwrap_or(0);
-    Some(WorldFourNationExploitRequest {
-        player_id,
-        player_id_complete: decoded_player_id.is_some(),
-        increment,
-        increment_complete: decoded_increment.is_some(),
-        source_map_id,
-        source_socket_id,
-    })
-}
+// Four-nation dispatch `0x60319`/`0x6031C`/`0x6031D`, decode `0x6031A` и
+// хвостовой `on_country_message` перенесены в realm волной независимых
+// ветвей; имена доступны здесь через glob re-export выше.

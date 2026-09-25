@@ -38,7 +38,6 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
-use tiberius::Query;
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::app::world_game_view::{
     WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldPlayerSelectRouteBlock,
@@ -178,8 +177,7 @@ use crate::worldserver::appworld::jjcsystem::{
     JjcRunContext, JjcRunReport, JjcSystemTime,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationCountryFailContext, FourNationExploitContext,
-    FourNationExploitLoadedDisposition, FourNationWarCallbackContext,
+    CFourNationWarSys, FourNationCountryFailContext, FourNationWarCallbackContext,
     FourNationWarCallbackKind, FourNationWarCallbacks, FourNationWarCalendarBlock,
     FourNationWarLoadError, FourNationWarLoadReport, FourNationWarRegionIndexBlock,
     FourNationWarReloadDisposition, FourNationWarResultContext,
@@ -198,8 +196,6 @@ use crate::worldserver::appworld::message::jjcsysmessage::{
 };
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
-    WorldFourNationExploitDatabaseDisposition, WorldFourNationExploitSync,
-    decode_four_nation_exploit_message,
     dispatch_country_absolve_request_message,
     dispatch_country_appoint_minister_message,
     dispatch_country_demise_message,
@@ -213,8 +209,9 @@ use crate::worldserver::appworld::message::countrymessage::{
     dispatch_country_players_list_message,
     dispatch_country_silence_request_message,
     dispatch_country_war_declaration_message, dispatch_country_war_victory_message,
-    dispatch_four_nation_country_fail_message, dispatch_four_nation_war_result_message,
-    dispatch_four_nation_war_time_message, on_country_message,
+    dispatch_four_nation_country_fail_message, dispatch_four_nation_exploit_message,
+    dispatch_four_nation_war_result_message, dispatch_four_nation_war_time_message,
+    on_country_message,
 };
 use crate::worldserver::appworld::message::auction::{
     WorldServerAuctionMessageDispatch, WorldServerAuctionMessageOutcome, on_msg_s2w_auction,
@@ -16862,6 +16859,14 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
     ) -> Option<PlayerMurderCounterReset> {
         CGame::reset_online_player_murder_counters(self, player_id)
     }
+
+    fn add_map_player_exploit_wrapping(
+        &mut self,
+        player_id: u32,
+        increment: i32,
+    ) -> Option<PlayerExploitUpdate> {
+        CGame::add_map_player_exploit_wrapping(self, player_id, increment)
+    }
 }
 
 impl nebokrai_realm::app::world_game_view::WorldPlayerFactionInfoUpdateView for CGame {
@@ -17513,10 +17518,6 @@ struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
 
-struct WorldFourNationExploitEffects<'a> {
-    game: &'a mut CGame,
-}
-
 struct WorldFourNationCountryFailEffects<'a> {
     game: &'a CGame,
     organizing: &'a COrganizingCtrl,
@@ -18153,34 +18154,8 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
     }
 }
 
-impl FourNationExploitContext for WorldFourNationExploitEffects<'_> {
-    fn map_player_exists(&mut self, player_id: u32) -> bool {
-        self.game.map_player(player_id).is_some()
-    }
-
-    fn player_game_server_map_id(&mut self, player_id: i32) -> Option<i32> {
-        self.game
-            .player_game_server(player_id)
-            .map(|game_server| game_server.index as i32)
-    }
-
-    fn add_local_player_exploit(
-        &mut self,
-        player_id: u32,
-        increment: i32,
-    ) -> Option<PlayerExploitUpdate> {
-        self.game
-            .add_map_player_exploit_wrapping(player_id, increment)
-    }
-
-    fn send_to_map_id(
-        &mut self,
-        message: &CMessage,
-        map_id: i32,
-    ) -> Result<i32, SendMessageError> {
-        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
-    }
-}
+// Эквивалентный game-контекст exploit-ветви перенесён в realm
+// (`WorldGameExploitContext` в `app/countrymessage.rs`) поверх WorldGameView.
 
 impl FourNationCountryFailContext for WorldFourNationCountryFailEffects<'_> {
     fn format_world_string(
@@ -18880,77 +18855,20 @@ where
     }
 
     if selector.owner == Some(WorldMessageOwner::Country) {
-        if let Some(request) = decode_four_nation_exploit_message(&mut message) {
-            let initial = {
-                let mut effects = WorldFourNationExploitEffects { game };
-                four_nation_war.convert_loaded_morale_to_exploit(
-                    request.player_id,
-                    request.increment,
-                    &mut effects,
-                )
-            };
-            let mut database = WorldFourNationExploitDatabaseDisposition::NotRequired;
-            let mut after_database = None;
-
-            if matches!(
-                &initial.disposition,
-                FourNationExploitLoadedDisposition::PlayerMissing
-            ) {
-                match player_database.as_deref_mut() {
-                    None => {
-                        let log = add_log_text(b"Error:failed to connect to DB!!");
-                        database =
-                            WorldFourNationExploitDatabaseDisposition::ConnectionUnavailable {
-                                log,
-                            };
-                        let mut effects = WorldFourNationExploitEffects { game };
-                        after_database = Some(
-                            four_nation_war.convert_loaded_morale_to_exploit(
-                                request.player_id,
-                                request.increment,
-                                &mut effects,
-                            ),
-                        );
-                    }
-                    Some(active_database) => {
-                        let mut query = Query::new(
-                            "UPDATE CSL_PLAYER_ABILITY SET Exploit = Exploit + @P1 WHERE ID = @P2",
-                        );
-                        query.bind(request.increment);
-                        query.bind(request.player_id);
-                        match query.execute(&mut *active_database).await {
-                            Ok(_) => {
-                                database = WorldFourNationExploitDatabaseDisposition::Applied;
-                                let mut effects = WorldFourNationExploitEffects { game };
-                                after_database = Some(
-                                    four_nation_war.convert_loaded_morale_to_exploit(
-                                        request.player_id,
-                                        request.increment,
-                                        &mut effects,
-                                    ),
-                                );
-                            }
-                            Err(error) => {
-                                database = WorldFourNationExploitDatabaseDisposition::ExecutionFailed {
-                                    error: error.to_string(),
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-
+        if let Some(sync) = dispatch_four_nation_exploit_message(
+            &mut message,
+            game,
+            four_nation_war,
+            rs_player,
+            player_database.as_deref_mut(),
+            add_log_text,
+        )
+        .await
+        {
             return ProcessedWorldEvent::CountryMessage {
                 source,
                 legacy_run_result,
-                outcome: WorldCountryMessageOutcome::FourNationExploit(
-                    WorldFourNationExploitSync {
-                        request,
-                        initial,
-                        database,
-                        after_database,
-                    },
-                ),
+                outcome: WorldCountryMessageOutcome::FourNationExploit(sync),
             };
         }
         if let Some(sync) = dispatch_country_player_change_message(

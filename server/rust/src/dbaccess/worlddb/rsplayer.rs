@@ -1300,6 +1300,34 @@ impl nebokrai_realm::app::world_game_view::WorldRenameDbView for TiberiusRsPlaye
     }
 }
 
+// Offline-начисление exploit ветви `0x6031A` повторяет бывший inline-запрос
+// диспетчера: тот же текст UPDATE и порядок bind (`@P1` = increment,
+// `@P2` = player id). Отдельного метода в `RsPlayerOwner` у запроса не было —
+// машинный owner выполнял его прямо по активному подключению, поэтому seam
+// самодостаточен и не заводит standalone-соединения: ветвь отсутствующей БД
+// обслуживается обработчиком до вызова.
+impl nebokrai_realm::app::world_game_view::WorldExploitDbView for TiberiusRsPlayer {
+    fn add_player_exploit<'a>(
+        &'a mut self,
+        increment: i32,
+        player_id: i32,
+        active_transaction: &'a mut WorldTdsClient,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + 'a>> {
+        Box::pin(async move {
+            let mut query = Query::new(
+                "UPDATE CSL_PLAYER_ABILITY SET Exploit = Exploit + @P1 WHERE ID = @P2",
+            );
+            query.bind(increment);
+            query.bind(player_id);
+            query
+                .execute(active_transaction)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+    }
+}
+
 impl nebokrai_realm::app::world_game_view::WorldDeleteRoleDbView for TiberiusRsPlayer {
     fn get_player_country_by_id<'a>(
         &'a mut self,

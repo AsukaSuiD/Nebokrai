@@ -26,9 +26,13 @@ use crate::characters::player::{
     PlayerFactionInfoUpdateReport, PlayerMurderCounterReset, PlayerOrganizingUpdateError,
     PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
 };
-use crate::content::countryparam::CCountryParam;
+use crate::characters::playerexploit::PlayerExploitUpdate;
+use crate::content::countryparam::{CCountryParam, CountryParameterUnavailable};
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
 use nebokrai_shared::resources::CPlayerList;
+use crate::organizations::country::{
+    CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate,
+};
 use crate::organizations::faction::CFaction;
 use crate::organizations::union::UnionFormatArgument;
 use crate::content::goods::GoodsBasePropertiesRegistry;
@@ -375,6 +379,15 @@ pub trait WorldGameView {
         &mut self,
         player_id: u32,
     ) -> Option<PlayerMurderCounterReset>;
+
+    /// Wrapping-начисление exploit mapped-игроку ветви four-nation `0x6031A`;
+    /// `None` — игрок исчез из карты до локального обновления. Реализация
+    /// делегирует одноимённый inherent-метод владельца игры.
+    fn add_map_player_exploit_wrapping(
+        &mut self,
+        player_id: u32,
+        increment: i32,
+    ) -> Option<PlayerExploitUpdate>;
 }
 
 /// Узкий dyn-заменитель одного DB-запроса переименования. `RsPlayerOwner`
@@ -388,6 +401,25 @@ pub trait WorldRenameDbView {
         player_name: &'a [u8],
         active_transaction: Option<&'a mut WorldTdsClient>,
     ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
+}
+
+/// Узкий dyn-заменитель одного DB-запроса ветви four-nation exploit
+/// `0x6031A`: offline-начисление `CSL_PLAYER_ABILITY.Exploit` для игрока вне
+/// карты. По той же причине dyn-несовместимости `RsPlayerOwner`, что и у
+/// [`WorldRenameDbView`], запрос публикуется boxed future по ADR-0013;
+/// реализация живёт у владельца игрока в старом пакете и повторяет исходные
+/// текст запроса и порядок bind. В отличие от rename-семейства, активная
+/// транзакция обязательна: отсутствие подключения к БД — отдельная ветвь
+/// обработчика (`ConnectionUnavailable` с журналом и повторным локальным
+/// convert), seam в этом случае не вызывается. Ошибка выполнения свёрнута в
+/// строку, как делал исходный диспетчер для `ExecutionFailed`.
+pub trait WorldExploitDbView {
+    fn add_player_exploit<'a>(
+        &'a mut self,
+        increment: i32,
+        player_id: i32,
+        active_transaction: &'a mut WorldTdsClient,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + 'a>>;
 }
 
 /// Узкий dyn-заменитель трёх DB-запросов ветви удаления роли: страна
@@ -532,6 +564,45 @@ pub trait WorldCreateRoleLaunchGate {
 /// который делает исходный `CCountryHandler` без переноса самой таблицы.
 pub trait WorldCountryView {
     fn country_exists(&self, country: u8) -> bool;
+}
+
+/// Узкий dyn-шов мутаций страны ветвей `0x60314`/`0x60315`/`0x60316`
+/// диспетчера `OnCountryMessage`: живые объекты `CCountry` и сама таблица
+/// `CCountryHandler` остаются в старом пакете, а обработчики в Realm
+/// повторяют исходные цепочки `get_country_mut → apply_server_scalar`,
+/// `get_country_mut → set_quest_switch` и
+/// `get_country → exile_remaining_time` один вызов на цепочку. Реализация
+/// живёт в адаптере `CCountryHandler` у dispatcher-а старого пакета по
+/// прецеденту `CreateRoleCountryViewAdapter`; свёртка
+/// `CountryMissing`/`SelectorIgnored`/`OfficerMissing` и журнал king-лога
+/// остаются у обработчика. Съём `legacy_tick_ms` для exile-lookup
+/// выполняет сам адаптер в исходной позиции — внутри ветки найденной
+/// страны, поэтому момент времени не тратится на отсутствующую страну.
+/// Каждый метод возвращает несвёрнутый результат соответствующей цепочки:
+/// внешний `Option` — страна отсутствует.
+#[allow(clippy::type_complexity, reason = "вложенные формы повторяют исходные цепочки get_country_mut/get_country один к одному")]
+pub trait WorldCountryMutGate {
+    fn apply_server_scalar(
+        &mut self,
+        country: u8,
+        selector: i8,
+        value: i32,
+        country_parameters: &CCountryParam,
+    ) -> Option<Result<Option<CountryScalarUpdate>, CountryParameterUnavailable>>;
+
+    fn set_quest_switch(
+        &mut self,
+        country: u8,
+        job: u8,
+        enabled: bool,
+    ) -> Option<Option<CountryQuestSwitchUpdate>>;
+
+    fn exile_remaining_time(
+        &self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+    ) -> Option<Result<CountryExileTimeLookup, CountryParameterUnavailable>>;
 }
 
 /// Узкий dyn-шов проверки должности игрока в стране к владельцу страновых
