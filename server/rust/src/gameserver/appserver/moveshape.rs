@@ -271,8 +271,7 @@ use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLif
 use super::states::visualeffect::SkillVisualEffect;
 use super::teamstate::CTeamState;
 use super::shape::{
-    CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
-    ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
+    CShape, ShapeAreaCoordinates, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
 };
 use crate::gameserver::appserver::skills::agilitystate::PersistentAgilityFamilyState;
 use crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill;
@@ -352,8 +351,12 @@ use crate::gameserver::appserver::states::automaticrestore::{
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+use nebokrai_zone::regions::moveshape::{clamp_force_x, clamp_force_y, set_pos_xy_core};
+pub(crate) use nebokrai_zone::regions::moveshape::{
+    KillingAttackIdentity, MoveShapePet, MoveShapePositionBlock, MoveShapePositionDispatch,
+    MoveShapePositionFacts, MoveShapePropertyModifiers,
+};
 
-const NPC_TYPE: i32 = 500;
 const SET_POSITION_MESSAGE: i32 = 0xBF603;
 const FORCE_MOVE_MESSAGE: i32 = 0xBF604;
 const MOVE_MESSAGE: i32 = 0xBF605;
@@ -875,46 +878,6 @@ impl MoveShapeSkill {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MoveShapePositionBlock {
-    Coordinate(ShapeCoordinateBlock),
-    ShapeBlock(ShapeBlockError),
-    InvalidAreaSpan { width: i32, height: i32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MoveShapePositionFacts {
-    pub(crate) current_hit_points: u32,
-    pub(crate) figure: ShapeFigure,
-    pub(crate) current_area: Option<ShapeAreaCoordinates>,
-    pub(crate) area_width: i32,
-    pub(crate) area_height: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MoveShapePet {
-    pub(crate) object_type: i32,
-    pub(crate) id: i32,
-    pub(crate) figure: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct KillingAttackIdentity {
-    pub(crate) attacker_type: i32,
-    pub(crate) attacker_id: i32,
-    pub(crate) attacker_faction_id: i32,
-}
-
-impl From<&super::states::attackpower::AttackInformation> for KillingAttackIdentity {
-    fn from(attack: &super::states::attackpower::AttackInformation) -> Self {
-        Self {
-            attacker_type: attack.attacker_type,
-            attacker_id: attack.attacker_id,
-            attacker_faction_id: attack.attacker_faction_id,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MoveShapeCommandBlock {
     Coordinate(ShapeCoordinateBlock),
     RegionCell(RegionCellAccessBlock),
@@ -926,35 +889,6 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
     /// `Some` означает успешный RTTI `CShape -> CMoveShape`; значение хранит
     /// exact `!IsDied`, полученный у concrete derived owner-а.
     fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool>;
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MoveShapePropertyModifiers {
-    pub(crate) maximum_hp: i32,
-    pub(crate) maximum_mp: i32,
-    pub(crate) maximum_yp: i32,
-    pub(crate) maximum_rp: i32,
-    pub(crate) strength: i32,
-    pub(crate) dexterity: i32,
-    pub(crate) constitution: i32,
-    pub(crate) intelligence: i32,
-    pub(crate) minimum_attack: i32,
-    pub(crate) maximum_attack: i32,
-    pub(crate) hit: i32,
-    pub(crate) burden: i32,
-    pub(crate) critical_hit: i32,
-    pub(crate) defense: i32,
-    pub(crate) dodge: i32,
-    pub(crate) attack_speed: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) hp_recovery_speed: i32,
-    pub(crate) mp_recovery_speed: i32,
-    pub(crate) soul_resistance: i32,
-    pub(crate) additional_element_attack: i32,
-    pub(crate) additional_soul_attack: i32,
-    pub(crate) element_modify: i32,
-    pub(crate) attack_avoid: i32,
-    pub(crate) element_avoid: i32,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1141,31 +1075,15 @@ impl CMoveShape {
     }
 
     pub(crate) fn set_current_pets_mode(&mut self, mode: i32) -> bool {
-        if self.current_pets_mode == mode {
-            return false;
-        }
-        self.current_pets_mode = mode;
-        true
+        nebokrai_zone::regions::moveshape::set_current_pets_mode(&mut self.current_pets_mode, mode)
     }
 
     pub(crate) fn add_pet(&mut self, object_type: i32, id: i32, figure: i32) {
-        self.pets.push(MoveShapePet {
-            object_type,
-            id,
-            figure,
-        });
+        nebokrai_zone::regions::moveshape::add_pet(&mut self.pets, object_type, id, figure);
     }
 
     pub(crate) fn remove_pet(&mut self, object_type: i32, id: i32) -> bool {
-        let Some(index) = self
-            .pets
-            .iter()
-            .position(|pet| pet.object_type == object_type && pet.id == id)
-        else {
-            return false;
-        };
-        self.pets.remove(index);
-        true
+        nebokrai_zone::regions::moveshape::remove_pet(&mut self.pets, object_type, id)
     }
 
     pub(crate) fn pets(&self) -> &[MoveShapePet] {
@@ -1274,19 +1192,13 @@ impl CMoveShape {
         self.is_god
     }
 
-    /// Exact nesting contract `SetFightable`: false добавляет запрет, true
-    /// снимает один; отрицательный legacy count нормализуется только перед
-    /// добавлением нового запрета.
+    /// Счётчик запретов боя идёт общей операцией Zone moveshape.
     pub(crate) const fn set_fightable(&mut self, fightable: bool) {
-        if !fightable {
-            if self.can_fight_count < 0 {
-                self.can_fight_count = 0;
-            }
-            self.can_fight_count = self.can_fight_count.wrapping_add(1);
-        } else {
-            self.can_fight_count = self.can_fight_count.wrapping_sub(1);
-        }
-        self.can_fight = self.can_fight_count < 1;
+        nebokrai_zone::regions::moveshape::set_fightable(
+            &mut self.can_fight_count,
+            &mut self.can_fight,
+            fightable,
+        );
     }
 
     pub(crate) const fn can_fight(&self) -> bool {
@@ -1589,13 +1501,16 @@ impl CMoveShape {
         self.state_entries.first::<RideState>()
     }
 
-    /// Scalar-prefix CMoveShape::OnEnterRegion; конкретные Begin заново
-    /// устанавливают свои запреты после этого сброса в общем живом проходе.
+    /// Scalar-prefix сброса при входе в регион идёт общей операцией Zone
+    /// moveshape; конкретные Begin заново устанавливают свои запреты после
+    /// этого сброса в общем живом проходе.
     pub(crate) const fn reset_region_entry_control(&mut self) {
-        self.moveable = true;
-        self.can_fight = true;
-        self.moveable_count = 0;
-        self.can_fight_count = 0;
+        nebokrai_zone::regions::moveshape::reset_region_entry_control(
+            &mut self.moveable,
+            &mut self.can_fight,
+            &mut self.moveable_count,
+            &mut self.can_fight_count,
+        );
     }
 
     pub(crate) fn has_ride_state(&self) -> bool {
@@ -2613,19 +2528,13 @@ impl CMoveShape {
         self.moveable_count
     }
 
-    /// Exact counter semantics `SetMoveable`: `false` ставит новый запрет,
-    /// `true` снимает один; отрицательный счётчик не нормализуется в ветви
-    /// снятия и потому сохраняется как наблюдаемая legacy-семантика.
+    /// Счётчик запретов движения идёт общей операцией Zone moveshape.
     pub(crate) const fn set_moveable(&mut self, moveable: bool) {
-        if !moveable {
-            if self.moveable_count < 0 {
-                self.moveable_count = 0;
-            }
-            self.moveable_count = self.moveable_count.wrapping_add(1);
-        } else {
-            self.moveable_count = self.moveable_count.wrapping_sub(1);
-        }
-        self.moveable = self.moveable_count < 1;
+        nebokrai_zone::regions::moveshape::set_moveable(
+            &mut self.moveable_count,
+            &mut self.moveable,
+            moveable,
+        );
     }
 
     /// AddSkill (0x004D1C70): ненулевой уровень не понижается, повышение
@@ -2696,35 +2605,11 @@ impl CMoveShape {
     }
 
     pub(crate) const fn is_died(current_hit_points: u32) -> bool {
-        current_hit_points == 0
+        nebokrai_zone::regions::moveshape::is_died(current_hit_points)
     }
 
-    pub(crate) fn get_dest_direction(
-        source_x: i32,
-        source_y: i32,
-        destination_x: i32,
-        destination_y: i32,
-    ) -> i32 {
-        let delta_x = source_x.wrapping_sub(destination_x);
-        let delta_y = source_y.wrapping_sub(destination_y);
-        // Подтверждённая странность GameServer RVA 0x000CCF60: совпавшие
-        // точки возвращают DIR_DOWN `4`, а не отдельный sentinel.
-        match (delta_x.signum(), delta_y.signum()) {
-            (1, 1) => 7,
-            (1, 0) => 6,
-            (1, -1) => 5,
-            (-1, 1) => 1,
-            (-1, 0) => 2,
-            (-1, -1) => 3,
-            (0, 1) => 0,
-            (0, 0 | -1) => 4,
-            _ => unreachable!("signum возвращает только -1/0/1"),
-        }
-    }
-
-    /// Общая геометрия exact overrides `CBuild/CMonster::GetBeAttackedPoint`:
-    /// ближайшая клетка footprint с предпочтением прямого направления при
-    /// равной Chebyshev-дистанции.
+    /// Геометрия ближайшей клетки footprint принадлежит общей операции Zone
+    /// moveshape.
     pub(crate) fn nearest_figure_attack_point(
         tile_x: i32,
         tile_y: i32,
@@ -2732,37 +2617,13 @@ impl CMoveShape {
         attacker_x: i32,
         attacker_y: i32,
     ) -> (i32, i32) {
-        let horizontal = i32::from(figure.get(2));
-        let vertical = i32::from(figure.get(0));
-        let mut best_point = (tile_x, tile_y);
-        let mut best_distance = 10_000_000;
-        let mut best_direction: i32 = 0;
-
-        for offset_x in -horizontal..=horizontal {
-            let candidate_x = tile_x.wrapping_add(offset_x);
-            for offset_y in -vertical..=vertical {
-                let candidate_y = tile_y.wrapping_add(offset_y);
-                let distance_x = candidate_x.wrapping_sub(attacker_x).unsigned_abs() as i32;
-                let distance_y = candidate_y.wrapping_sub(attacker_y).unsigned_abs() as i32;
-                let distance = distance_x.max(distance_y);
-                let direction = Self::get_dest_direction(
-                    attacker_x,
-                    attacker_y,
-                    candidate_x,
-                    candidate_y,
-                );
-                if distance < best_distance
-                    || (distance == best_distance
-                        && best_direction.rem_euclid(2) == 1
-                        && direction.rem_euclid(2) == 0)
-                {
-                    best_point = (candidate_x, candidate_y);
-                    best_distance = distance;
-                    best_direction = direction;
-                }
-            }
-        }
-        best_point
+        nebokrai_zone::regions::moveshape::nearest_figure_attack_point(
+            tile_x,
+            tile_y,
+            figure,
+            attacker_x,
+            attacker_y,
+        )
     }
 
     #[allow(
@@ -2927,102 +2788,6 @@ impl CMoveShape {
             .set_move_shape_tile_position(&mut self.shape, destination_x, destination_y, facts)
             .map_err(MoveShapeCommandBlock::Position)?;
         Ok(true)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MoveShapePositionDispatch {
-    pub(crate) facts: MoveShapePositionFacts,
-}
-
-impl ShapePositionDispatch for MoveShapePositionDispatch {
-    type Error = MoveShapePositionBlock;
-
-    fn set_pos_xy(
-        &mut self,
-        region: &mut CRegion,
-        shape: &mut CShape,
-        x: f32,
-        y: f32,
-    ) -> Result<(), Self::Error> {
-        set_pos_xy_core(Some(region), shape, x, y, self.facts)
-    }
-}
-
-fn set_pos_xy_core(
-    region: Option<&mut CRegion>,
-    shape: &mut CShape,
-    x: f32,
-    y: f32,
-    facts: MoveShapePositionFacts,
-) -> Result<(), MoveShapePositionBlock> {
-    if let Some(region) =
-        region.filter(|region| shape.is_assigned_to_server_region() && region.width != 0)
-    {
-        let old_y = shape
-            .get_tile_y()
-            .map_err(MoveShapePositionBlock::Coordinate)?;
-        let old_x = shape
-            .get_tile_x()
-            .map_err(MoveShapePositionBlock::Coordinate)?;
-        shape
-            .set_block(region, old_x, old_y, 0, facts.figure)
-            .map_err(MoveShapePositionBlock::ShapeBlock)?;
-
-        if facts.current_hit_points != 0 || shape.identity().object_type == NPC_TYPE {
-            let new_y = CShape::tile_from_value(y).map_err(MoveShapePositionBlock::Coordinate)?;
-            let new_x = CShape::tile_from_value(x).map_err(MoveShapePositionBlock::Coordinate)?;
-            shape
-                .set_block(region, new_x, new_y, 3, facts.figure)
-                .map_err(MoveShapePositionBlock::ShapeBlock)?;
-        }
-    }
-
-    shape.set_pos_xy_move_order(x, y);
-    let tile_y = CShape::tile_from_value(y).map_err(MoveShapePositionBlock::Coordinate)?;
-    let tile_x = CShape::tile_from_value(x).map_err(MoveShapePositionBlock::Coordinate)?;
-    if facts.area_width <= 0 || facts.area_height <= 0 {
-        return Err(MoveShapePositionBlock::InvalidAreaSpan {
-            width: facts.area_width,
-            height: facts.area_height,
-        });
-    }
-
-    let next_area = ShapeAreaCoordinates {
-        x: tile_x / facts.area_width,
-        y: tile_y / facts.area_height,
-    };
-    if facts
-        .current_area
-        .is_some_and(|current| current != next_area)
-    {
-        shape.set_next_area_coordinates(next_area);
-        shape.set_change_state(SHAPE_CHANGE_AREA);
-    } else {
-        shape.set_change_state(SHAPE_CHANGE_NONE);
-    }
-    Ok(())
-}
-
-fn clamp_force_x(destination: i32, width: i32) -> i32 {
-    if destination < 0 {
-        0
-    } else if destination >= width {
-        width.wrapping_sub(1)
-    } else {
-        destination
-    }
-}
-
-fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
-    if destination < 0 {
-        0
-    } else if destination >= height {
-        // Подтверждённая странность GameServer RVA 0x000CD1A0:
-        // `if (height <= lDestY) lDestY = width - 1;`.
-        width.wrapping_sub(1)
-    } else {
-        destination
     }
 }
 

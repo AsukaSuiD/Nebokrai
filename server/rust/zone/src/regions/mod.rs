@@ -3,6 +3,7 @@
 pub mod area;
 pub mod baseobject;
 mod identity;
+pub mod moveshape;
 pub mod proxyserverregion;
 pub mod region;
 pub mod regionparam;
