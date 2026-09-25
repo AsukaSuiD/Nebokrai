@@ -262,15 +262,17 @@
 //! остаются у регионального runtime-владельца.
 //! City/country guard refresh восстанавливает HP, очищает существующий
 //! `CBaseAI` и оставляет формирование `0xBF60F` координирующему `CGame`.
-//! Pet attack/speed/timing и elemental modifier getters применяют факторы
-//! только при валидной player-owner связи; целочисленные результаты сохраняют
-//! x87 truncation. Некоммутативные attack/element property-state обходятся в
-//! общем byte-exact порядке `m_vStates`, включая повторяемые Fury и BattleFairy.
+//! Property-формулы боевых свойств и property-пакеты перенесены в Zone
+//! `combat/monsterformula.rs`; методы ниже делегируют туда без изменения
+//! сигнатур, включая квоту/поправку опыта и pet attack/speed/timing.
+//! Pet-факторы применяются только при валидной player-owner связи;
+//! целочисленные результаты сохраняют x87 truncation. Некоммутативные
+//! attack/element property-state обходятся в общем byte-exact порядке
+//! `m_vStates`, включая повторяемые Fury и BattleFairy.
 //! Два направления virtual `IsAttackAble` разведены явно: этот owner
 //! проверяет monster-target относительно player/monster attacker-а, а
 //! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
-//! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у:
-//! таблица квоты индексируется числом живых участников, а оба результата
+//! Таблица квоты опыта индексируется числом живых участников, а оба результата
 //! усекаются к нулю после x87-порядка операций. Состав живой группы,
 //! поэтапные масштабы игрока/региона и выдачу координирует `CGame`.
 //! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
@@ -312,6 +314,10 @@ use super::skills::yunshenglightning::YunShengLightningProgress;
 use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
 use crate::setup::monsterlist::MonsterProperties;
+use nebokrai_zone::combat::monsterformula;
+pub(crate) use nebokrai_zone::combat::monsterformula::{
+    MonsterCombatProperties, MonsterExperienceFormula, PetAttackProperties, PetExperienceUpdate,
+};
 
 const MONSTER_TYPE: i32 = 600;
 
@@ -443,122 +449,6 @@ pub(crate) struct CMonster {
     jiu_mai_ai: Option<JiuMaiAiState>,
     ai_binding: Option<MonsterAiBinding>,
     base_ai: [CBaseAI; 3],
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MonsterCombatProperties {
-    pub(crate) level: u8,
-    pub(crate) defense: u32,
-    pub(crate) dodge: u32,
-    pub(crate) element_resistance: u32,
-    pub(crate) soul_resistance: u16,
-    pub(crate) attack_avoid: u16,
-    pub(crate) element_avoid: u16,
-    pub(crate) promotion_magic_attack_factor: Option<u16>,
-}
-
-/// Параметры точных `CalculateExperienceQuota` и
-/// `CalculateExperienceCorrective`; состав группы и поэтапное применение
-/// результата остаются у `CGame`. Вычисления ведутся через `f64` как безопасный
-/// адаптер для x87-стека оригинала, а коэффициенты сохраняют исходную `f32`
-/// точность.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MonsterExperienceFormula {
-    ratios: [f32; 8],
-    difference: f32,
-    limit: f32,
-    amerce: f32,
-    amerce_limit: f32,
-    amerce_start_level: i32,
-    hit_base_level: i32,
-    hit_prize: f32,
-    maximum_hit_prize: f32,
-}
-
-impl MonsterExperienceFormula {
-    pub(crate) const fn new(
-        experience: ([f32; 8], f32, f32, f32, f32, i32),
-        continuous_kill: (i32, f32, f32),
-    ) -> Self {
-        Self {
-            ratios: experience.0,
-            difference: experience.1,
-            limit: experience.2,
-            amerce: experience.3,
-            amerce_limit: experience.4,
-            amerce_start_level: experience.5,
-            hit_base_level: continuous_kill.0,
-            hit_prize: continuous_kill.1,
-            maximum_hit_prize: continuous_kill.2,
-        }
-    }
-
-    pub(crate) fn quota(
-        self,
-        property: &MonsterProperties,
-        team_id: i32,
-        average_level: f32,
-        alive_amount: u32,
-        player_level: u8,
-    ) -> u32 {
-        if team_id <= 0 {
-            return property.experience;
-        }
-        let factor = ((1.0
-            - f64::from(self.difference)
-                * (f64::from(average_level) - f64::from(player_level)))
-            / f64::from(alive_amount))
-        .max(f64::from(self.limit));
-        let ratio = self.ratios[alive_amount.min(7) as usize];
-        (f64::from(property.experience) * factor * f64::from(ratio)).trunc() as i32 as u32
-    }
-
-    pub(crate) fn corrective(
-        self,
-        property: &MonsterProperties,
-        quota: u32,
-        player_level: u8,
-        is_first_attacker: bool,
-        continuous_kill_amount: u32,
-    ) -> u32 {
-        let level_delta = i32::from(player_level) - property.level as i32;
-        let amerce_level = level_delta.wrapping_sub(self.amerce_start_level).max(0);
-        let corrective_factor = (1.0
-            - f64::from(amerce_level) * f64::from(self.amerce))
-        .max(f64::from(self.amerce_limit));
-        let mut corrected = (f64::from(quota) * corrective_factor)
-            .max(0.0)
-            .trunc() as i32 as u32;
-        corrected = corrected.min(property.experience);
-        if level_delta.max(0) <= self.hit_base_level
-            && is_first_attacker
-            && continuous_kill_amount != 0
-        {
-            let prize = (f64::from(continuous_kill_amount) * f64::from(self.hit_prize))
-                .min(f64::from(self.maximum_hit_prize));
-            corrected = (f64::from(corrected) * (prize + 1.0))
-                .max(0.0)
-                .trunc() as i32 as u32;
-        }
-        corrected
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PetAttackProperties {
-    pub(crate) minimum_attack: u32,
-    pub(crate) maximum_attack: u32,
-    pub(crate) attack_interval: u32,
-    pub(crate) stop_frame: u32,
-    pub(crate) speed_bits: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PetExperienceUpdate {
-    pub(crate) level: u32,
-    pub(crate) experience: u32,
-    pub(crate) maximum_hp: u32,
-    pub(crate) hit_points: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1007,17 +897,13 @@ impl CMonster {
         self.factors = factors.map(f32::to_bits);
     }
 
-    /// Exact `CMonster::GetMaxHP` (RVA `0x000E65A0`): factor `6` действует
-    /// только при валидной player-owner связи, а x87 результат усекается.
     pub(crate) fn maximum_hp(&self, property: &MonsterProperties) -> u32 {
-        let base = property.maximum_hp
-            .wrapping_add_signed(self.move_shape.property_modifiers().maximum_hp);
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        let scaled = f64::from(base)
-            * f64::from(f32::from_bits(self.factors[6]));
-        scaled.trunc() as i32 as u32
+        monsterformula::maximum_hp(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
     pub(crate) fn roll_stiffen(
@@ -1335,156 +1221,97 @@ impl CMonster {
         }
     }
 
-    /// Виртуальный `CMonster::GetDodge`: базовое значение не ниже единицы,
-    /// а приручённый monster-owner применяет свой pet-level factor до
-    /// сужения результата к `ushort`.
     pub(crate) fn dodge(&self, property: &MonsterProperties) -> u16 {
-        let base = (property.dodge as i32)
-            .wrapping_add(self.move_shape.property_modifiers().dodge).max(1) as u16;
-        if self.has_player_pet_master() {
-            let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[4]));
-            return scaled.trunc() as i32 as u16;
-        }
-        base
+        monsterformula::dodge(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
-    /// `CMonster::GetHit` (RVA `0x000E6760`): signed сумма ресурса и modifier
-    /// не выше нуля становится единицей до сужения к `ushort`.
     pub(crate) fn hit(&self, property: &MonsterProperties) -> u16 {
-        (property.hit as i32)
-            .wrapping_add(self.move_shape.property_modifiers().hit).max(1) as u16
+        monsterformula::hit(property, self.move_shape.property_modifiers())
     }
 
-    /// Достигнутая ресурсная часть `CMonster::GetAttackAvoid`
-    /// (RVA `0x000E64F0`): неположительное signed значение становится нулём,
-    /// а положительное ограничивается `99`.
     pub(crate) fn attack_avoid(&self, property: &MonsterProperties) -> u16 {
-        (property.attack_avoid as i32)
-            .wrapping_add(self.move_shape.property_modifiers().attack_avoid).clamp(0, 99) as u16
+        monsterformula::attack_avoid(property, self.move_shape.property_modifiers())
     }
 
-    /// Достигнутая ресурсная часть `CMonster::GetElementAvoid`
-    /// (RVA `0x000E6520`): контракт совпадает с physical avoid, кроме
-    /// разрешённой верхней границы `100`.
     pub(crate) fn element_avoid(&self, property: &MonsterProperties) -> u16 {
-        (property.element_avoid as i32)
-            .wrapping_add(self.move_shape.property_modifiers().element_avoid).clamp(0, 100) as u16
+        monsterformula::element_avoid(property, self.move_shape.property_modifiers())
     }
 
-    /// Exact `CMonster::GetDef` (RVA `0x000E6780`): отрицательная сумма
-    /// свойства и runtime modifier сначала становится нулём, затем pet factor
-    /// `5` усекается x87 к signed DWORD.
     pub(crate) fn defense(&self, property: &MonsterProperties) -> u32 {
-        let base = (property.defence as i32)
-            .wrapping_add(self.move_shape.property_modifiers().defense).max(0) as u32;
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[5]));
-        scaled.trunc() as i32 as u32
+        monsterformula::defense(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
-    /// Exact `CMonster::GetElementResistant` (RVA `0x000E6880`): runtime
-    /// modifier входит до нижней границы и pet factor `3`.
     pub(crate) fn element_resistance(&self, property: &MonsterProperties) -> u32 {
-        let base = (property.element_resistant as i32)
-            .wrapping_add(self.move_shape.property_modifiers().element_resistance).max(1) as u32;
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[3]));
-        scaled.trunc() as i32 as u32
+        monsterformula::element_resistance(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
-    /// Достигнутая часть `CMonster::GetSoulResistant` (RVA `0x000E6970`):
-    /// сумма ресурса и modifier проходит нижнюю границу до `ushort`.
     pub(crate) fn soul_resistance(&self, property: &MonsterProperties) -> u16 {
-        (property.soul_resistant as i32)
-            .wrapping_add(self.move_shape.property_modifiers().soul_resistance).max(1) as u16
+        monsterformula::soul_resistance(property, self.move_shape.property_modifiers())
     }
 
-    /// Достигнутая часть `CMonster::GetHpRecoverSpeed` (RVA `0x000E6990`):
-    /// dormant AI использует ресурсное значение после нижней границы `1` и
-    /// исходного сужения к `ushort`.
     pub(crate) fn hp_recovery_speed(&self, property: &MonsterProperties) -> u16 {
-        (property.hp_recover_speed as i32)
-            .wrapping_add(self.move_shape.property_modifiers().hp_recovery_speed).max(1) as u16
+        monsterformula::hp_recovery_speed(property, self.move_shape.property_modifiers())
     }
 
-    /// `CMonster::GetAddSoulAtk`
-    /// (RVA `0x000E69D0`): signed DWORD не выше нуля даёт `0`, положительное
-    /// значение сужается к младшим шестнадцати битам.
     pub(crate) fn soul_attack(&self, property: &MonsterProperties) -> u16 {
-        let value = (property.yao_attack as i32)
-            .wrapping_add(self.move_shape.property_modifiers().additional_soul_attack);
-        if value > 0 { value as u16 } else { 0 }
+        monsterformula::soul_attack(property, self.move_shape.property_modifiers())
     }
 
-    /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
-    /// монстр с живой player-owner связью применяет pet factor `9`. Оригинал
-    /// умножает signed DWORD на f32 в x87 и временно включает truncation.
     pub(crate) fn stop_frame(&self, property: &MonsterProperties) -> u32 {
-        if self.has_player_pet_master() {
-            let scaled = f64::from(property.stop_frame as i32)
-                * f64::from(f32::from_bits(self.factors[9]));
-            return scaled.trunc() as i32 as u32;
-        }
-        property.stop_frame
+        monsterformula::stop_frame(
+            property,
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
     const fn has_player_pet_master(&self) -> bool {
         self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0
     }
 
-    fn pet_scaled_attack(&self, value: u32, factor_index: usize) -> u32 {
-        let base = (value as i32).max(1) as u32;
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        let scaled = f64::from(base)
-            * f64::from(f32::from_bits(self.factors[factor_index]));
-        let scaled = scaled.trunc() as i32;
-        if scaled > 0 { scaled as u32 } else { base }
-    }
-
-    /// Exact `CMonster::GetAtcInterval` (RVA `0x000E69F0`): базовый virtual
-    /// сначала сужает интервал к WORD, pet factor `7` затем усекается `__ftol2`.
     pub(crate) fn attack_interval(&self, property: &MonsterProperties) -> u32 {
-        let base = (property.attack_speed as u16)
-            .wrapping_add(self.move_shape.property_modifiers().attack_speed as u16);
-        if !self.has_player_pet_master() {
-            return u32::from(base);
-        }
-        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[7]));
-        u32::from(scaled.trunc() as i32 as u16)
+        monsterformula::attack_interval(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
-    /// Exact `CMonster::GetSpeed` (RVA `0x000E79B0`): x87 умножает два f32
-    /// только для валидной player-owner связи; Rust округляет результат при
-    /// сохранении canonical f32 скорости.
     pub(crate) fn speed(&self) -> f32 {
-        let base = self.move_shape.shape().get_speed();
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        (f64::from(base) * f64::from(f32::from_bits(self.factors[8]))) as f32
+        monsterformula::speed(
+            self.move_shape.shape().get_speed(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
     pub(crate) fn pet_attack_properties(
         &self,
         property: &MonsterProperties,
     ) -> PetAttackProperties {
-        let (minimum_attack, maximum_attack) = self.state_attack_bounds(
-            property.minimum_attack,
-            property.maximum_attack,
-        );
-        PetAttackProperties {
-            minimum_attack,
-            maximum_attack,
-            attack_interval: self.attack_interval(property),
-            stop_frame: self.stop_frame(property),
-            speed_bits: self.speed().to_bits(),
-        }
+        monsterformula::pet_attack_properties(
+            property,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+            self.move_shape.shape().get_speed(),
+        )
     }
 
     pub(crate) fn state_attack_bounds(
@@ -1492,23 +1319,21 @@ impl CMonster {
         minimum: u32,
         maximum: u32,
     ) -> (u32, u32) {
-        let modifiers = self.move_shape.property_modifiers();
-        (
-            self.pet_scaled_attack(minimum.wrapping_add_signed(modifiers.minimum_attack), 1),
-            self.pet_scaled_attack(maximum.wrapping_add_signed(modifiers.maximum_attack), 0),
+        monsterformula::state_attack_bounds(
+            minimum,
+            maximum,
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
         )
     }
 
-    /// Exact `CMonster::GetElementModify` (RVA `0x000E6900`): накопленный
-    /// runtime modifier сначала ограничивается нулём, затем pet factor `2`
-    /// умножается в x87 и усекается к signed DWORD.
     pub(crate) fn element_modifier(&self) -> u32 {
-        let base = self.move_shape.property_modifiers().element_modify.max(0) as u32;
-        if !self.has_player_pet_master() {
-            return base;
-        }
-        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[2]));
-        scaled.trunc() as i32 as u32
+        monsterformula::element_modifier(
+            self.move_shape.property_modifiers(),
+            self.has_player_pet_master(),
+            self.factors.map(f32::from_bits),
+        )
     }
 
     /// Точная завершающая часть владельца защиты `CMonster::OnBeenHurted`.

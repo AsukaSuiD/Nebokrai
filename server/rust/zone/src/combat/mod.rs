@@ -2,6 +2,7 @@
 
 mod attackpower;
 mod masterinfo;
+pub mod monsterformula;
 mod rounding;
 
 pub use attackpower::{AttackInformation, AttackPower, AttackPowerType, FinalAttackDamage};
