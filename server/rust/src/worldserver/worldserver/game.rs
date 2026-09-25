@@ -3785,7 +3785,7 @@ pub(crate) enum WorldMainLoopBlock<LeiTingContextBlock> {
     PlayerDataQueue(WorldMainLoopPlayerDataQueueStageReport),
     Timer(WorldMainLoopTimerStageBlock),
     FactionWar(FactionWarStopBlock<WorldMainLoopFactionWarBlock>),
-    LeiTing(LeiTingBlock<LeiTingContextBlock>),
+    LeiTing(LeiTingBlock<LeiTingContextBlock, PlayerCodecError>),
     DbMisc(DbMiscDoneOutBlock),
     Ping(WorldMainLoopPingError),
     Minute(WorldMainLoopMinuteStageBlock),
@@ -13180,7 +13180,7 @@ impl CGame {
         reset_worker: &WorldLeiTingResetWorker,
         runtime: tokio::runtime::Handle,
         mut get_local_time: GetLocalTime,
-    ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block>>
+    ) -> Result<LeiTingRunReport, LeiTingBlock<Context::Block, PlayerCodecError>>
     where
         Context: WorldLeiTingRuntimeContext,
         GetLocalTime: FnMut() -> LeiTingLocalTime,
@@ -16997,6 +16997,29 @@ impl nebokrai_realm::characters::honorranks::HonorRanksGameView for CGame {
 
     fn honor_ranks_game_server_sender(&self) -> Option<ServerCommandHandle> {
         self.current_game_server_sender()
+    }
+}
+
+impl nebokrai_realm::activities::leiting::LeiTingGameView for CGame {
+    type Player = CPlayer;
+
+    fn lei_ting_player_map_keys(&self) -> Vec<u32> {
+        self.player_map_keys()
+    }
+
+    fn lei_ting_update_map_player<Clock: PlayerLeiTingClock>(
+        &mut self,
+        map_key: u32,
+        update_kind: u32,
+        stamp: &mut LeiTingLocalTime,
+        globe_setup: &GlobeSetupSnapshot,
+        clock: &mut Clock,
+    ) -> Result<Option<PlayerLeiTingUpdateReport>, PlayerLeiTingUpdateBlock<Clock::Block>> {
+        CGame::update_map_player_lei_ting(self, map_key, update_kind, stamp, globe_setup, clock)
+    }
+
+    fn lei_ting_map_player(&self, map_key: u32) -> Option<&Self::Player> {
+        self.map_player(map_key)
     }
 }
 

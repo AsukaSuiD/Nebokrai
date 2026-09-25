@@ -466,35 +466,12 @@ struct PlayerThing {
     point: u16,
 }
 
-pub(crate) trait PlayerLeiTingClock {
-    type Block;
-
-    fn local_time_from_timestamp(
-        &mut self,
-        timestamp: u32,
-    ) -> Result<LeiTingLocalTime, Self::Block>;
-
-    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block>;
-
-    fn current_week_day(&mut self) -> u16;
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerLeiTingUpdateBlock<ClockBlock> {
-    PreviousLocalTime(ClockBlock),
-    Stamp(ClockBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLeiTingUpdateReport {
-    pub(crate) player_id: i32,
-    pub(crate) update_kind: u32,
-    pub(crate) previous_stamp: u32,
-    pub(crate) resulting_stamp: u32,
-    pub(crate) stamp_replaced: bool,
-    pub(crate) daily_list_replaced: bool,
-    pub(crate) daily_thing_count: usize,
-}
+// LeiTing-типы игрока перенесены в Realm activities вместе с `CLeiTing`;
+// `PlayerCodecError` остаётся здесь: цепочка containers/goods/shape,
+// которую он оборачивает, ещё не перенесена в Realm.
+pub(crate) use nebokrai_realm::activities::leiting::{
+    PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerLoadedLeiTingResetReport {
@@ -3527,6 +3504,14 @@ impl nebokrai_realm::characters::honorranks::HonorRankPlayerView for CPlayer {
 impl nebokrai_realm::characters::playerdataqueue::PlayerDataResetHonorEliminate for CPlayer {
     fn reset_honor_eliminate_info(&mut self, rank_mask: u32) {
         CPlayer::reset_honor_eliminate_info(self, rank_mask);
+    }
+}
+
+impl nebokrai_realm::activities::leiting::LeiTingPlayerCodec for CPlayer {
+    type Block = PlayerCodecError;
+
+    fn add_byte_array_lei_ting(&self, destination: &mut Vec<u8>) -> Result<(), Self::Block> {
+        CPlayer::add_byte_array_lei_ting(self, destination)
     }
 }
 
