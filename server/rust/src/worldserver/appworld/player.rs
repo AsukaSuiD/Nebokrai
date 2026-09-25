@@ -3488,6 +3488,16 @@ impl CPlayer {
     }
 }
 
+impl nebokrai_realm::activities::rsjjcsys::RsJjcSysPlayerTarget for CPlayer {
+    fn jjc_target_player_id(&self) -> i32 {
+        self.get_id()
+    }
+
+    fn apply_loaded_jjc_snapshot(&mut self, jjc_level: u32, jjc_score: u32, counters: [u16; 8]) {
+        CPlayer::apply_loaded_jjc_data(self, jjc_level, jjc_score, counters);
+    }
+}
+
 fn append_player_count(
     destination: &mut Vec<u8>,
     field: &'static str,
