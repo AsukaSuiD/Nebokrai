@@ -46,3 +46,4 @@ pub mod worldothermessage;
 pub mod world_server;
 pub mod world_server_client;
 pub mod worldserver;
+pub mod writelogmessage; // write-log диспетчер 0x60201..0x60218: decode → persistence FIFO + live increment/auction publish; game-контакты только map_player и push_write_log_command из WorldGameView
