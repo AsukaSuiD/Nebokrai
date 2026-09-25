@@ -1,6 +1,7 @@
 //! Мировые стадии войн и событий Realm.
 
 pub mod attackcitysys;
+pub mod countrywarsys;
 pub mod factionwarsys;
 pub mod fournationwarsys;
 pub mod jjcmaintenanceworker;

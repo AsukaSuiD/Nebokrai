@@ -350,14 +350,7 @@ pub(crate) struct CountryFactionSnapshot {
     pub(crate) owned_cities: Vec<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryGovernanceContextBlock {
-    FactionMasterLookup,
-    PlayerFactionLookup,
-    UnionLookup,
-    OwnedCityMutation,
-    FactionDemise,
-}
+pub(crate) use nebokrai_realm::organizations::country::CountryGovernanceContextBlock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryAbsolveCounterReset {

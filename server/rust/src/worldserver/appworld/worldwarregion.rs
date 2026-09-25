@@ -16,22 +16,12 @@
 //! заимствованными resource bytes и владением Rust; старый ABI не копируется.
 
 use super::worldregion::{
-    CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionSerializationBlock,
+    CWorldRegion, WorldRegionLoadedCounts, WorldRegionResourceContext,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldWarRegionLoadError {
-    Base(WorldRegionLoadError),
-    MissingValue { field: &'static str },
-    InvalidValue { field: &'static str },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldWarRegionSerializationBlock {
-    Base(WorldRegionSerializationBlock),
-    UninitializedField { field: &'static str },
-}
+pub(crate) use nebokrai_realm::regions::worldwarregion::{
+    WorldWarRegionLoadError, WorldWarRegionSerializationBlock,
+};
 
 pub(crate) struct CWorldWarRegion {
     base: CWorldRegion,

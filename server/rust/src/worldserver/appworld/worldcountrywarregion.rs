@@ -12,27 +12,13 @@
 //! сериализуются little-endian без зависимости от Rust/MSVC layout.
 
 use super::worldregion::{
-    CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionSerializationBlock,
+    CWorldRegion, WorldRegionLoadedCounts, WorldRegionResourceContext,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryWarRegionTextLoadError {
-    MissingValue { field: &'static str },
-    InvalidValue { field: &'static str },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryWarRegionLoadError {
-    Base(WorldRegionLoadError),
-    Country(WorldCountryWarRegionTextLoadError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryWarRegionSerializationBlock {
-    Base(WorldRegionSerializationBlock),
-    TooManyEntries { section: &'static str, count: usize },
-}
+pub(crate) use nebokrai_realm::regions::worldcountrywarregion::{
+    WorldCountryWarRegionLoadError, WorldCountryWarRegionSerializationBlock,
+    WorldCountryWarRegionTextLoadError,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarGate {

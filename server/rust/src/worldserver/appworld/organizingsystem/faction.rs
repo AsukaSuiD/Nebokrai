@@ -197,8 +197,11 @@ pub(crate) enum FactionCloneSaveBlock {
     DeleteRemainTimeAbsent,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FactionInitialPropertyBlock;
+pub(crate) use nebokrai_realm::organizations::faction::{
+    FactionInitialPropertyBlock, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
+    FactionPropertyDelivery, FactionPropertyReinitialization, OwnedCitiesWireBuildError,
+    OwnedCityMutationBuildError,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionInitialStringField {
@@ -235,13 +238,6 @@ pub(crate) struct FactionDelMemberReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionOperatorValidationBlock;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionPropertyDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FactionEnemyDelivery {
@@ -1571,24 +1567,6 @@ pub(crate) struct FactionEnemyMutationReport {
 pub(crate) use nebokrai_realm::organizations::factionenemyblock::FactionEnemyMutationBlock;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionOwnedCityDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum FactionOwnedCityUpdateBuildError {
-    Preflight(OwnedCitiesWireBuildError),
-    Recipient {
-        source: OwnedCitiesWireBuildError,
-        recipient_player_id: i32,
-        game_server_id: i32,
-        completed_deliveries: Vec<FactionOwnedCityDelivery>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OwnedCityMutationReport {
     pub(crate) state_changed: bool,
     pub(crate) deliveries: Vec<FactionOwnedCityDelivery>,
@@ -1599,12 +1577,6 @@ pub(crate) struct OwnedCityMutationReport {
 pub(crate) struct OwnedCityBooleanMutationReport {
     pub(crate) legacy_result: bool,
     pub(crate) mutation: OwnedCityMutationReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OwnedCityMutationBuildError {
-    pub(crate) state_changed: bool,
-    pub(crate) source: FactionOwnedCityUpdateBuildError,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1666,12 +1638,6 @@ pub(crate) enum FactionPermitUpdate {
 enum EnemyFactionSetKind {
     Standard,
     CityWar,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionPropertyReinitialization {
-    pub(crate) level_parameters_found: bool,
-    pub(crate) deliveries: Vec<FactionPropertyDelivery>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1774,25 +1740,6 @@ pub(crate) enum MemberPositionChangeOutcome {
     Blocked(MemberPositionChangeBlocked),
     Published(Result<MemberUpdateReport, MemberUpdateBuildError>),
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OwnedCitiesWireBuildError {
-    pub(crate) region_id: i32,
-    pub(crate) byte_len: usize,
-    pub(crate) completed_cities: usize,
-}
-
-impl fmt::Display for OwnedCitiesWireBuildError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "имя региона {} длиной {} байт не помещается в старый char[256]",
-            self.region_id, self.byte_len
-        )
-    }
-}
-
-impl Error for OwnedCitiesWireBuildError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnterminatedApplyPersonName {

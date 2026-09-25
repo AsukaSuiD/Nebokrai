@@ -42,7 +42,7 @@ use tiberius::Query;
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
-    find_script_files, normalize_script_path,
+    normalize_script_path,
 };
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
@@ -94,42 +94,25 @@ use crate::nets::servers::{ServerCommandHandle, ServerHostError};
 use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
 };
-use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
+use crate::public::ciqing::CCiQingSetup;
 use crate::public::clientresource::{
     DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
 };
 use crate::public::date::TagTime;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
-use crate::public::equipmentcomposelist::{
-    EquipmentComposeList, EquipmentComposeSerializeError,
-};
-use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock};
-use crate::public::dakongxiangqian::{
-    CDaKongXiangQian, DaKongSerializeError,
-};
-use nebokrai_shared::resources::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
-use crate::setup::honorelimilateconfig::HonorElimilateConfig;
-use crate::setup::contributesetup::{
-    CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,
-};
-use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
-use crate::setup::changebody::{
-    CChangeBodyConf, ChangeBodySerializeError,
-};
-use nebokrai_shared::resources::{CEmotion, EmotionFormatError, EmotionSerializeError};
-use crate::setup::fairyexpconf::CFairyExpConf;
-use crate::setup::goodsdestructionconfig::{
-    GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,
-};
+use crate::public::equipmentcomposelist::EquipmentComposeList;
+use crate::public::taozhuangsetup::CTaoZhuangSetup;
+use nebokrai_shared::resources::CHitLevelSetup;
+use crate::setup::contributesetup::CContributeSetup;
+use nebokrai_shared::resources::CEmotion;
 use crate::setup::incrementshoplist::{
     CIncrementShopList, IncrementShopGoodsQuery, IncrementShopGoodsResult,
-    IncrementShopSerializeError,
 };
-use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
+use crate::setup::prisonconf::PrisonConf;
 use nebokrai_shared::resources::{
-    CQuestSystem, QuestSystemLoadCompletion, QuestSystemLoadReport, QuestSystemSerializationBlock,
+    CQuestSystem, QuestSystemLoadCompletion, QuestSystemLoadReport,
 };
-use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
+use crate::setup::tradelist::CTradeList;
 use nebokrai_shared::resources::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
@@ -139,34 +122,14 @@ use crate::public::timer::{
     CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
     TimerRunReport,
 };
-use crate::setup::globesetup::{GlobeSetupJjcWorldConfig, GlobeSetupLoadError, GlobeSetupSnapshot};
-use crate::setup::godsbattleconf::{
-    CGodsBattleConf, GodsBattleLoadError, GodsBattleSerializeError,
-};
-use crate::setup::leitingsetup::{CThingSetup, ThingSetupCodecError};
-use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
-use crate::setup::newskillmonsterlist::{
-    NewSkillMonsterConf, NewSkillMonsterSerializeError,
-};
-use crate::setup::gmlist::{
-    CGMList, GmListCollection, GmListLoadError, GmListSerializationBlock,
-};
-use crate::setup::logsystem::{CLogSystem, LogSystemLoadError, LogSystemSerializeError};
-use crate::setup::monsterlist::{
-    MonsterDropRegistry, MonsterListLoadError, MonsterListSerializeError, MonsterRegistry,
-    load_drop_goods_list, load_monster_list, serialize_monster_list,
-};
-use crate::setup::regionsetup::{
-    CRegionSetup, RegionSetupLoadError, RegionSetupSerializeError,
-};
-use nebokrai_shared::resources::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
-use crate::setup::preciousboxconf::{
-    PreciousBoxConf, PreciousBoxSerializeError,
-};
-use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
-use crate::setup::regionrouter::{
-    RegionRouter, RegionRouterLoadError, RegionRouterSerializeError,
-};
+use crate::setup::globesetup::{GlobeSetupJjcWorldConfig, GlobeSetupSnapshot};
+use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleLoadError};
+use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::gmlist::GmListCollection;
+use crate::setup::logsystem::CLogSystem;
+use crate::setup::monsterlist::{load_drop_goods_list, load_monster_list, serialize_monster_list};
+use nebokrai_shared::resources::CPlayerList;
+use crate::setup::regionrouter::RegionRouter;
 use crate::setup::timetoreturn::{
     TimeToReturn, TimeToReturnCallbacks, TimeToReturnContext, TimeToReturnFireReport,
     TimeToReturnLoadError, TimeToReturnLoadReport,
@@ -180,9 +143,6 @@ use crate::worldserver::appworld::country::country::{
     CountryPlayersListContext, CountryPlayersListContextBlock,
     CountryVillageTaxContext, CountryVillageTaxContextBlock, CountryVillageTaxRegion,
 };
-use crate::worldserver::appworld::goods::cbattlefairyproperty::{
-    BattleFairyComposeWireError, CBattleFairyProperty,
-};
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryHandlerInitializeReport, CountryInfoDeliveryContext,
     CountryRunBlock, CountryRunReport,
@@ -194,15 +154,14 @@ use crate::worldserver::appworld::country::countrywarsys::{
     CountryWarCallbackKind, CountryWarCallbacks, CountryWarDeclarationAuthority,
     CountryWarDeclarationContext, CountryWarDeclarationPlayer, CountryWarFinishBlock,
     CountryWarFinishReport, CountryWarLoadError, CountryWarLoadReport, CountryWarPhase,
-    CountryWarPhaseBlock, CountryWarPhaseContext, CountryWarPhaseReport, CountryWarReloadBlock,
+    CountryWarPhaseBlock, CountryWarPhaseContext, CountryWarPhaseReport,
     CountryWarStartBlock, CountryWarStartReport, CountryWarSys, CountryWarTopInfoBlock,
     CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarTopInfoReport,
     CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
-    GoodsRegistryLoadError, GoodsRegistrySerializeError, load_goods_registry,
+    GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, load_goods_registry,
     serialize_goods_registry,
 };
 use crate::worldserver::appworld::goodswarmember::{
@@ -219,15 +178,13 @@ use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     FourNationExploitLoadedDisposition, FourNationWarCallbackContext,
     FourNationWarCallbackKind, FourNationWarCallbacks, FourNationWarCalendarBlock,
     FourNationWarLoadError, FourNationWarLoadReport, FourNationWarRegionIndexBlock,
-    FourNationWarReloadDisposition,
-    FourNationWarResultContext, FourNationWarSerializationBlock,
+    FourNationWarReloadDisposition, FourNationWarResultContext,
 };
 use crate::worldserver::appworld::leiting::{
     CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
 };
 use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactoryCacheLoadReport, SkillFactoryCacheResource,
-    SkillFactorySerializeError,
 };
 use crate::worldserver::appworld::message::othermessage::{
     WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
@@ -275,7 +232,7 @@ use crate::worldserver::appworld::message::playermessage::{
 };
 use crate::worldserver::appworld::message::organsysmessage::{
     CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
-    OrganizingCityWarResultContextBlock, reload_attack_city,
+    reload_attack_city,
     OrganizingAdmissionPermitBlock,
     OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
     OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
@@ -412,7 +369,6 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
     FactionUnionMembershipLookupBlock, FreeFactionLookup, FreePlayerLookup,
     PlayerEnterGameOutcome, PlayerExitGameOutcome, PlayerInviteFactionBlock,
-    FactionReinitializationBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -427,7 +383,7 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarAnnouncement, VillageWarCallbackKind, VillageWarCallbacks,
     VillageWarCountdownBlock, VillageWarCountdownContext, VillageWarCountdownReport,
     VillageWarCountdownRequest, VillageWarLoadError, VillageWarLoadReport,
-    VillageWarPhaseContext, VillageWarPhaseReport, VillageWarReloadBlock,
+    VillageWarPhaseContext, VillageWarPhaseReport,
 };
 use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
@@ -447,19 +403,13 @@ use crate::worldserver::appworld::script::variablelist::{
 use crate::worldserver::appworld::session::csessionfactory::{
     CSessionFactory, WorldSessionFactoryAiReport,
 };
-use crate::worldserver::appworld::worldcityregion::{
-    CWorldCityRegion, WorldCityRegionLoadError, WorldCityRegionSerializationBlock,
-};
-use crate::worldserver::appworld::worldcountrywarregion::{
-    WorldCountryWarRegion, WorldCountryWarRegionLoadError, WorldCountryWarRegionSerializationBlock,
-};
+use crate::worldserver::appworld::worldcityregion::CWorldCityRegion;
+use crate::worldserver::appworld::worldcountrywarregion::WorldCountryWarRegion;
 use crate::worldserver::appworld::worldregion::{
-    CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionOwnerRelationBlock, WorldRegionOwnerRelationReport, WorldRegionParamDecodeError,
-    WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
+    CWorldRegion, WorldRegionLoadedCounts, WorldRegionOwnerRelationBlock,
+    WorldRegionOwnerRelationReport, WorldRegionParamDecodeError, WorldRegionSetupSerializationBlock,
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
-use crate::worldserver::appworld::worldwarregion::WorldWarRegionSerializationBlock;
 use crate::worldserver::worldserver::honorranks::{
     CHonorRanks, HonorRanksNewDayBlock, HonorRanksNewDayReport,
 };
@@ -3946,76 +3896,7 @@ pub(crate) struct WorldReloadOneScriptBlock {
 
 pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBlock>;
 
-pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
-    fn runtime_directory(&self) -> &Path;
- /// Три карты единственного World `CGoodsFactory`; loader, lookup и wire
- /// работают с одним опубликованным состоянием.
-    fn goods_registries(
-        &mut self,
-    ) -> (
-        &mut GoodsBasePropertiesRegistry,
-        &mut GoodsOriginalNameIndex,
-        &mut GoodsNameIndex,
-    );
-    fn monster_registries(&mut self) -> (&mut MonsterRegistry, &mut MonsterDropRegistry);
-    fn log_system(&mut self) -> &mut CLogSystem;
-    fn region_setup(&mut self) -> &mut CRegionSetup;
-    fn gm_list(&mut self) -> &mut CGMList;
-    fn globe_setup(&mut self) -> &mut GlobeSetupSnapshot;
-    fn region_router(&mut self) -> &mut RegionRouter;
-    fn globe_setup_and_router(&mut self) -> (&GlobeSetupSnapshot, &RegionRouter);
- /// Отдельный mutable owner исторических static `CPlayerList` data.
- ///
- /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
- /// create-role и DB-load runtime; это исключает расходящиеся config копии.
-    fn player_list(&mut self) -> &mut CPlayerList;
-    fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
-    fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
-    fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
-    fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
-    fn synthesis(&mut self) -> &mut CSynthesis;
-    fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
-    fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
-    fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
-    fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
-    fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
-    fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
- /// Публикует immutable snapshot фоновой DB-load очереди после изменения
- /// любого входящего setup-owner-а.
-    fn publish_player_load_snapshot(
-        &mut self,
-        thing_setup: &CThingSetup,
-        gold_coin_index: u32,
-        gold_coin_limit: u32,
-        use_log_system: bool,
-        write_log_queue: WorldWriteLogQueue,
-    );
-    fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
-    fn query_goods_name(&mut self, goods_id: u32) -> Option<Vec<u8>>;
-    fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
-    fn add_log_text(&mut self, payload: &[u8]);
-    fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
-
-    /// Собирает дисковые сценарии относительно того же корня, что и read_resource.
-    fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
-        let root = self
-            .default_client_resource()
-            .root_directory()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let report = find_script_files(&root, pattern, extension);
-        for error in &report.errors {
-            tracing::warn!(root = %root.display(), ?error,
-                "Ошибка поиска файлов сценариев");
-        }
-        if !report.errors.is_empty() {
-            tracing::warn!(files = report.files.len(), errors = report.errors.len(),
-                "Список файлов сценариев получен с ошибками");
-        }
-        report.files
-    }
-    fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
-    fn region_object_counts(&mut self) -> (i32, i32);
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldReloadContext;
 
 struct WorldScriptLoadContext<'a, C: ?Sized>(&'a mut C);
 
@@ -5431,22 +5312,6 @@ impl WorldRegionOwner {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionOwnerLoadBlock {
-    Base(WorldRegionLoadError),
-    Village(WorldRegionLoadError),
-    City(WorldCityRegionLoadError),
-    Country(WorldCountryWarRegionLoadError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionOwnerSerializationBlock {
-    Base(WorldRegionSerializationBlock),
-    Village(WorldWarRegionSerializationBlock),
-    City(WorldCityRegionSerializationBlock),
-    Country(WorldCountryWarRegionSerializationBlock),
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldInitialRegionSnapshotKind {
     Assigned { region_type: i32 },
@@ -5475,76 +5340,10 @@ pub(crate) struct WorldInitialRegionSnapshotBlock {
     pub(crate) source: WorldInitialRegionSnapshotSource,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionListBlock {
-    pub(crate) region_id: i32,
-    pub(crate) source: WorldRegionOwnerLoadBlock,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldReloadRegionSnapshotBlock {
-    pub(crate) region_id: i32,
-    pub(crate) source: WorldRegionOwnerSerializationBlock,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadBlock {
-    RegionList(WorldRegionListBlock),
-    RegionSnapshot(WorldReloadRegionSnapshotBlock),
-    GlobeSetup(GlobeSetupLoadError),
-    RegionRouter(RegionRouterLoadError),
-    RegionRouterSerialization(RegionRouterSerializeError),
-    LogSystem(LogSystemLoadError),
-    GmList(GmListLoadError),
-    GmListSerialization(GmListSerializationBlock),
-    RegionSetup(RegionSetupLoadError),
-    RegionSetupSerialization(RegionSetupSerializeError),
-    MonsterList(MonsterListLoadError),
-    MonsterListSerialization(MonsterListSerializeError),
-    GoodsList(GoodsRegistryLoadError),
-    GoodsListSerialization(GoodsRegistrySerializeError),
-    LogSystemSerialization(LogSystemSerializeError),
-    ThingSetupCodec(ThingSetupCodecError),
-    EmotionFormat(EmotionFormatError),
-    EmotionSerialization(EmotionSerializeError),
-    PlayerListFormat(PlayerListFormatError),
-    PlayerListSerialization(PlayerListSerializeError),
-    GoodsDestroyFormat(GoodsDestroyFormatError),
-    GoodsDestroySerialization(GoodsDestroySerializeError),
-    NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
-    BattleFairyExpSerialization(BattleFairyExpSerializeError),
-    FairyExpSerialization(BattleFairyExpSerializeError),
-    DaKongSerialization(DaKongSerializeError),
-    ChangeBodySerialization(ChangeBodySerializeError),
-    PreciousBoxSerialization(PreciousBoxSerializeError),
-    LingBaoSerialization(LingBaoSerializationBlock),
-    BattleFairyCombineSerialization(BattleFairyComposeWireError),
-    SynthesisSerialization(SynthesisSerializeError),
-    EquipmentComposeSerialization(EquipmentComposeSerializeError),
-    CiQingSerialization(CiQingSerializationBlock),
-    TaoZhuangSerialization(TaoZhuangSerializationBlock),
-    GodsBattleDatabaseOwnerRequired,
-    GodsBattleSerialization(GodsBattleSerializeError),
-    HitLevelFormat(HitLevelFormatError),
-    HitLevelSerialization(HitLevelSerializeError),
-    TradeListFormat(TradeListFormatError),
-    TradeListSerialization(TradeListSerializeError),
-    QuestSerialization(QuestSystemSerializationBlock),
-    FactionReinitialization(FactionReinitializationBlock),
-    SkillListSerialization(SkillFactorySerializeError),
-    IncrementShopSerialization(IncrementShopSerializeError),
-    PrisonFormat(PrisonConfFormatError),
-    PrisonSerialization(PrisonConfSerializeError),
-    ContributeFormat(ContributeSetupFormatError),
-    ContributeSerialization(ContributeSetupSerializeError),
-    CountryWar(CountryWarReloadBlock),
-    FourNationWarSerialization(FourNationWarSerializationBlock),
-    TimeToReturnLoad(TimeToReturnLoadError),
-    VillageWar(VillageWarReloadBlock),
-    AttackCity(AttackCityReloadBlock<OrganizingCityWarResultContextBlock>),
-}
-
-pub(crate) type WorldReloadResult = Result<i32, WorldReloadBlock>;
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldRegionListBlock, WorldRegionOwnerLoadBlock, WorldRegionOwnerSerializationBlock,
+    WorldReloadBlock, WorldReloadRegionSnapshotBlock, WorldReloadResult,
+};
 
 enum WorldRegionMaterialization {
     Direct {
@@ -5745,32 +5544,7 @@ pub(crate) enum WorldRegionNameLookup<'a> {
     Name(&'a [u8]),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldNamedRegionMatch {
-    pub(crate) region_id: i32,
-    pub(crate) game_server_index: u32,
-    pub(crate) game_server_entry_found: bool,
-    pub(crate) game_server_connected: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldNamedRegionLookup {
-    pub(crate) skipped_null_owners: usize,
-    pub(crate) matched: Option<WorldNamedRegionMatch>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionIdRoute {
-    pub(crate) map_key: i32,
-    pub(crate) game_server_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionIdRouteScan {
-    pub(crate) skipped_null_owners: usize,
-    pub(crate) matching_region_keys: usize,
-    pub(crate) routes: Vec<WorldRegionIdRoute>,
-}
+pub(crate) use nebokrai_realm::app::gmmessage::{WorldNamedRegionLookup, WorldNamedRegionMatch, WorldRegionIdRouteScan, WorldRegionIdRoute};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionParamUpdateOutcome {
@@ -17110,6 +16884,58 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
 
     fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
         CGame::push_write_log_command(self, command)
+    }
+
+    fn get_string_by_id(&self, string_id: &[u8]) -> &[u8] {
+        CGame::get_string_by_id(self, string_id)
+    }
+
+    fn map_player_id_by_name(&self, name: &[u8]) -> u32 {
+        CGame::map_player_id_by_name(self, name)
+    }
+
+    fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup {
+        CGame::named_region_lookup(self, name)
+    }
+
+    fn region_routes_by_owner_id(&self, region_id: i32) -> WorldRegionIdRouteScan {
+        CGame::region_routes_by_owner_id(self, region_id)
+    }
+
+    fn online_player_count(&self) -> usize {
+        CGame::online_player_count(self)
+    }
+
+    fn replace_online_player_silience_time(
+        &mut self,
+        player_id: u32,
+        silience_time: i32,
+    ) -> Option<i32> {
+        CGame::replace_online_player_silience_time(self, player_id, silience_time)
+    }
+
+    fn reload<'a>(
+        &'a mut self,
+        context: &'a mut dyn WorldReloadContext,
+        jjc: &'a mut CJJcSystem,
+        gods_battle: &'a mut CGodsBattleConf,
+        skills: &'a mut CSkillFactory,
+        rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
+        profile: &'a [u8],
+        send_to_game_servers: bool,
+        reload_server_resources: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = WorldReloadResult> + 'a>> {
+        Box::pin(CGame::reload(
+            self,
+            context,
+            jjc,
+            gods_battle,
+            skills,
+            rs_gods_battle,
+            profile,
+            send_to_game_servers,
+            reload_server_resources,
+        ))
     }
 }
 

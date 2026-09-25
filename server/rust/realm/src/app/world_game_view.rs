@@ -1,13 +1,22 @@
 //! Узкий game-view для обработчиков мировых сообщений Realm.
 
-use nebokrai_shared::network::ServerCommandHandle;
+use std::future::Future;
+use std::pin::Pin;
 
+use nebokrai_shared::network::ServerCommandHandle;
+use nebokrai_shared::resources::CGodsBattleConf;
+
+use crate::activities::jjcsystem::CJJcSystem;
+use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::app::auction::WorldBaiTanRemoval;
+use crate::app::gmmessage::{WorldNamedRegionLookup, WorldRegionIdRouteScan};
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError};
+use crate::app::worldserver::{WorldReloadContext, WorldReloadResult};
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::characters::player::{CPlayer, PlayerCodecError, PlayerPropertyCoefficients};
 use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::content::skillfactory::CSkillFactory;
 
 /// Снимок состояния game server-а: наличие коннекта и числовой индекс маршрута.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,5 +88,34 @@ pub trait WorldGameView {
     fn game_server(&self, index: u32) -> Option<WorldGameServerSnapshot>;
 
     fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize;
+
+    fn get_string_by_id(&self, string_id: &[u8]) -> &[u8];
+
+    fn map_player_id_by_name(&self, name: &[u8]) -> u32;
+
+    fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup;
+
+    fn region_routes_by_owner_id(&self, region_id: i32) -> WorldRegionIdRouteScan;
+
+    fn online_player_count(&self) -> usize;
+
+    fn replace_online_player_silience_time(&mut self, player_id: u32, silience_time: i32) -> Option<i32>;
+
+    /// Единственный владелец перезагрузки мира: реализация делегирует
+    /// inherent `CGame::reload` старого пакета. Boxed future, а не `async fn`,
+    /// сохраняет объектную безопасность: view потребляется как
+    /// `&mut dyn WorldGameView` сессиями и GM-диспетчером.
+    #[allow(clippy::type_complexity, reason = "точный вызов inherent reload с теми же аргументами")]
+    fn reload<'a>(
+        &'a mut self,
+        context: &'a mut dyn WorldReloadContext,
+        jjc: &'a mut CJJcSystem,
+        gods_battle: &'a mut CGodsBattleConf,
+        skills: &'a mut CSkillFactory,
+        rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
+        profile: &'a [u8],
+        send_to_game_servers: bool,
+        reload_server_resources: bool,
+    ) -> Pin<Box<dyn Future<Output = WorldReloadResult> + 'a>>;
 }
 

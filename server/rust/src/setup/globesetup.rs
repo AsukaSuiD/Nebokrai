@@ -2,7 +2,7 @@
 //! Здесь реэкспорт для переходных потребителей обеих ролей и World-адаптер JJC.
 
 pub(crate) use nebokrai_shared::resources::{
-    GlobePlayerPropertyCoefficients, GlobeSetupDecodeError, GlobeSetupLoadError,
+    GlobePlayerPropertyCoefficients, GlobeSetupDecodeError,
     GlobeSetupSnapshot, GlobeStiffenSetup,
 };
 

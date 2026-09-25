@@ -22,32 +22,12 @@ use super::region::{CRegion, RegionRandomPositionBlock};
 use super::shape::ShapeTileCoordinateBlock;
 use super::worldregion::{
     WorldRegionEnterBlock, WorldRegionLoadedCounts, WorldRegionResourceContext,
-    WorldRegionSetupSerializationBlock,
 };
-use super::worldwarregion::{
-    CWorldWarRegion, WorldWarRegionLoadError, WorldWarRegionSerializationBlock,
+use super::worldwarregion::CWorldWarRegion;
+
+pub(crate) use nebokrai_realm::regions::worldcityregion::{
+    WorldCityRegionLoadError, WorldCityRegionSerializationBlock, WorldCityRegionTextLoadError,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCityRegionTextLoadError {
-    MissingValue { field: &'static str },
-    InvalidValue { field: &'static str },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCityRegionLoadError {
-    War(WorldWarRegionLoadError),
-    City(WorldCityRegionTextLoadError),
-    BaseSetup(WorldRegionSetupSerializationBlock),
-    UninitializedDefenceField { field: &'static str },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCityRegionSerializationBlock {
-    War(WorldWarRegionSerializationBlock),
-    UninitializedDefenceField { field: &'static str },
-    TooManyGates { count: usize },
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldCityRegionEnterBlock {

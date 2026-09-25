@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::public::date::{TagTime, TagTimeArithmeticBlock, TagTimeParseBlock};
+use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::readwrite::read_to;
 use crate::public::timer::{CTimer, TimerId};
 
@@ -114,25 +114,9 @@ impl CountryWarLoadNotice {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarLoadError {
-    MissingValue { field: &'static str },
-    InvalidValue { field: &'static str },
-    TimeParse(TagTimeParseBlock),
-    Arithmetic(TagTimeArithmeticBlock),
-}
-
-impl From<TagTimeParseBlock> for CountryWarLoadError {
-    fn from(value: TagTimeParseBlock) -> Self {
-        Self::TimeParse(value)
-    }
-}
-
-impl From<TagTimeArithmeticBlock> for CountryWarLoadError {
-    fn from(value: TagTimeArithmeticBlock) -> Self {
-        Self::Arithmetic(value)
-    }
-}
+pub(crate) use nebokrai_realm::activities::countrywarsys::{
+    CountryWarEndReport, CountryWarLoadError, CountryWarReloadBlock, CountryWarReloadEvent,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CountryWarLoadReport {
@@ -145,25 +129,6 @@ pub(crate) struct CountryWarLoadReport {
     pub(crate) registered_events: u32,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryWarEndReport {
-    pub(crate) reset_regions: usize,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarReloadEvent {
-    PrepareBegin,
-    PrepareEnd,
-    DeclareBegin,
-    DeclareEnd,
-    InfoBegin,
-    Begin,
-    InfoEnd,
-    End,
-    Clear,
-}
-
 #[derive(Debug)]
 pub(crate) struct CountryWarReloadReport {
     pub(crate) previous_schedules: usize,
@@ -171,22 +136,6 @@ pub(crate) struct CountryWarReloadReport {
     pub(crate) killed_events: u32,
     pub(crate) end_war: CountryWarEndReport,
     pub(crate) load: CountryWarLoadReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarReloadBlock {
-    MissingEventId {
-        war_id: i32,
-        event: CountryWarReloadEvent,
-        kill_requests: u32,
-        killed_events: u32,
-    },
-    Load {
-        source: CountryWarLoadError,
-        kill_requests: u32,
-        killed_events: u32,
-        end_war: CountryWarEndReport,
-    },
 }
 
 impl Default for CountryWarLoadReport {

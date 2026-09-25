@@ -31,7 +31,6 @@ use super::region::{
 };
 use std::cell::Cell;
 use crate::dbaccess::worlddb::rsregion::RegionSaveSnapshot;
-use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::worldserver::worldserver::game::CGame;
 
 #[derive(Clone, Copy, Debug)]
@@ -74,11 +73,6 @@ impl RegionSetupState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionSetupSerializationBlock {
-    pub(crate) field: &'static str,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct WorldReturnPoint {
     pub(crate) region_id: i32,
@@ -118,35 +112,11 @@ pub(crate) enum WorldRegionOwnerRelationBlock {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionTextLoadError {
-    MissingValue {
-        field: &'static str,
-    },
-    InvalidValue {
-        field: &'static str,
-    },
-    MonsterNameRequiresLegacyHeapLayout {
-        length: usize,
-    },
-    TooManyEntries {
-        collection: &'static str,
-        count: usize,
-    },
-}
-
-/// Resource/string граница, которую `CWorldRegion::Load` вызывает
-/// последовательно и потому не разрешает caller-у заранее читать весь набор.
-pub(crate) trait WorldRegionResourceContext {
- /// Единственный опубликованный World resource-owner, общий для reload и
- /// всех последующих `rfOpen`-эквивалентов этого context-а.
-    fn default_client_resource(&mut self) -> &mut DefaultClientResourceOwner;
-
-    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
-        self.default_client_resource().read_resource(path)
-    }
-    fn region_monster_num_scale(&mut self) -> f32;
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldRegionResourceContext;
+pub(crate) use nebokrai_realm::regions::worldregion::{
+    WorldRegionLoadError, WorldRegionSerializationBlock, WorldRegionSetupSerializationBlock,
+    WorldRegionTextLoadError,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionLoadedCounts {
@@ -159,27 +129,6 @@ pub(crate) struct WorldRegionLoadedCounts {
 pub(crate) enum WorldRegionBaseLoadFailure {
     MissingRegionResource,
     Region(RegionLoadError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionLoadError {
-    Text {
-        owner: &'static str,
-        source: WorldRegionTextLoadError,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionSerializationBlock {
-    Region(RegionSerializationBlock),
-    Setup(WorldRegionSetupSerializationBlock),
-    TooManyEntries {
-        collection: &'static str,
-        count: usize,
-    },
-    MonsterVariant {
-        source: WorldRegionTextLoadError,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

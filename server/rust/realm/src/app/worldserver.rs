@@ -8,10 +8,53 @@
 //! stderr process-оболочки. Byte-exact format keys, порядок публикации и
 //! различие штатной ошибки, retained owner и безопасной остановки сохраняются.
 //! Rust не вводит второй singleton либо дополнительный process lifecycle.
+//! Здесь же опубликованы resource/reload context-границы и типовой блок
+//! перезагрузки world-сервера; их владельцы-железо реализуют процесс.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use nebokrai_shared::resources::{
+    BattleFairyExpSerializeError, CBattleFairyExpConfig, CChangeBodyConf, CDaKongXiangQian,
+    CFairyExpConf, CGMList, CLingBaoSetup, CLogSystem, CPlayerList, CRegionSetup, CSynthesis,
+    CThingSetup, ChangeBodySerializeError, CiQingSerializationBlock, ContributeSetupFormatError,
+    ContributeSetupSerializeError, DaKongSerializeError, EmotionFormatError, EmotionSerializeError,
+    EquipmentComposeSerializeError, GlobeSetupLoadError, GlobeSetupSnapshot, GmListLoadError,
+    GmListSerializationBlock, GodsBattleSerializeError, GoodsDestroyFormatError,
+    GoodsDestroySerializeError, GoodsDestroySetup, HitLevelFormatError, HitLevelSerializeError,
+    HonorElimilateConfig, IncrementShopSerializeError, LingBaoSerializationBlock,
+    LogSystemLoadError, LogSystemSerializeError, MonsterDropRegistry, MonsterListLoadError,
+    MonsterListSerializeError, MonsterRegistry, NewSkillMonsterConf,
+    NewSkillMonsterSerializeError, PlayerListFormatError, PlayerListSerializeError, PreciousBoxConf,
+    PreciousBoxSerializeError, PrisonConfFormatError, PrisonConfSerializeError,
+    QuestSystemSerializationBlock, RegionRouter, RegionRouterLoadError, RegionRouterSerializeError,
+    RegionSetupLoadError, RegionSetupSerializeError, SynthesisSerializeError,
+    TaoZhuangSerializationBlock, ThingSetupCodecError, TradeListFormatError,
+    TradeListSerializeError,
+};
 use parking_lot::Mutex;
+
+use crate::activities::attackcitysys::AttackCityReloadBlock;
+use crate::activities::countrywarsys::CountryWarReloadBlock;
+use crate::activities::fournationwarsys::FourNationWarSerializationBlock;
+use crate::activities::villagewarsys::VillageWarReloadBlock;
+use crate::app::organsysmessage::OrganizingCityWarResultContextBlock;
+use crate::content::battlefairyproperty::{BattleFairyComposeWireError, CBattleFairyProperty};
+use crate::content::cgoodsfactory::{
+    GoodsNameIndex, GoodsOriginalNameIndex, GoodsRegistryLoadError, GoodsRegistrySerializeError,
+};
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::content::skillfactory::SkillFactorySerializeError;
+use crate::content::TimeToReturnLoadError;
+use crate::content::{DefaultClientResourceOwner, find_script_files};
+use crate::organizations::faction::FactionReinitializationBlock;
+use crate::persistence::writelogqueue::WorldWriteLogQueue;
+use crate::regions::worldcityregion::{WorldCityRegionLoadError, WorldCityRegionSerializationBlock};
+use crate::regions::worldcountrywarregion::{
+    WorldCountryWarRegionLoadError, WorldCountryWarRegionSerializationBlock,
+};
+use crate::regions::worldregion::{WorldRegionLoadError, WorldRegionSerializationBlock};
+use crate::regions::worldwarregion::WorldWarRegionSerializationBlock;
 
 const LEGACY_LOG_BUFFER_CAPACITY: usize = 64_000;
 const LEGACY_WINDOW_TEXT_CAPACITY: usize = 64_000;
@@ -490,4 +533,175 @@ fn format_without_arguments(format: &[u8]) -> Result<Vec<u8>, AddLogTextBlock> {
         });
     }
     Ok(output)
+}
+
+/// Resource/string граница, которую `CWorldRegion::Load` вызывает
+/// последовательно и потому не разрешает caller-у заранее читать весь набор.
+pub trait WorldRegionResourceContext {
+ /// Единственный опубликованный World resource-owner, общий для reload и
+ /// всех последующих `rfOpen`-эквивалентов этого context-а.
+    fn default_client_resource(&mut self) -> &mut DefaultClientResourceOwner;
+
+    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
+        self.default_client_resource().read_resource(path)
+    }
+    fn region_monster_num_scale(&mut self) -> f32;
+}
+
+pub trait WorldReloadContext: WorldRegionResourceContext {
+    fn runtime_directory(&self) -> &Path;
+ /// Три карты единственного World `CGoodsFactory`; loader, lookup и wire
+ /// работают с одним опубликованным состоянием.
+    fn goods_registries(
+        &mut self,
+    ) -> (
+        &mut GoodsBasePropertiesRegistry,
+        &mut GoodsOriginalNameIndex,
+        &mut GoodsNameIndex,
+    );
+    fn monster_registries(&mut self) -> (&mut MonsterRegistry, &mut MonsterDropRegistry);
+    fn log_system(&mut self) -> &mut CLogSystem;
+    fn region_setup(&mut self) -> &mut CRegionSetup;
+    fn gm_list(&mut self) -> &mut CGMList;
+    fn globe_setup(&mut self) -> &mut GlobeSetupSnapshot;
+    fn region_router(&mut self) -> &mut RegionRouter;
+    fn globe_setup_and_router(&mut self) -> (&GlobeSetupSnapshot, &RegionRouter);
+ /// Отдельный mutable owner исторических static `CPlayerList` data.
+ ///
+ /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
+ /// create-role и DB-load runtime; это исключает расходящиеся config копии.
+    fn player_list(&mut self) -> &mut CPlayerList;
+    fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
+    fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
+    fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
+    fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
+    fn synthesis(&mut self) -> &mut CSynthesis;
+    fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
+    fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
+    fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
+    fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
+    fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
+    fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
+ /// Публикует immutable snapshot фоновой DB-load очереди после изменения
+ /// любого входящего setup-owner-а.
+    fn publish_player_load_snapshot(
+        &mut self,
+        thing_setup: &CThingSetup,
+        gold_coin_index: u32,
+        gold_coin_limit: u32,
+        use_log_system: bool,
+        write_log_queue: WorldWriteLogQueue,
+    );
+    fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
+    fn query_goods_name(&mut self, goods_id: u32) -> Option<Vec<u8>>;
+    fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
+    fn add_log_text(&mut self, payload: &[u8]);
+    fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
+
+    /// Собирает дисковые сценарии относительно того же корня, что и read_resource.
+    fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        let root = self
+            .default_client_resource()
+            .root_directory()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let report = find_script_files(&root, pattern, extension);
+        for error in &report.errors {
+            tracing::warn!(root = %root.display(), ?error,
+                "Ошибка поиска файлов сценариев");
+        }
+        if !report.errors.is_empty() {
+            tracing::warn!(files = report.files.len(), errors = report.errors.len(),
+                "Список файлов сценариев получен с ошибками");
+        }
+        report.files
+    }
+    fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
+    fn region_object_counts(&mut self) -> (i32, i32);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldReloadBlock {
+    RegionList(WorldRegionListBlock),
+    RegionSnapshot(WorldReloadRegionSnapshotBlock),
+    GlobeSetup(GlobeSetupLoadError),
+    RegionRouter(RegionRouterLoadError),
+    RegionRouterSerialization(RegionRouterSerializeError),
+    LogSystem(LogSystemLoadError),
+    GmList(GmListLoadError),
+    GmListSerialization(GmListSerializationBlock),
+    RegionSetup(RegionSetupLoadError),
+    RegionSetupSerialization(RegionSetupSerializeError),
+    MonsterList(MonsterListLoadError),
+    MonsterListSerialization(MonsterListSerializeError),
+    GoodsList(GoodsRegistryLoadError),
+    GoodsListSerialization(GoodsRegistrySerializeError),
+    LogSystemSerialization(LogSystemSerializeError),
+    ThingSetupCodec(ThingSetupCodecError),
+    EmotionFormat(EmotionFormatError),
+    EmotionSerialization(EmotionSerializeError),
+    PlayerListFormat(PlayerListFormatError),
+    PlayerListSerialization(PlayerListSerializeError),
+    GoodsDestroyFormat(GoodsDestroyFormatError),
+    GoodsDestroySerialization(GoodsDestroySerializeError),
+    NewSkillMonsterSerialization(NewSkillMonsterSerializeError),
+    BattleFairyExpSerialization(BattleFairyExpSerializeError),
+    FairyExpSerialization(BattleFairyExpSerializeError),
+    DaKongSerialization(DaKongSerializeError),
+    ChangeBodySerialization(ChangeBodySerializeError),
+    PreciousBoxSerialization(PreciousBoxSerializeError),
+    LingBaoSerialization(LingBaoSerializationBlock),
+    BattleFairyCombineSerialization(BattleFairyComposeWireError),
+    SynthesisSerialization(SynthesisSerializeError),
+    EquipmentComposeSerialization(EquipmentComposeSerializeError),
+    CiQingSerialization(CiQingSerializationBlock),
+    TaoZhuangSerialization(TaoZhuangSerializationBlock),
+    GodsBattleDatabaseOwnerRequired,
+    GodsBattleSerialization(GodsBattleSerializeError),
+    HitLevelFormat(HitLevelFormatError),
+    HitLevelSerialization(HitLevelSerializeError),
+    TradeListFormat(TradeListFormatError),
+    TradeListSerialization(TradeListSerializeError),
+    QuestSerialization(QuestSystemSerializationBlock),
+    FactionReinitialization(FactionReinitializationBlock),
+    SkillListSerialization(SkillFactorySerializeError),
+    IncrementShopSerialization(IncrementShopSerializeError),
+    PrisonFormat(PrisonConfFormatError),
+    PrisonSerialization(PrisonConfSerializeError),
+    ContributeFormat(ContributeSetupFormatError),
+    ContributeSerialization(ContributeSetupSerializeError),
+    CountryWar(CountryWarReloadBlock),
+    FourNationWarSerialization(FourNationWarSerializationBlock),
+    TimeToReturnLoad(TimeToReturnLoadError),
+    VillageWar(VillageWarReloadBlock),
+    AttackCity(AttackCityReloadBlock<OrganizingCityWarResultContextBlock>),
+}
+
+pub type WorldReloadResult = Result<i32, WorldReloadBlock>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldRegionOwnerLoadBlock {
+    Base(WorldRegionLoadError),
+    Village(WorldRegionLoadError),
+    City(WorldCityRegionLoadError),
+    Country(WorldCountryWarRegionLoadError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldRegionOwnerSerializationBlock {
+    Base(WorldRegionSerializationBlock),
+    Village(WorldWarRegionSerializationBlock),
+    City(WorldCityRegionSerializationBlock),
+    Country(WorldCountryWarRegionSerializationBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldRegionListBlock {
+    pub region_id: i32,
+    pub source: WorldRegionOwnerLoadBlock,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldReloadRegionSnapshotBlock {
+    pub region_id: i32,
+    pub source: WorldRegionOwnerSerializationBlock,
 }

@@ -90,7 +90,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     ApplyFactionLookup, FactionCountryCountBlock, FactionListPage, FactionListPageBlock,
     RemovePersonFromApplyFactionListOutcome,
     FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
-    FactionBillboardStatBlock,
+
     OrganizingContributorBlock, OrganizingContributorOutcome,
     OrganizingDisbandBlock, OrganizingDisbandOutcome, OrganizingDisbandPlayer,
     OrganizingDisbandProgress, OrganizingDisbandRejection,
@@ -5540,43 +5540,7 @@ pub(crate) fn dispatch_city_war_application(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCityWarResultContextBlock {
-    MissingRegionOwner { region_id: i32 },
-    MissingFactionForMutation {
-        faction_id: i32,
-        operation: &'static str,
-    },
-    MissingFactionMaster { faction_id: i32 },
-    MissingFactionCountry { faction_id: i32 },
-    NullUnion { map_key: i32 },
-    MissingEnemyOrganizing { organizing_id: i32 },
-    EnemyMutation {
-        organizing_id: i32,
-        enemy_organizing_id: i32,
-        source: FactionEnemyMutationBlock,
-    },
-    OwnedCity {
-        faction_id: i32,
-        operation: &'static str,
-        source: OwnedCityMutationBuildError,
-    },
-    VictorCount {
-        faction_id: i32,
-        operation: &'static str,
-        source: FactionInitialPropertyBlock,
-    },
-    Billboard(FactionBillboardStatBlock),
-    NoticeWouldOverflow {
-        string_id: &'static [u8],
-        visible_len: usize,
-    },
-    MissingCountryOwner { country_id: u8 },
-    CountryGovernance {
-        country_id: u8,
-        source: CountryGovernanceContextBlock,
-    },
-}
+pub(crate) use nebokrai_realm::app::organsysmessage::OrganizingCityWarResultContextBlock;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingCityWarResultDispatch {

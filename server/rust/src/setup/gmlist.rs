@@ -2,6 +2,6 @@
 //! Здесь реэкспорт для переходных потребителей обеих ролей.
 
 pub(crate) use nebokrai_shared::resources::{
-    CGMList, GmInfo, GmListCollection, GmListDecodeError, GmListLoadError,
+    CGMList, GmInfo, GmListCollection, GmListDecodeError,
     GmListSerializationBlock,
 };

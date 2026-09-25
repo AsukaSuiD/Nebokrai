@@ -48,7 +48,7 @@ use super::faction::{
     FactionPlayerHeaderBlock,
     FactionPermitBlock, FactionPermitUpdate,
     FactionPronounceBlock, FactionPronounceOutcome, FactionPropertyDelivery,
-    FactionPropertyReinitialization, FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
+    FactionRemoveApplyMemberOutcome, FactionSuperiorOrganizingBlock,
     FactionSetParameterBlock, FactionSetParameterContext, FactionSetParameterOutcome,
     FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeOutcome, FactionUploadIconBlock,
     FactionUploadIconContext, FactionUploadIconOutcome,
@@ -140,24 +140,10 @@ struct FactionBillboardEntry {
     number: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FactionBillboardKind {
-    MemberCount,
-    OffenseVictories,
-    DefenceVictories,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FactionBillboardStatBlock {
-    MissingEstablishedTime {
-        map_key: i32,
-        billboard: FactionBillboardKind,
-    },
-    MissingBaseProperty {
-        map_key: i32,
-        billboard: FactionBillboardKind,
-    },
-}
+pub(crate) use nebokrai_realm::organizations::faction::{
+    FactionBillboardKind, FactionBillboardStatBlock, FactionReinitializationBlock,
+    FactionReinitializationEntry,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TopInfoDelivery {
@@ -1391,19 +1377,6 @@ pub(crate) enum PlayerExitGameOutcome {
         outcome: MemberExitOutcome,
     },
     Dispatched(FactionExitDispatch),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionReinitializationEntry {
-    pub(crate) map_key: i32,
-    pub(crate) result: FactionPropertyReinitialization,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionReinitializationBlock {
-    pub(crate) map_key: i32,
-    pub(crate) source: FactionInitialPropertyBlock,
-    pub(crate) completed: Vec<FactionReinitializationEntry>,
 }
 
 #[derive(Debug, Eq, PartialEq)]

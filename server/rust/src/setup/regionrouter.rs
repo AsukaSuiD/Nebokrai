@@ -2,6 +2,6 @@
 //! Здесь реэкспорт для переходных потребителей обеих ролей.
 
 pub(crate) use nebokrai_shared::resources::{
-    RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome, RegionRouterLoadError,
+    RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome,
     RegionRouterSerializeError,
 };
