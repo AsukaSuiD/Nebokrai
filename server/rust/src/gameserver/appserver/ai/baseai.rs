@@ -56,6 +56,12 @@
 //! в `passive_actions`, остальные — в `active_war_soul_actions` при любом
 //! ненулевом флаге и иначе в `active_actions`.
 //!
+//! Элементы очередей (`AiEvent`/`AiShapeAction`) и семья действий-порядков
+//! passive-реакций (`PassiveDeathAction`/`PassiveStiffenAction`, Defense-цикл,
+//! Stiffen/Died-пары и `discard_active_prefix`) перенесены в Zone
+//! (`ai/events.rs`, `ai/reactions.rs`) зелёной AI-порцией; ниже сохраняются
+//! их сигнатуры как делегаты, чтобы caller-ы hub не менялись.
+//!
 //! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
 //! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
@@ -97,6 +103,10 @@
 //! stop-frame к нулю перед постановкой действия в очередь.
 
 use std::collections::VecDeque;
+
+pub(crate) use nebokrai_zone::ai::{
+    ai_event_deadline_reached, AiEvent, AiShapeAction, PassiveDeathAction, PassiveStiffenAction,
+};
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
@@ -158,68 +168,6 @@ impl AiPhaseState {
     }
 }
 
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AiShapeAction {
-    Stand = 0,
-    Move = 1,
-    Attack = 2,
-    Defense = 3,
-    Stiffen = 4,
-    SearchEnemy = 5,
-    ChangeSkill = 6,
-    Died = 7,
-    Open = 8,
-    ForceDwrod = 0xff,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AiEvent {
-    pub(crate) action: AiShapeAction,
-    pub(crate) beginning_time_ms: u32,
-    pub(crate) delay_ms: u32,
-    pub(crate) handling: i32,
-}
-
-/// Exact unsigned deadline из `ProcessActiveAction/ProcessPassiveAction`:
-/// исходник сначала складывает два DWORD, затем сравнивает результат с
-/// текущими часами. Это намеренно не эквивалентно elapsed-сравнению в момент
-/// переполнения `timeGetTime`.
-const fn ai_event_deadline_reached(event: &AiEvent, now_ms: u32) -> bool {
-    event.beginning_time_ms.wrapping_add(event.delay_ms) <= now_ms
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PassiveDeathAction {
-    None,
-    WaitingForMove,
-    Ready,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PassiveStiffenAction {
-    None,
-    InterruptAttack,
-    InterruptAttackFinished,
-    StartedWaiting,
-    StartedFinished,
-    Waiting,
-    Finished,
-}
-
-impl PassiveStiffenAction {
-    /// ProcessPassiveAction (0x004C84F0): незавершённый Stiffen возвращает
-    /// AES_HUNG_UP, снятый по сроку — AES_IDLE/AES_EXEC. Сам факт вызова
-    /// OnStiffen или End(4) не запрещает последующий ProcessActiveAction.
-    pub(crate) const fn blocks_active(self) -> bool {
-        matches!(self, Self::InterruptAttack | Self::StartedWaiting | Self::Waiting)
-    }
-
-    pub(crate) const fn interrupts_attack(self) -> bool {
-        matches!(self, Self::InterruptAttack | Self::InterruptAttackFinished)
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBaseAI {
     active_actions: VecDeque<AiEvent>,
@@ -237,6 +185,25 @@ pub(crate) struct CBaseAI {
 struct BackStageSkill {
     skill_id: u32,
     begin_pending: bool,
+}
+
+/// Сварка Zone-порядка passive-реакций к двум FIFO этого hub-владельца.
+impl nebokrai_zone::ai::PassiveReactionQueues for CBaseAI {
+    fn passive_reaction_queue(&self) -> &VecDeque<AiEvent> {
+        &self.passive_actions
+    }
+
+    fn active_reaction_queue(&self) -> &VecDeque<AiEvent> {
+        &self.active_actions
+    }
+
+    fn passive_reaction_queue_mut(&mut self) -> &mut VecDeque<AiEvent> {
+        &mut self.passive_actions
+    }
+
+    fn active_reaction_queue_mut(&mut self) -> &mut VecDeque<AiEvent> {
+        &mut self.active_actions
+    }
 }
 
 impl CBaseAI {
@@ -379,20 +346,9 @@ impl CBaseAI {
     /// префикс `active_actions` до первого `Attack` либо `Move`.
     pub(crate) fn process_reached_defense_actions(
         &mut self,
-        mut after_base_handler: impl FnMut(&mut Self),
+        after_base_handler: impl FnMut(&mut Self),
     ) -> usize {
-        let mut processed = 0usize;
-        while self
-            .passive_actions
-            .front()
-            .is_some_and(|event| event.action == AiShapeAction::Defense && event.handling == 0)
-        {
-            self.discard_active_prefix();
-            after_base_handler(self);
-            self.passive_actions.pop_front();
-            processed = processed.wrapping_add(1);
-        }
-        processed
+        nebokrai_zone::ai::process_reached_defense_actions(self, after_base_handler)
     }
 
     /// Материализует exact `ASA_STIFFEN -> OnStiffen` и deadline-часть
@@ -400,21 +356,7 @@ impl CBaseAI {
     /// отбрасывается; движение сохраняется, атака остаётся в FIFO до ответа
     /// concrete owner-а на `CSkill::End(4)` и проверку `IsEnded`.
     pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {
-        let Some(event) = self.passive_actions.front() else {
-            return PassiveStiffenAction::None;
-        };
-        if event.action != AiShapeAction::Stiffen {
-            return PassiveStiffenAction::None;
-        }
-        if event.handling != 0 {
-            return PassiveStiffenAction::Waiting;
-        }
-        self.discard_active_prefix();
-        if self.stiffen_attack_pending() {
-            PassiveStiffenAction::InterruptAttack
-        } else {
-            PassiveStiffenAction::StartedWaiting
-        }
+        nebokrai_zone::ai::begin_reached_stiffen_action(self)
     }
 
     /// ProcessPassiveAction фиксирует результат OnStiffen и срок после callback.
@@ -423,32 +365,7 @@ impl CBaseAI {
         begun: PassiveStiffenAction,
         now: impl FnOnce() -> u32,
     ) -> PassiveStiffenAction {
-        if begun == PassiveStiffenAction::None {
-            return PassiveStiffenAction::None;
-        }
-        let Some(event) = self.passive_actions.front_mut()
-            .filter(|event| event.action == AiShapeAction::Stiffen)
-        else {
-            return PassiveStiffenAction::None;
-        };
-        if begun == PassiveStiffenAction::Waiting {
-            if event.handling != 1 {
-                return PassiveStiffenAction::Waiting;
-            }
-        } else {
-            event.handling = 1;
-        }
-        if !ai_event_deadline_reached(event, now()) {
-            return begun;
-        }
-        self.passive_actions.pop_front();
-        if begun.interrupts_attack() {
-            PassiveStiffenAction::InterruptAttackFinished
-        } else if begun == PassiveStiffenAction::StartedWaiting {
-            PassiveStiffenAction::StartedFinished
-        } else {
-            PassiveStiffenAction::Finished
-        }
+        nebokrai_zone::ai::finish_reached_stiffen_action(self, begun, now)
     }
 
     pub(crate) fn current_active_action(&self) -> Option<AiShapeAction> {
@@ -481,11 +398,7 @@ impl CBaseAI {
     /// OnStiffen продолжает обход после виртуального OnLoseTarget/default.
     /// Производный callback должен увидеть ещё не удалённый хвост очереди.
     pub(crate) fn discard_active_prefix(&mut self) {
-        while self.active_actions.front().is_some_and(|event| {
-            !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
-        }) {
-            self.active_actions.pop_front();
-        }
+        nebokrai_zone::ai::discard_active_prefix(self);
     }
 
     /// Выполняет точный `ASA_DIED -> OnBeenKilled` после того, как caller
@@ -495,40 +408,16 @@ impl CBaseAI {
     /// не завершится. Снятие Died после virtual `OnLoseTarget` выполняет
     /// парный `finish_reached_death_action` после обработчика смерти owner-а.
     pub(crate) fn begin_reached_death_action(&mut self) -> bool {
-        if !self.passive_actions.front().is_some_and(|event| {
-            event.action == AiShapeAction::Died && event.handling == 0
-        }) {
-            return false;
-        }
-
-        let retained_move = self
-            .active_actions
-            .iter()
-            .find(|event| event.action == AiShapeAction::Move)
-            .copied();
-        self.active_actions.clear();
-        if let Some(event) = retained_move {
-            self.active_actions.push_back(event);
-        }
-        true
+        nebokrai_zone::ai::begin_reached_death_action(self)
     }
 
     /// Проверяет готовность после OnLoseTarget, не снимая Died до owner OnDied.
     pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
-        if !self.passive_actions.front().is_some_and(|event| {
-            event.action == AiShapeAction::Died && event.handling == 0
-        }) {
-            return PassiveDeathAction::None;
-        }
-        if self.active_actions.is_empty() {
-            PassiveDeathAction::Ready
-        } else {
-            PassiveDeathAction::WaitingForMove
-        }
+        nebokrai_zone::ai::reached_death_action_state(self)
     }
 
     pub(crate) fn finish_reached_death_action(&mut self, now_ms: u32) {
-        Self::finish_action(&mut self.passive_actions, AiShapeAction::Died, now_ms);
+        nebokrai_zone::ai::finish_reached_death_action(self, now_ms);
     }
 
     /// Выполняет достигнутую `Stand`-ветвь `ProcessActiveAction` и сообщает,
