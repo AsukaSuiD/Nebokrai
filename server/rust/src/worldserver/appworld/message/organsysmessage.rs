@@ -10,11 +10,7 @@
 //! там изменяет `CGame`; confirmation остаётся на исходной позиции callback.
 //! Короткий payload останавливает ветку после уже выполненного префикса.
 
-use std::collections::VecDeque;
 use std::ffi::CString;
-use std::sync::Arc;
-
-use parking_lot::Mutex;
 
 use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -69,14 +65,13 @@ use crate::worldserver::appworld::organizingsystem::attackcitysys::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     AttackCityEndBlock, AttackCityEndEffects, COrganizingCtrl,
-    ConfederationCreationEffects, ConfederationCreationEndpointBlock,
+    ConfederationCreationEffects,
     ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
-    ConfederationCreationSessionRequest, ConfederationCreationSessionRuntime,
-    ConfederationCreationTerminal,
-    CityTransferEffects, CityTransferEndpointBlock,
+    ConfederationCreationSessionRequest,
+    CityTransferEffects,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
-    CityTransferSessionRuntime, CityTransferStartBlock,
-    CityTransferTerminal, DeclareWarFactionPage,
+    CityTransferStartBlock,
+    DeclareWarFactionPage,
     ApplyFactionLookup, FactionListPage,
     RemovePersonFromApplyFactionListOutcome,
     FreeFactionLookup, FreePlayerLookup,
@@ -105,10 +100,10 @@ use crate::worldserver::appworld::organizingsystem::organizing::{
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::{
-    UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
-    UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
-    UnionApplicationTerminal, UnionApplyForJoinEffects,
-    UnionInvitationSessionRequest, UnionInvitationSessionRuntime, UnionInviteEffects,
+    UnionAddFactionEffects, UnionApplicationSessionBlock,
+    UnionApplicationSessionReport, UnionApplicationSessionRequest,
+    UnionApplyForJoinEffects,
+    UnionInvitationSessionRequest, UnionInviteEffects,
     UnionFactionStateMutationContext, UnionFireOutEffects,
     UnionFormatArgument, UnionOwnedCityMutationContext,
     begin_union_application_session, begin_union_invitation_session,
@@ -121,314 +116,15 @@ use crate::worldserver::appworld::player::{
     PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerPropertyCoefficients,
 };
 use crate::worldserver::worldserver::game::{
-    CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, format_union_world_string,
-    legacy_tick_ms,
+    CGame, WorldRegionNameLookup, format_union_world_string, legacy_tick_ms,
 };
 
 pub use nebokrai_realm::app::organsysmessage::*;
 
-#[derive(Default)]
-struct WorldUnionApplicationRuntimeState {
-    terminals: Mutex<VecDeque<QueuedOrganizingSessionTerminal>>,
-    confirmations: Mutex<VecDeque<UnionApplicationConfirmationDelivery>>,
-    blocks: Mutex<VecDeque<UnionApplicationEndpointBlock>>,
-    city_confirmations: Mutex<VecDeque<CityTransferConfirmationDelivery>>,
-    city_blocks: Mutex<VecDeque<CityTransferEndpointBlock>>,
-    confederation_creation_confirmations:
-        Mutex<VecDeque<ConfederationCreationConfirmationDelivery>>,
-    confederation_creation_blocks: Mutex<VecDeque<ConfederationCreationEndpointBlock>>,
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct WorldUnionApplicationRuntimeOwner {
-    state: Arc<WorldUnionApplicationRuntimeState>,
-}
-
-impl WorldUnionApplicationRuntimeOwner {
-    fn endpoint(
-        &self,
-        sender: Option<ServerCommandHandle>,
-        game_server_id: i32,
-    ) -> Arc<dyn UnionApplicationSessionRuntime> {
-        Arc::new(WorldUnionApplicationEndpointRuntime {
-            state: Arc::clone(&self.state),
-            sender,
-            game_server_id,
-        })
-    }
-
-    fn invitation_endpoint(
-        &self,
-        sender: Option<ServerCommandHandle>,
-        game_server_id: i32,
-    ) -> Arc<dyn UnionInvitationSessionRuntime> {
-        Arc::new(WorldUnionInvitationEndpointRuntime {
-            state: Arc::clone(&self.state),
-            sender,
-            game_server_id,
-        })
-    }
-
-    fn city_endpoint(
-        &self,
-        sender: Option<ServerCommandHandle>,
-        game_server_id: i32,
-    ) -> Arc<dyn CityTransferSessionRuntime> {
-        Arc::new(WorldCityTransferEndpointRuntime {
-            state: Arc::clone(&self.state),
-            sender,
-            game_server_id,
-        })
-    }
-
-    fn confederation_creation_endpoint(
-        &self,
-        sender: Option<ServerCommandHandle>,
-        game_server_id: i32,
-    ) -> Arc<dyn ConfederationCreationSessionRuntime> {
-        Arc::new(WorldConfederationCreationEndpointRuntime {
-            state: Arc::clone(&self.state),
-            sender,
-            game_server_id,
-        })
-    }
-
-    pub(crate) fn pop_terminal(&self) -> Option<QueuedOrganizingSessionTerminal> {
-        self.state.terminals.lock().pop_front()
-    }
-
-    pub(crate) fn take_confirmations(&self) -> Vec<UnionApplicationConfirmationDelivery> {
-        self.state.confirmations.lock().drain(..).collect()
-    }
-
-    pub(crate) fn take_blocks(&self) -> Vec<UnionApplicationEndpointBlock> {
-        self.state.blocks.lock().drain(..).collect()
-    }
-
-    pub(crate) fn take_city_confirmations(&self) -> Vec<CityTransferConfirmationDelivery> {
-        self.state.city_confirmations.lock().drain(..).collect()
-    }
-
-    pub(crate) fn take_city_blocks(&self) -> Vec<CityTransferEndpointBlock> {
-        self.state.city_blocks.lock().drain(..).collect()
-    }
-
-    pub(crate) fn take_confederation_creation_confirmations(
-        &self,
-    ) -> Vec<ConfederationCreationConfirmationDelivery> {
-        self.state
-            .confederation_creation_confirmations
-            .lock()
-            .drain(..)
-            .collect()
-    }
-
-    pub(crate) fn take_confederation_creation_blocks(
-        &self,
-    ) -> Vec<ConfederationCreationEndpointBlock> {
-        self.state
-            .confederation_creation_blocks
-            .lock()
-            .drain(..)
-            .collect()
-    }
-}
-
-struct WorldUnionApplicationEndpointRuntime {
-    state: Arc<WorldUnionApplicationRuntimeState>,
-    sender: Option<ServerCommandHandle>,
-    game_server_id: i32,
-}
-
-impl UnionApplicationSessionRuntime for WorldUnionApplicationEndpointRuntime {
-    fn send_union_application_confirmation(
-        &self,
-        recipient_player_id: i32,
-        message: &CMessage,
-    ) {
-        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
-        self.state
-            .confirmations
-            .lock()
-            .push_back(UnionApplicationConfirmationDelivery {
-                recipient_player_id,
-                game_server_id: self.game_server_id,
-                result,
-            });
-    }
-
-    fn finish_union_application(
-        &self,
-        union_id: i32,
-        applicant_faction_id: i32,
-        terminal: UnionApplicationTerminal,
-    ) {
-        self.state
-            .terminals
-            .lock()
-            .push_back(QueuedOrganizingSessionTerminal::Union(
-                QueuedUnionApplicationTerminal {
-                    union_id,
-                    applicant_faction_id,
-                    terminal,
-                },
-            ));
-    }
-
-    fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock) {
-        self.state.blocks.lock().push_back(block);
-    }
-}
-
-struct WorldUnionInvitationEndpointRuntime {
-    state: Arc<WorldUnionApplicationRuntimeState>,
-    sender: Option<ServerCommandHandle>,
-    game_server_id: i32,
-}
-
-impl UnionInvitationSessionRuntime for WorldUnionInvitationEndpointRuntime {
-    fn send_union_invitation_confirmation(
-        &self,
-        recipient_player_id: i32,
-        message: &CMessage,
-    ) {
-        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
-        self.state
-            .confirmations
-            .lock()
-            .push_back(UnionApplicationConfirmationDelivery {
-                recipient_player_id,
-                game_server_id: self.game_server_id,
-                result,
-            });
-    }
-
-    fn finish_union_invitation(
-        &self,
-        union_id: i32,
-        inviter_faction_id: i32,
-        invited_faction_id: i32,
-        terminal: UnionApplicationTerminal,
-    ) {
-        self.state.terminals.lock().push_back(
-            QueuedOrganizingSessionTerminal::UnionInvitation(
-                QueuedUnionInvitationTerminal {
-                    union_id,
-                    inviter_faction_id,
-                    invited_faction_id,
-                    terminal,
-                },
-            ),
-        );
-    }
-
-    fn block_union_invitation_endpoint(&self, block: UnionApplicationEndpointBlock) {
-        self.state.blocks.lock().push_back(block);
-    }
-}
-
-struct WorldConfederationCreationEndpointRuntime {
-    state: Arc<WorldUnionApplicationRuntimeState>,
-    sender: Option<ServerCommandHandle>,
-    game_server_id: i32,
-}
-
-impl ConfederationCreationSessionRuntime for WorldConfederationCreationEndpointRuntime {
-    fn send_confederation_creation_confirmation(
-        &self,
-        recipient_player_id: i32,
-        message: &CMessage,
-    ) {
-        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
-        self.state
-            .confederation_creation_confirmations
-            .lock()
-            .push_back(ConfederationCreationConfirmationDelivery {
-                recipient_player_id,
-                game_server_id: self.game_server_id,
-                result,
-            });
-    }
-
-    fn finish_confederation_creation(
-        &self,
-        first_player_id: i32,
-        second_player_id: i32,
-        first_faction_id: i32,
-        second_faction_id: i32,
-        union_name: &[u8],
-        terminal: ConfederationCreationTerminal,
-    ) {
-        self.state.terminals.lock().push_back(
-            QueuedOrganizingSessionTerminal::ConfederationCreation(
-                QueuedConfederationCreationTerminal {
-                    first_player_id,
-                    second_player_id,
-                    first_faction_id,
-                    second_faction_id,
-                    union_name: union_name.to_vec(),
-                    terminal,
-                },
-            ),
-        );
-    }
-
-    fn block_confederation_creation_endpoint(
-        &self,
-        block: ConfederationCreationEndpointBlock,
-    ) {
-        self.state
-            .confederation_creation_blocks
-            .lock()
-            .push_back(block);
-    }
-}
-
-struct WorldCityTransferEndpointRuntime {
-    state: Arc<WorldUnionApplicationRuntimeState>,
-    sender: Option<ServerCommandHandle>,
-    game_server_id: i32,
-}
-
-impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
-    fn send_city_transfer_confirmation(&self, recipient_player_id: i32, message: &CMessage) {
-        let result = message.send_to_map_id(self.sender.as_ref(), self.game_server_id);
-        self.state
-            .city_confirmations
-            .lock()
-            .push_back(CityTransferConfirmationDelivery {
-                recipient_player_id,
-                game_server_id: self.game_server_id,
-                result,
-            });
-    }
-
-    fn finish_city_transfer(
-        &self,
-        source_faction_id: i32,
-        target_faction_id: i32,
-        region_id: i32,
-        region_name: &[u8],
-        terminal: CityTransferTerminal,
-    ) {
-        self.state
-            .terminals
-            .lock()
-            .push_back(QueuedOrganizingSessionTerminal::CityTransfer(
-                QueuedCityTransferTerminal {
-                    source_faction_id,
-                    target_faction_id,
-                    region_id,
-                    region_name: region_name.to_vec(),
-                    terminal,
-                },
-            ));
-    }
-
-    fn block_city_transfer_endpoint(&self, block: CityTransferEndpointBlock) {
-        self.state.city_blocks.lock().push_back(block);
-    }
-}
+/// Session-runtime владелец слит с realm [`WorldOrganizingSessionRuntimeOwner`]:
+/// прежнее имя сохраняет импорты main-loop runtime и адаптеров; очереди едины —
+/// это тот же самый `Arc`-state, type-алиас расхождения не создаёт.
+pub(crate) use nebokrai_realm::app::organsysmessage::WorldOrganizingSessionRuntimeOwner as WorldUnionApplicationRuntimeOwner;
 
 pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
@@ -3743,53 +3439,9 @@ fn send_faction_tax_notice<Context>(
     });
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingRegionParamDispatch {
-    pub(crate) region_id: i32,
-    pub(crate) today_total_tax: u32,
-    pub(crate) total_tax: u32,
-    pub(crate) current_tax_rate: i32,
-    pub(crate) region: WorldRegionParamUpdateOutcome,
-    pub(crate) broadcast: Option<OrganizingRegionParamBroadcast>,
-}
-
-pub(crate) fn dispatch_region_param_update(
-    message: &mut CMessage,
-    game: &mut CGame,
-    sender: Option<&ServerCommandHandle>,
-) -> Option<OrganizingRegionParamDispatch> {
-    if message.message_type() != UPDATE_REGION_PARAM_MESSAGE_TYPE {
-        return None;
-    }
-
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let today_total_tax = message.base_mut().get_long().unwrap_or(0) as u32;
-    let total_tax = message.base_mut().get_long().unwrap_or(0) as u32;
-    let current_tax_rate = message.base_mut().get_long().unwrap_or(0);
-    let region = game.set_region_param_from_game_server(
-        region_id,
-        current_tax_rate,
-        today_total_tax,
-        total_tax,
-    );
-    let broadcast = if region == WorldRegionParamUpdateOutcome::Applied {
-        message.set_message_type(UPDATE_REGION_PARAM_RESPONSE_TYPE);
-        let wire = message.as_wire_bytes().to_vec();
-        let delivery = message.send_all(sender);
-        Some(OrganizingRegionParamBroadcast { wire, delivery })
-    } else {
-        None
-    };
-    Some(OrganizingRegionParamDispatch {
-        region_id,
-        today_total_tax,
-        total_tax,
-        current_tax_rate,
-        region,
-        broadcast,
-    })
-}
-
+// `OrganizingRegionParamDispatch` и `dispatch_region_param_update` перенесены в
+// realm (`nebokrai_realm::app::organsysmessage`) первой без-организационной
+// ветвью диспетчера; имена доступны здесь через glob re-export выше.
 pub(crate) fn dispatch_region_route(
     message: &mut CMessage,
     game: &CGame,

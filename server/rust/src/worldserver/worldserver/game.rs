@@ -5287,13 +5287,9 @@ pub(crate) struct WorldGameAiReport {
 
 pub(crate) use nebokrai_realm::app::gmmessage::{WorldNamedRegionLookup, WorldNamedRegionMatch, WorldRegionIdRouteScan, WorldRegionIdRoute};
 pub(crate) use nebokrai_realm::app::world_game_view::WorldRegionNameLookup;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionParamUpdateOutcome {
-    RegionNotFound,
-    NullRegionPointer,
-    Applied,
-}
+// `WorldRegionParamUpdateOutcome` перевезён в `world_game_view` со швом ветки
+// `0x6012D`; здесь реэкспорт для dispatcher-обвязки и outcome-события.
+pub(crate) use nebokrai_realm::app::world_game_view::WorldRegionParamUpdateOutcome;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldOwnedCityRefreshReport {
@@ -16818,6 +16814,63 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
             rs_player,
             player_database,
         ))
+    }
+
+    fn set_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        current_tax_rate: i32,
+        today_total_tax: u32,
+        total_tax: u32,
+    ) -> WorldRegionParamUpdateOutcome {
+        CGame::set_region_param_from_game_server(
+            self,
+            region_id,
+            current_tax_rate,
+            today_total_tax,
+            total_tax,
+        )
+    }
+
+    fn login_server_id(&self) -> i32 {
+        CGame::login_server_id(self)
+    }
+
+    fn check_invalid_string(&self, value: &mut Vec<u8>, replace: bool) -> bool {
+        CGame::check_invalid_string(self, value, replace)
+    }
+
+    fn region_owned_faction_id(&self, region_id: i32) -> Option<i32> {
+        CGame::region_owned_faction_id(self, region_id)
+    }
+
+    fn region_country_id(&self, region_id: i32) -> Option<u8> {
+        CGame::region_country_id(self, region_id)
+    }
+
+    fn has_materialized_region(&self, region_id: i32) -> bool {
+        CGame::has_materialized_region(self, region_id)
+    }
+
+    fn connected_game_server_indices(&self) -> Vec<i32> {
+        CGame::connected_game_server_indices(self).collect()
+    }
+
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterReset> {
+        CGame::reset_online_player_murder_counters(self, player_id)
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldPlayerFactionInfoUpdateView for CGame {
+    fn update_player_faction_info(
+        &self,
+        organizing: &COrganizingCtrl,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
+        CGame::update_player_faction_info(self, organizing, player_id)
     }
 }
 

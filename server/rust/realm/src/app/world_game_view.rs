@@ -23,8 +23,8 @@ use crate::app::player_base::WorldPlayerBaseGameView;
 use crate::characters::player::{
     CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
     PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerFactionInfoUpdateBlock,
-    PlayerFactionInfoUpdateReport, PlayerOrganizingUpdateError, PlayerOriginEquipmentBlock,
-    PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
+    PlayerFactionInfoUpdateReport, PlayerMurderCounterReset, PlayerOrganizingUpdateError,
+    PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
 };
 use crate::content::countryparam::CCountryParam;
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
@@ -78,6 +78,17 @@ pub enum WorldLoginTimeoutTeamExit {
     SessionMissingOrNotTeam,
     PlugMissing,
     Exited,
+}
+
+/// Исход применения регионального параметра из GameServer-пакета: ячейка
+/// карты отсутствует, владелец null-ячейки либо значение применено.
+/// Тип перевезён из `game.rs` вместе со швом ветки `0x6012D`; старый пакет
+/// реэкспортирует его для оставшегося dispatcher-а.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldRegionParamUpdateOutcome {
+    RegionNotFound,
+    NullRegionPointer,
+    Applied,
 }
 
 /// Точки обратного вызова handler-ветвей мира в владельца игры. Реализация
@@ -326,6 +337,44 @@ pub trait WorldGameView {
         rs_player: &'a mut (dyn WorldRenameDbView + 'a),
         player_database: Option<&'a mut WorldTdsClient>,
     ) -> Pin<Box<dyn Future<Output = Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>> + 'a>>;
+
+    /// Применение регионального параметра ветки `0x6012D`; реализация
+    /// делегирует одноимённый inherent-метод с той же трёхисходной свёрткой
+    /// карты регионов.
+    fn set_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        current_tax_rate: i32,
+        today_total_tax: u32,
+        total_tax: u32,
+    ) -> WorldRegionParamUpdateOutcome;
+
+    /// Назначенный LoginServer id; `0` до `assign_login_server_id`.
+    fn login_server_id(&self) -> i32;
+
+    /// Legacy words-filter `Check` над c-string префиксом; реализация
+    /// делегирует одноимённый inherent-метод владельца игры.
+    fn check_invalid_string(&self, value: &mut Vec<u8>, replace: bool) -> bool;
+
+    /// Owned-city фракция региона; `None` — регион не найден либо null-owner.
+    fn region_owned_faction_id(&self, region_id: i32) -> Option<i32>;
+
+    /// Страна региона; `None` — регион не найден, null-owner либо страна не
+    /// назначена в region_base.
+    fn region_country_id(&self, region_id: i32) -> Option<u8>;
+
+    /// Материализованный регион: entry карты есть, и владелец не null.
+    fn has_materialized_region(&self, region_id: i32) -> bool;
+
+    /// Индексы подключённых GameServer; inherent-iterator свёрнут в `Vec`
+    /// на границе dyn-view.
+    fn connected_game_server_indices(&self) -> Vec<i32>;
+
+    /// Сброс murder-counters mapped-игрока; `None` — игрок не в online-list.
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterReset>;
 }
 
 /// Узкий dyn-заменитель одного DB-запроса переименования. `RsPlayerOwner`
@@ -733,5 +782,17 @@ pub trait WorldPlayerDetailGameView: WorldOnlinePlayerRemovalView {
         organizing: &mut Self::OrganizingContext,
         player_id: i32,
     ) -> bool;
+}
+
+/// Общий шов organizing-вызова обновления faction-информации игрока ветвей
+/// диспетчера: реализация делегирует inherent `CGame::update_player_faction_info`,
+/// а organizing-контекст принадлежит владельцу игры — по форме шва
+/// [`WorldOnlinePlayerRemovalView`].
+pub trait WorldPlayerFactionInfoUpdateView: WorldPlayerBaseGameView {
+    fn update_player_faction_info(
+        &self,
+        organizing: &Self::OrganizingContext,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock>;
 }
 
