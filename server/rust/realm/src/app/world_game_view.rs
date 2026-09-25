@@ -3,6 +3,7 @@
 use nebokrai_shared::network::ServerCommandHandle;
 
 use crate::app::world_message::{CMessage, SendMessageError};
+use crate::characters::player::CPlayer;
 
 /// Снимок состояния game server-а: наличие коннекта и числовой индекс маршрута.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +32,19 @@ pub trait WorldGameView {
 
     fn player_game_server(&self, player_id: i32) -> Option<WorldGameServerSnapshot>;
 
+    fn map_player(&self, player_id: u32) -> Option<&CPlayer>;
+
     fn legacy_tick_ms(&self) -> u32;
+
+    fn set_map_player_jjc_identity(&mut self, player_id: u32, level: u8, jjc_level: u32) -> bool;
+
+    fn set_map_player_jjc_snapshot(
+        &mut self,
+        player_id: u32,
+        level: u8,
+        jjc_level: u32,
+        jjc_score: u32,
+        counters: [u8; 0x10],
+    ) -> bool;
 }
 

@@ -17037,8 +17037,27 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         })
     }
 
+    fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
+        CGame::map_player(self, player_id)
+    }
+
     fn legacy_tick_ms(&self) -> u32 {
         legacy_tick_ms()
+    }
+
+    fn set_map_player_jjc_identity(&mut self, player_id: u32, level: u8, jjc_level: u32) -> bool {
+        CGame::set_map_player_jjc_identity(self, player_id, level, jjc_level)
+    }
+
+    fn set_map_player_jjc_snapshot(
+        &mut self,
+        player_id: u32,
+        level: u8,
+        jjc_level: u32,
+        jjc_score: u32,
+        counters: [u8; 0x10],
+    ) -> bool {
+        CGame::set_map_player_jjc_snapshot(self, player_id, level, jjc_level, jjc_score, counters)
     }
 }
 
