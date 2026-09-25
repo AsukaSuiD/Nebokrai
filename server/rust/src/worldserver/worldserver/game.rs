@@ -17000,6 +17000,12 @@ impl nebokrai_realm::characters::honorranks::HonorRanksGameView for CGame {
     }
 }
 
+impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
+    fn current_game_server_sender(&self) -> Option<ServerCommandHandle> {
+        CGame::current_game_server_sender(self)
+    }
+}
+
 impl nebokrai_realm::activities::leiting::LeiTingGameView for CGame {
     type Player = CPlayer;
 
