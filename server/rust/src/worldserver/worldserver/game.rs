@@ -420,9 +420,7 @@ use crate::worldserver::worldserver::playerranks::{
     PlayerRanksSerializationBlock,
 };
 use crate::worldserver::worldserver::savedb::{
-    DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataLifecycleState, SaveDataLogEvent,
-    SaveDataLogPublishBlock, SaveDataLogPublishDisposition, SaveDataLogSink, SaveDataLogTarget,
-    SaveDataMonitoringSnapshot, do_save_data_lifecycle,
+    SaveDataLifecycleState, SaveDataLogSink, SaveDataMonitoringSnapshot,
 };
 use crate::worldserver::worldserver::worldserver::{
     AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent,
@@ -1987,12 +1985,16 @@ pub(crate) struct WorldMainLoopSessionFactoryStageReport {
 }
 
 // Диагностические типы player-data маршрута и player-load FIFO перевезены в
-// Realm world_game_view вместе с ветвью select; здесь реэкспорт для
-// оставшейся queue-обработки и producer-ов присутствия.
+// Realm world_game_view вместе с ветвью select и queue-стадией MainLoop; здесь
+// реэкспорт для inherent маршрута и producer-ов присутствия.
 pub(crate) use nebokrai_realm::app::world_game_view::{
     WorldFriendPresenceUpdate, WorldPlayerDataQueueRejectReason, WorldPlayerLoadRequestBlock,
-    WorldPlayerLoadRequestOutcome,
+    WorldPlayerLoadRequestOutcome, WorldProcessPlayerDataQueueBlock,
+    WorldProcessPlayerDataQueueError, WorldProcessPlayerDataQueueOutcome,
 };
+// Отчёт queue-стадии MainLoop перенесён в Realm app вместе со stage-handler-ом;
+// здесь реэкспорт для сборки MainLoop report и block-ветки.
+pub(crate) use nebokrai_realm::app::playerdataqueue::WorldMainLoopPlayerDataQueueStageReport;
 
 /// Два подтверждённых порядка одного route: direct `GetPlayerData` публикует
 /// player до friend-loop, а `ProcessPlayerDataQueue` — после него.
@@ -2000,49 +2002,6 @@ pub(crate) use nebokrai_realm::app::world_game_view::{
 pub(crate) enum WorldLoadedPlayerRouteOrder {
     Direct,
     LoadedQueue,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldProcessPlayerDataQueueOutcome {
-    NoRecord {
-        initial_size: u32,
-        null_pops: u32,
-    },
-    Rejected {
-        initial_size: u32,
-        null_pops: u32,
-        queue_player_id: u32,
-        client_ip: u32,
-        reason: WorldPlayerDataQueueRejectReason,
-        login_delivery: Result<i32, SendMessageError>,
-    },
-    Accepted {
-        initial_size: u32,
-        null_pops: u32,
-        player_id: u32,
-        client_ip: u32,
-        game_server_index: u32,
-        login_delivery: Result<i32, SendMessageError>,
-        friend_updates: Vec<WorldFriendPresenceUpdate>,
-        online_removal: WorldOnlinePlayerRemoveOutcome,
-        replaced_existing_player: bool,
-        login_time_ms: u32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldProcessPlayerDataQueueBlock {
-    UnterminatedCdkey,
-    Organizing(PlayerOrganizingUpdateError),
-    UninitializedGameServerPort { game_server_index: u32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldProcessPlayerDataQueueError {
-    pub(crate) initial_size: u32,
-    pub(crate) null_pops: u32,
-    pub(crate) player_id: u32,
-    pub(crate) block: WorldProcessPlayerDataQueueBlock,
 }
 
 /// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
@@ -2136,20 +2095,6 @@ where
 pub(crate) struct WorldPlayerLargessLoadReport {
     pub(crate) load: LoadLargessReport,
     pub(crate) write_log_queue_length: Option<usize>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopPlayerDataQueueStageReport {
-    Complete {
-        outcome: WorldProcessPlayerDataQueueOutcome,
-        finished_at_ms: u32,
-        elapsed_ms: u32,
-        accumulated_time_ms: u32,
-        next_stage_started_at_ms: u32,
-    },
-    Blocked {
-        error: WorldProcessPlayerDataQueueError,
-    },
 }
 
 #[derive(Debug)]
@@ -12064,93 +12009,6 @@ impl CGame {
         })
     }
 
- /// Обрабатывает не более одного non-null record-а из начального snapshot.
- ///
- /// Null-pop не завершает метод: он уменьшает только сохранённый snapshot и
- /// повторяет pop. Любая фактически извлечённая запись проходит ровно одну
- /// reject либо success цепочку и затем безусловно завершает вызов.
-    pub(crate) fn process_player_data_queue<GetTick>(
-        &mut self,
-        organizing_ctrl: &mut COrganizingCtrl,
-        mut get_tick: GetTick,
-    ) -> Result<WorldProcessPlayerDataQueueOutcome, WorldProcessPlayerDataQueueError>
-    where
-        GetTick: FnMut() -> u32,
-    {
-        let initial_size = self.player_data_queue.get_size();
-        let mut remaining = initial_size;
-        let mut null_pops = 0_u32;
-
-        while remaining != 0 {
-            let Some(mut entry) = self.player_data_queue.pop_player_data() else {
-                remaining = remaining.wrapping_sub(1);
-                null_pops = null_pops.wrapping_add(1);
-                continue;
-            };
-
-            let queue_player_id = entry.player_id();
-            let client_ip = entry.client_ip();
-            let Some(cdkey) = entry.cdkey().map(<[u8]>::to_vec) else {
-                return Err(WorldProcessPlayerDataQueueError {
-                    initial_size,
-                    null_pops,
-                    player_id: queue_player_id,
-                    block: WorldProcessPlayerDataQueueBlock::UnterminatedCdkey,
-                });
-            };
-            let mut after_login_send = |_player: &mut CPlayer| {};
-            return self.route_loaded_player(
-                organizing_ctrl,
-                initial_size,
-                null_pops,
-                queue_player_id,
-                client_ip,
-                &cdkey,
-                entry.take_player(),
-                WorldLoadedPlayerRouteOrder::LoadedQueue,
-                &mut after_login_send,
-                &mut get_tick,
-            );
-        }
-
-        Ok(WorldProcessPlayerDataQueueOutcome::NoRecord {
-            initial_size,
-            null_pops,
-        })
-    }
-
-    pub(crate) fn run_main_loop_player_data_queue_stage<GetTick>(
-        &mut self,
-        organizing_ctrl: &mut COrganizingCtrl,
-        clocks: &mut WorldMainLoopClockState,
-        profile_state: &mut WorldMainLoopProfileState,
-        mut get_tick: GetTick,
-    ) -> WorldMainLoopPlayerDataQueueStageReport
-    where
-        GetTick: FnMut() -> u32,
-    {
-        let outcome = match self.process_player_data_queue(organizing_ctrl, &mut get_tick) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                return WorldMainLoopPlayerDataQueueStageReport::Blocked { error };
-            }
-        };
-        let finished_at_ms = get_tick();
-        let elapsed_ms = finished_at_ms.wrapping_sub(clocks.stage_started_at_ms);
-        profile_state.process_player_data_queue_time_ms = profile_state
-            .process_player_data_queue_time_ms
-            .wrapping_add(elapsed_ms);
-        let next_stage_started_at_ms = get_tick();
-        clocks.stage_started_at_ms = next_stage_started_at_ms;
-        WorldMainLoopPlayerDataQueueStageReport::Complete {
-            outcome,
-            finished_at_ms,
-            elapsed_ms,
-            accumulated_time_ms: profile_state.process_player_data_queue_time_ms,
-            next_stage_started_at_ms,
-        }
-    }
-
  /// Выполняет `CTimer::Run`, закрывает `DAT_0056e520` и начинает faction-war стадию.
  ///
  /// `profile_state.ai_calls` является текущим `CGame::s_lAITick`. Timer
@@ -13486,17 +13344,23 @@ impl CGame {
             state.profile,
             &mut *callbacks.get_tick,
         );
-        let player_data_queue = match self.run_main_loop_player_data_queue_stage(
-            owners.organizing,
-            state.clocks,
-            state.profile,
-            &mut *callbacks.get_tick,
-        ) {
-            complete @ WorldMainLoopPlayerDataQueueStageReport::Complete { .. } => complete,
-            blocked @ WorldMainLoopPlayerDataQueueStageReport::Blocked { .. } => {
-                return Err(Box::new(WorldMainLoopBlock::PlayerDataQueue(blocked)));
-            }
-        };
+        // Arc-handle той же очереди вместо поля self: G-аргумент игры и queue
+        // уходят раздельными заёмными ссылками, поведение FIFO не меняется.
+        let player_data_queue_handle = self.player_data_queue.clone();
+        let player_data_queue =
+            match nebokrai_realm::app::playerdataqueue::run_main_loop_player_data_queue_stage(
+                self,
+                owners.organizing,
+                &player_data_queue_handle,
+                &mut state.clocks.stage_started_at_ms,
+                &mut state.profile.process_player_data_queue_time_ms,
+                &mut *callbacks.get_tick,
+            ) {
+                complete @ WorldMainLoopPlayerDataQueueStageReport::Complete { .. } => complete,
+                blocked @ WorldMainLoopPlayerDataQueueStageReport::Blocked { .. } => {
+                    return Err(Box::new(WorldMainLoopBlock::PlayerDataQueue(blocked)));
+                }
+            };
         let timer = self
             .run_main_loop_timer_stage(
                 owners.timer,
@@ -17049,6 +16913,36 @@ impl nebokrai_realm::app::world_game_view::WorldPlayerSelectGameView for CGame {
                 },
             }),
         }
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldPlayerQueueGameView for CGame {
+    #[allow(clippy::too_many_arguments, reason = "точная форма route-вызова queue-стадии")]
+    fn route_loaded_player(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        initial_size: u32,
+        null_pops: u32,
+        queue_player_id: u32,
+        client_ip: u32,
+        cdkey: &[u8],
+        player: Option<Box<CPlayer>>,
+        after_login_send: &mut dyn FnMut(&mut CPlayer),
+        get_tick: &mut dyn FnMut() -> u32,
+    ) -> Result<WorldProcessPlayerDataQueueOutcome, WorldProcessPlayerDataQueueError> {
+        CGame::route_loaded_player(
+            self,
+            organizing,
+            initial_size,
+            null_pops,
+            queue_player_id,
+            client_ip,
+            cdkey,
+            player,
+            WorldLoadedPlayerRouteOrder::LoadedQueue,
+            after_login_send,
+            get_tick,
+        )
     }
 }
 
@@ -21250,65 +21144,21 @@ impl WorldMessageHandlers for WorldOwnerSelector {
     }
 }
 
-pub(crate) struct WorldSaveThreadGuard<'save> {
-    save: &'save mut WorldSaveDataOwner,
-}
+// Worker-вход SaveThreadFunc, его report-тип и динамическая граница между
+// game-триггером и process save-owner-ом перенесены в Realm
+// `persistence/saveworker` (волна 7 сохраняющего пайплайна). Здесь реэкспорт
+// для старого пакета; `WorldRunSaveGuard` сохраняет старое имя как alias над
+// generic-формой, потому что сам `CGame` остаётся у этого owner-а.
+pub(crate) use nebokrai_realm::persistence::saveworker::{
+    WorldSaveRuntimeContext, WorldSaveThreadReport,
+};
 
-pub(crate) struct WorldRunSaveGuard<'game> {
-    game: &'game mut CGame,
-}
-
-impl WorldRunSaveGuard<'_> {
-    fn release(self) {}
-    fn stop_outer_owner(self) {}
-}
-
-impl<'save> WorldSaveThreadGuard<'save> {
-    pub(crate) fn into_save_owner(self) -> &'save mut WorldSaveDataOwner {
-        self.save
-    }
-
-    fn release(self) {}
-
-    fn stop_outer_owner(self) {}
-}
-
-pub(crate) enum WorldSaveThreadReport<'save> {
-    BlockedStartLog {
-        guard: WorldSaveThreadGuard<'save>,
-        block: SaveDataLogPublishBlock,
-    },
-    BlockedLifecycle {
-        guard: WorldSaveThreadGuard<'save>,
-        start_log: SaveDataLogPublishDisposition,
-        lifecycle: DoSaveDataLifecycleReport,
-    },
-    BlockedEndLog {
-        start_log: SaveDataLogPublishDisposition,
-        lifecycle: DoSaveDataLifecycleReport,
-        block: SaveDataLogPublishBlock,
-    },
-    Complete {
-        start_log: SaveDataLogPublishDisposition,
-        lifecycle: DoSaveDataLifecycleReport,
-        end_log: SaveDataLogPublishDisposition,
-        exit_code: u32,
-    },
-}
+pub(crate) type WorldRunSaveGuard<'game> =
+    nebokrai_realm::persistence::saveworker::WorldRunSaveGuard<'game, CGame>;
 
 pub(crate) use nebokrai_realm::app::worldserver::{
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
-
-pub(crate) trait WorldSaveRuntimeContext {
-    fn try_enter_trigger(&mut self) -> bool;
-    fn leave_trigger(&mut self);
-    fn launch(
-        &mut self,
-        request: &WorldSaveThreadLaunchRequest,
-        job: WorldSaveThreadJob,
-    ) -> WorldSaveThreadHandleState;
-}
 
 #[derive(Debug)]
 pub(crate) struct WorldRunSaveLaunchReport {
@@ -21414,31 +21264,13 @@ pub(crate) enum WorldRunSaveTriggerReport<'game> {
     Complete(WorldRunSaveTriggerDisposition),
 }
 
-fn save_data_lifecycle_completed(report: &DoSaveDataLifecycleReport) -> bool {
-    matches!(
-        report,
-        DoSaveDataLifecycleReport::Final {
-            report: crate::worldserver::worldserver::savedb::SaveDataFinalReport {
-                disposition: SaveDataFinalDisposition::Complete(_),
-                ..
-            },
-            ..
-        }
-    )
-}
-
-fn save_thread_log_event(payload: &'static [u8]) -> SaveDataLogEvent {
-    SaveDataLogEvent {
-        target: SaveDataLogTarget::AddLogText,
-        payload: payload.to_vec(),
-    }
-}
-
-/// Выполняет body `SaveThreadFunc` внутри уже созданного worker-thread.
+/// Делегирует один системный `SaveThreadFunc` worker-у Realm
+/// `persistence/saveworker` с прежней сигнатурой старого call-site.
 ///
-/// `CoInitialize/CoUninitialize` не имеют Linux runtime-аналога: действующие
-/// DB-owner-ы используют Tiberius, поэтому COM apartment был заменяемым
-/// техническим механизмом, а не наблюдаемым серверным контрактом.
+/// Единственный внешний hook — `SendErrLog` в Login (`send_err_log_to_login`)
+/// — остаётся у этого owner-а до monitoring-message волны и передаётся
+/// последним closure-параметром; результат `CMessage::Send` исходно
+/// игнорировался и сохранён в `_legacy_result` тем же оператором.
 #[allow(
     clippy::too_many_arguments,
     reason = "SaveThreadFunc передаёт прежние process-global owner-ы явно"
@@ -21508,87 +21340,43 @@ where
     ReleaseSerialization: FnOnce(),
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
 {
-    let guard = WorldSaveThreadGuard { save };
-    let start_log = match log_sink.publish(&save_thread_log_event(b"SaveThread Starting...")) {
-        SaveDataLogPublishDisposition::BlockedMissingFact(block) => {
-            return WorldSaveThreadReport::BlockedStartLog { guard, block };
-        }
-        disposition => disposition,
-    };
-
- // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
- // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
-    let login_sender = guard.save.login_sender.as_deref();
-    let lifecycle = {
-        let mut session = WorldDbDataSaveSession {
-            data: &mut guard.save.data,
-        };
-        do_save_data_lifecycle(
-            settings,
-            state,
-            &mut session,
-            variables,
-            registry,
-            honor_ranks,
-            gods_battle_faction_xyd,
-            gods_battle_npc_factions,
-            use_old_save_largess_way,
-            setup_database,
-            variable_database,
-            player_database,
-            jjc_database,
-            goods_database,
-            union_database,
-            faction_database,
-            region_database,
-            gods_battle_database,
-            enemy_factions_database,
-            country_database,
-            largess,
-            log_sink,
-            publish_state,
-            get_monitoring,
-            |monitoring| {
-                let _legacy_result = send_err_log_to_login(
-                    login_sender,
-                    monitoring.message_type,
-                    monitoring.server_id,
-                    monitoring.world_number_bits as i32,
-                    Some(&monitoring.text),
-                );
-            },
-        )
-        .await
-    };
-
-    if !save_data_lifecycle_completed(&lifecycle) {
-        return WorldSaveThreadReport::BlockedLifecycle {
-            guard,
-            start_log,
-            lifecycle,
-        };
-    }
-
- // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
-    guard.release();
-    release_serialization();
-    let end_log = match log_sink.publish(&save_thread_log_event(b"SaveThread end...")) {
-        SaveDataLogPublishDisposition::BlockedMissingFact(block) => {
-            return WorldSaveThreadReport::BlockedEndLog {
-                start_log,
-                lifecycle,
-                block,
-            };
-        }
-        disposition => disposition,
-    };
-
-    WorldSaveThreadReport::Complete {
-        start_log,
-        lifecycle,
-        end_log,
-        exit_code: 0,
-    }
+    nebokrai_realm::persistence::saveworker::save_thread_func(
+        save,
+        settings,
+        state,
+        variables,
+        registry,
+        honor_ranks,
+        gods_battle_faction_xyd,
+        gods_battle_npc_factions,
+        use_old_save_largess_way,
+        setup_database,
+        variable_database,
+        player_database,
+        jjc_database,
+        goods_database,
+        union_database,
+        faction_database,
+        region_database,
+        gods_battle_database,
+        enemy_factions_database,
+        country_database,
+        largess,
+        log_sink,
+        publish_state,
+        release_serialization,
+        get_monitoring,
+        |login_sender, monitoring| {
+            let _legacy_result = send_err_log_to_login(
+                login_sender,
+                monitoring.message_type,
+                monitoring.server_id,
+                monitoring.world_number_bits as i32,
+                Some(&monitoring.text),
+            );
+        },
+    )
+    .await
 }
 
 pub(crate) fn reload_conf_log<GetLocalTime>(
