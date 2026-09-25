@@ -146,6 +146,9 @@
 //! затем полностью заменяет ordered set запрещённых для производства товаров;
 //! `FindForbidGood` `0x0007D6A0` выполняет точный lookup C-string в этом set.
 //! До вызова decoder-а setup остаётся отдельной typed-границей.
+//! Ядра weather tick/change, return-setup fallback и war-фазовые с
+//! ownership/state accessors делегированы Zone
+//! `regions/serverregion/{weather,returnsetup,war}` без смены сигнатур.
 //! Достигнутый player-leave call из `RemoveObject` попадает в тот же exact
 //! `ret 4` RVA `0x00201A70`, поэтому отдельного наблюдаемого эффекта не имеет.
 //! Packet↔ground проход владеет созданными им `CGoods`, точной 49-cell
@@ -199,8 +202,8 @@ use crate::setup::monsterlist::{
 
 pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
 pub(crate) use nebokrai_zone::regions::serverregion::{
-    areagrid::*, blocks::*, geometry::*, membership::*, queries::*, registry::*, tax::*,
-    transitions::*, weather::*,
+    areagrid::*, blocks::*, geometry::*, membership::*, queries::*, registry::*, returnsetup::*,
+    tax::*, transitions::*, war::*, weather::*,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -286,36 +289,12 @@ impl NetSessionEndpoint for RegionTaxSessionEndpoint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerReturnPlayer {
-    pub(crate) id: i32,
-    pub(crate) country: u8,
-    pub(crate) faction_id: i32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerReturnSetup {
-    pub(crate) region_id: i32,
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    pub(crate) does_recall_when_lost: i32,
-    pub(crate) move_monster_when_refeash: i32,
-    pub(crate) use_return: i32,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionClearPlayerTick {
     Waiting { remaining_ms: i32, elapsed_ms: u32 },
     Warning { remaining_ms: i32, seconds: i32 },
     Expired,
 }
-
-/// BLOCKED_MISSING_FACT: constructor не записывает `m_stSetup`; безопасный
-/// результат возможен только после доказанного decoder/writer-а.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ServerReturnSetupBlock;
 
 /// BLOCKED_MISSING_FACT: исходный setup decoder не принимает buffer length;
 /// truncated `m_stSetup` в safe Rust останавливается на точной границе.
@@ -590,9 +569,10 @@ impl CServerRegion {
         )
     }
 
-    /// Возвращает живой тип блока клетки для пошагового полёта навыка.
+    /// Возвращает живой тип блока клетки для пошагового полёта навыка; ядро
+    /// принадлежит Zone `regions/serverregion/blocks`.
     pub(crate) fn skill_cell_block(&self, x: i32, y: i32) -> u8 {
-        self.region.get_block(x, y).unwrap_or(2)
+        skill_cell_block(&self.region, x, y)
     }
 
     pub(crate) const fn tax_rate(&self) -> i32 {
@@ -628,49 +608,19 @@ impl CServerRegion {
     }
 
     /// Periodic weather fragment `CServerRegion::AI`; caller уже применил
-    /// общий one-second gate monster/weather prefix-а.
+    /// общий one-second gate monster/weather prefix-а. Ядро принадлежит Zone
+    /// `regions/serverregion/weather`.
     pub(crate) fn advance_weather_tick(
         &mut self,
-        mut random_below: impl FnMut(i32) -> i32,
+        random_below: impl FnMut(i32) -> i32,
     ) -> ServerRegionWeatherTick {
-        self.current_weather_count = self.current_weather_count.wrapping_add(1);
-        let Some(current) = self.weather_setup.get(self.current_weather_segment) else {
-            return ServerRegionWeatherTick::Waiting {
-                segment: self.current_weather_segment,
-                count: self.current_weather_count,
-            };
-        };
-        if current.time > self.current_weather_count {
-            return ServerRegionWeatherTick::Waiting {
-                segment: self.current_weather_segment,
-                count: self.current_weather_count,
-            };
-        }
-
-        self.current_weather_count = 0;
-        self.current_weather_segment = self.current_weather_segment.wrapping_add(1);
-        if self.current_weather_segment >= self.weather_setup.len() {
-            self.current_weather_segment = 0;
-        }
-        let segment = self.current_weather_segment;
-        let options = &self.weather_setup[segment].options;
-        if options.is_empty() {
-            self.current_weather.clear();
-            return ServerRegionWeatherTick::Changed {
-                segment,
-                weather: Vec::new(),
-            };
-        }
-
-        let odds = random_below(100);
-        let Some(option) = options.iter().find(|option| odds < option.cumulative_odds) else {
-            return ServerRegionWeatherTick::AdvancedWithoutSelection { segment };
-        };
-        self.current_weather.clone_from(&option.weather);
-        ServerRegionWeatherTick::Changed {
-            segment,
-            weather: self.current_weather.clone(),
-        }
+        advance_weather_tick(
+            &self.weather_setup,
+            &mut self.current_weather,
+            &mut self.current_weather_segment,
+            &mut self.current_weather_count,
+            random_below,
+        )
     }
 
     pub(crate) fn current_weather(&self) -> &[ServerRegionWeather] {
@@ -679,13 +629,10 @@ impl CServerRegion {
 
     /// `CServerRegion::ChangeWeather` заменяет текущую погоду единственной
     /// записью с нулевым цветом тумана; сетевую публикацию выполняет владелец
-    /// `CGame`, располагающий настоящим сервером сеансов.
+    /// `CGame`, располагающий настоящим сервером сеансов. Ядро принадлежит Zone
+    /// `regions/serverregion/weather`.
     pub(crate) fn change_weather(&mut self, weather_index: i32) -> &[ServerRegionWeather] {
-        self.current_weather.clear();
-        self.current_weather.push(ServerRegionWeather {
-            weather_index,
-            fog_color: 0,
-        });
+        change_weather(&mut self.current_weather, weather_index);
         &self.current_weather
     }
 
@@ -3741,70 +3688,53 @@ impl CServerRegion {
         self.forbidden_make_goods.contains(&name[..end])
     }
 
+    /// Fallback-цепочка exact `GetReturnPoint`; ядро принадлежит Zone
+    /// `regions/serverregion/returnsetup`.
     pub(crate) fn get_return_point(
         &self,
         player: Option<ServerReturnPlayer>,
         country_param: &mut CCountryParam,
     ) -> Result<RegionReturnPoint, ServerReturnSetupBlock> {
-        let Some(player) = player else {
-            return Ok(self.region.get_return_point());
-        };
-        let setup = self.return_setup.ok_or(ServerReturnSetupBlock)?;
-        if setup.use_return != 0 {
-            return Ok(RegionReturnPoint {
-                region_id: setup.region_id,
-                left: setup.left,
-                top: setup.top,
-                right: setup.right,
-                bottom: setup.bottom,
-                direction: -1,
-            });
-        }
-
-        let main = country_param.main_return_point(player.country);
-        Ok(RegionReturnPoint {
-            region_id: main.region_id,
-            left: main.rect.left,
-            top: main.rect.top,
-            right: main.rect.right,
-            bottom: main.rect.bottom,
-            direction: main.direction,
-        })
+        get_return_point(self.return_setup, player, country_param)
     }
 
+    /// Exact `DoesRecallWhenLost`; ядро принадлежит Zone
+    /// `regions/serverregion/returnsetup`.
     pub(crate) fn does_recall_when_lost(&self) -> Result<i32, ServerReturnSetupBlock> {
-        self.return_setup
-            .map(|setup| setup.does_recall_when_lost)
-            .ok_or(ServerReturnSetupBlock)
+        does_recall_when_lost(self.return_setup)
     }
 
+    /// Phase default `OnWarDeclare`; ядро принадлежит Zone
+    /// `regions/serverregion/war`.
     pub(crate) fn on_war_declare(&mut self, war_number: i32) {
-        self.city_state = CITY_STATE_DECLARE;
-        self.war_number = war_number;
+        on_war_declare(&mut self.war_number, &mut self.city_state, war_number);
     }
 
+    /// Phase default `OnWarStart`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn on_war_start(&mut self, _war_number: i32) {
-        self.city_state = CITY_STATE_FIGHT;
+        on_war_start(&mut self.city_state);
     }
 
     pub(crate) fn on_war_time_out(&mut self, _war_number: i32) {}
 
+    /// Phase default `OnWarEnd`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn on_war_end(&mut self, _war_number: i32) {
-        self.city_state = CITY_STATE_NONE;
-        self.war_number = 0;
+        on_war_end(&mut self.war_number, &mut self.city_state);
     }
 
+    /// Phase default `OnWarMass`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn on_war_mass(&mut self, _war_number: i32) {
-        self.city_state = CITY_STATE_MASS;
+        on_war_mass(&mut self.city_state);
     }
 
     pub(crate) fn on_clear_other_player(&mut self, _war_number: i32) {}
 
     pub(crate) fn on_refresh_region(&mut self, _war_number: i32) {}
 
+    /// Ownership-default `SetOwnedCityOrg`; ядро принадлежит Zone
+    /// `regions/serverregion/war`.
     pub(crate) fn set_owned_city_org(&mut self, faction_id: i32, union_id: i32) {
-        self.param.owned_faction_id = faction_id;
-        self.param.owned_union_id = union_id;
+        set_owned_city_org(&mut self.param, faction_id, union_id);
     }
 
     pub(crate) fn owned_city_faction(&self) -> i32 {
@@ -3815,8 +3745,9 @@ impl CServerRegion {
         self.param.owned_union_id
     }
 
+    /// Exact `SetWarNum`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn set_war_number(&mut self, war_number: i32) {
-        self.war_number = war_number;
+        set_war_number(&mut self.war_number, war_number);
     }
 
     pub(crate) fn get_war_number(&self) -> i32 {
@@ -3827,13 +3758,14 @@ impl CServerRegion {
         self.city_state
     }
 
+    /// Exact `SetCityState`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn set_city_state(&mut self, state: i32) {
-        self.city_state = state;
+        set_city_state(&mut self.city_state, state);
     }
 
+    /// Exact `ReSetWarState`; ядро принадлежит Zone `regions/serverregion/war`.
     pub(crate) fn reset_war_state(&mut self, war_number: i32, state: i32) {
-        self.war_number = war_number;
-        self.city_state = state;
+        reset_war_state(&mut self.war_number, &mut self.city_state, war_number, state);
     }
 
     pub(crate) fn start_clear_player_out_at(&mut self, delay_ms: i32, now_ms: u32) {

@@ -14,6 +14,8 @@
 //! covering-фигуре, `get_shapes` собирает все. RTTI alive-факт concrete
 //! `CMoveShape` остаётся у переходного владельца старого пакета и приходит
 //! typed-access замыканием: `None` (неудачный downcast) пропускает фигуру.
+//! Skill-cell формула (порция 4) — чистое чтение живого типа блока клетки
+//! для пошагового полёта навыка с исходным `BLOCK_UNFLY` (2) вне сетки.
 
 use super::areagrid::get_area;
 use super::geometry::{NEIGHBOR_AREAS, NPC_TYPE, shape_covers_tile};
@@ -129,6 +131,13 @@ pub fn refresh_block<Resolver: ShapeResolver>(
         }
     }
     Ok(())
+}
+
+/// Живой тип блока клетки для пошагового полёта навыка: чистое чтение exact
+/// `CRegion::GetBlock`, который сам отвечает `BLOCK_UNFLY` (2) вне сетки;
+/// безопасный stale-index fallback совпадает с тем же значением.
+pub fn skill_cell_block(region: &CRegion, x: i32, y: i32) -> u8 {
+    region.get_block(x, y).unwrap_or(2)
 }
 
 /// Тело exact `GetShape(long, long)` (`0x0007F390`): возвращает первую
