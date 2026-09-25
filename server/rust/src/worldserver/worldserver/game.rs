@@ -6140,6 +6140,50 @@ pub(crate) struct CGame {
     login_server_message_time_ms: u32,
 }
 
+/// Адаптер-мост `init_owner_relation`: связывает `&mut COrganizingCtrl` с
+/// `&CGame` на единственном init-call-site, потому что inherent
+/// `add_owned_city_to_faction` требует владельца игры для owned-city wire.
+struct RegionOwnerOrganizingBridge<'a> {
+    organizing: &'a mut COrganizingCtrl,
+    game: &'a CGame,
+}
+
+impl nebokrai_realm::app::world_organizing_view::WorldRegionOwnerOrganizingView
+    for RegionOwnerOrganizingBridge<'_>
+{
+    fn has_faction(&self, faction_id: i32) -> bool {
+        self.organizing.faction_by_id(faction_id).is_some()
+    }
+
+    fn has_confederation(&self, union_id: i32) -> bool {
+        self.organizing.confederation_by_id(union_id).is_some()
+    }
+
+    fn add_owned_city_to_faction(
+        &mut self,
+        faction_id: i32,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<
+        Option<nebokrai_realm::organizations::faction::OwnedCityAddOutcome>,
+        nebokrai_realm::organizations::faction::OwnedCityMutationBuildError,
+    > {
+        self.organizing.add_owned_city_to_faction(
+            self.game,
+            faction_id,
+            region_id,
+            update_player,
+        )
+    }
+
+    fn country_by_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<u8>, FactionInitialPropertyBlock> {
+        self.organizing.country_by_faction(faction_id)
+    }
+}
+
 impl CGame {
     pub(crate) fn get_faction_by_id(
         organizing: &COrganizingCtrl,
@@ -10656,11 +10700,16 @@ impl CGame {
             else {
                 continue;
             };
-            let relation = region_owner.base_mut().init_owner_relation(
-                organizing,
-                &*self,
-                &mut |player_id| players_to_refresh.push(player_id),
-            );
+            let relation = {
+                let mut bridge = RegionOwnerOrganizingBridge {
+                    organizing,
+                    game: &*self,
+                };
+                region_owner.base_mut().init_owner_relation(
+                    &mut bridge,
+                    &mut |player_id| players_to_refresh.push(player_id),
+                )
+            };
             self.regions
                 .get_mut(&region_id)
                 .expect("region-map key не удаляется во время owner relation")

@@ -200,7 +200,8 @@ pub(crate) enum FactionCloneSaveBlock {
 pub(crate) use nebokrai_realm::organizations::faction::{
     FactionInitialPropertyBlock, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
     FactionPropertyDelivery, FactionPropertyReinitialization, FactionTalkDelivery,
-    OwnedCitiesWireBuildError, OwnedCityMutationBuildError,
+    OwnedCitiesWireBuildError, OwnedCityAddOutcome, OwnedCityMutationBuildError,
+    OwnedCityMutationReport,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1560,13 +1561,6 @@ pub(crate) struct FactionEnemyMutationReport {
 pub(crate) use nebokrai_realm::organizations::factionenemyblock::FactionEnemyMutationBlock;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OwnedCityMutationReport {
-    pub(crate) state_changed: bool,
-    pub(crate) deliveries: Vec<FactionOwnedCityDelivery>,
-    pub(crate) refreshed_player_ids: Vec<i32>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OwnedCityBooleanMutationReport {
     pub(crate) legacy_result: bool,
     pub(crate) mutation: OwnedCityMutationReport,
@@ -1580,12 +1574,6 @@ pub(crate) enum FactionOwnedCityRefreshBlock {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FactionOwnedCityRefreshReport {
     pub(crate) refreshed_region_ids: Vec<i32>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OwnedCityAddOutcome {
-    AlreadyOwned,
-    Added(OwnedCityMutationReport),
 }
 
 #[derive(Debug, Eq, PartialEq)]

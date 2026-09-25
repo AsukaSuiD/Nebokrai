@@ -56,6 +56,19 @@ pub struct OwnedCityMutationBuildError {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub struct OwnedCityMutationReport {
+    pub state_changed: bool,
+    pub deliveries: Vec<FactionOwnedCityDelivery>,
+    pub refreshed_player_ids: Vec<i32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum OwnedCityAddOutcome {
+    AlreadyOwned,
+    Added(OwnedCityMutationReport),
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct FactionPropertyDelivery {
     pub recipient_player_id: i32,
     pub game_server_id: i32,
