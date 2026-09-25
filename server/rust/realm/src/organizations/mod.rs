@@ -2,5 +2,6 @@
 
 pub mod countryidentity;
 pub mod factionenemyblock;
+pub mod goodswarmember;
 pub mod organizingparam;
 pub mod rsenemyfactions;

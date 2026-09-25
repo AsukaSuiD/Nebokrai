@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm organizations: goods-war member топ-счётчик 25 сентября 2026
+
+`CGoodsWarMember` перенесён из `src/worldserver/appworld/goodswarmember.rs` в [`realm/organizations/goodswarmember.rs`](../../server/rust/realm/src/organizations/goodswarmember.rs): загрузка топ-5 faction goods-war counts из `CSL_FACTION_BaseProperty` с исходным `ORDER BY GoodsWarCount DESC, GoodsWarLastTime DESC` и пределом `100_000`, broadcast members/count-list, delete-one с re-number, audit-файл `bzhsmd.txt` по weekday, исходный DB error text `ERR:  GoodsWarCount ....failed!`, `20`-байтный name cap. Обе context-трейт (`GoodsWarDeliveryContext`, `GoodsWarMemberContext`) sync — desugar и новые швы не потребовались; связи уже имели владельцев (`WorldTdsClient` → realm persistence, `CMessage` → realm app). Старый файл стал glob-шимом; потребители поимённо (appworld `organsysmessage` — 11 имён, world `game`/`runtime`) работают через шим без правок; одноимённый gameserver-модуль (`appserver/goodswarmember`) отдельный и не затронут.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): публичные символы сборки содержат семейство `GoodsWarMember`. SQL-форма, cap, broadcast-порядок и тексты сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm activities: суточный номер копии ShengSiShiSu 25 сентября 2026
 
 Process-global owner номера копии перенесён из `src/worldserver/appworld/misc.rs` в [`realm/activities/misc.rs`](../../server/rust/realm/src/activities/misc.rs): `GetCopyNum` читает signed DWORD с initial value `1`; `AddCopyNum` — обычное 32-битное сложение без overflow gate (`AtomicI32` сохраняет wrapping bits вместо Win32 data race); timer-state сброса ставит первое событие на следующий день на `0:0:0` с сохранением текущих milliseconds, а callback сначала возвращает номер к `1` и только затем ставит следующее событие через `AddDay(1)` — исходный reset-before-reschedule порядок и выдача ID с параметром `0`. Связи уже имели владельцев (`TagTime`-family → Shared values, `CTimer` → Shared runtime); швов нет. Старый файл стал glob-шимом; потребители поимённо (appworld `othermessage` с вариантом CopyNumber, world `game` с report/disposition типами) работают через шим без правок.
