@@ -16,12 +16,29 @@
 //! reconnect/region transition/save response записи, ping/region decode итоги и
 //! запуск save-thread. Их fn-владельцы и trait `WorldSaveRuntimeContext`
 //! остаются у process-owner-а `game.rs`.
+//!
+//! Там же свободный monitoring-owner `SendErrLog` (`send_err_log_to_login` +
+//! `WorldErrorLogDelivery`): исходная cdecl-функция принадлежит коду процесса
+//! WorldServer, а не nets-классу `CMessage` (S_PUB32 `?SendErrLog@@YAXDJJPBD@Z`
+//! `1:00000f30` той же пары `Nworldserver.exe`/`WorldServer.pdb`, RSDS
+//! совпадает, основание зафиксировано ранее), и публикует Login wire
+//! `0x0001_FE08` средствами [`crate::app::world_message::CMessage`]. Поэтому
+//! её место у process-owner-а Realm `app/`, а не в `app::world_message`,
+//! который воспроизводит только сам nets-класс.
+//!
+//! Процессный environment-helper `resolve_first_local_ipv4` (первый локальный
+//! IPv4 через nodename-lookup системного resolver-а) перенесён из `game.rs`
+//! с неизменным телом и получил здесь единственного мирового владельца;
+//! приватные per-runtime копии той же формы у Auth/Billing/Login волной
+//! не сводились.
 
 use std::error::Error;
 use std::fmt;
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use nebokrai_shared::network::ClientSendQueue;
 use nebokrai_shared::resources::{
     BattleFairyExpSerializeError, CBattleFairyExpConfig, CChangeBodyConf, CDaKongXiangQian,
     CFairyExpConf, CGMList, CLingBaoSetup, CLogSystem, CPlayerList, CRegionSetup, CSynthesis,
@@ -41,13 +58,14 @@ use nebokrai_shared::resources::{
     TradeListSerializeError,
 };
 use parking_lot::Mutex;
+use rustix::system::uname;
 
 use crate::activities::attackcitysys::AttackCityReloadBlock;
 use crate::activities::countrywarsys::CountryWarReloadBlock;
 use crate::activities::fournationwarsys::FourNationWarSerializationBlock;
 use crate::activities::villagewarsys::VillageWarReloadBlock;
 use crate::app::organsysmessage::OrganizingCityWarResultContextBlock;
-use crate::app::world_message::SendMessageError;
+use crate::app::world_message::{CMessage, SendMessageError};
 use crate::characters::player::PlayerCodecError;
 use crate::content::battlefairyproperty::{BattleFairyComposeWireError, CBattleFairyProperty};
 use crate::content::cgoodsfactory::{
@@ -944,6 +962,62 @@ pub struct WorldGlobeVariablesDelivery {
     pub delivery: Result<i32, SendMessageError>,
 }
 
+/// Наблюдаемый результат свободного owner-а `SendErrLog`.
+///
+/// Исходная функция возвращала `void` и игнорировала результат `CMessage::Send`;
+/// он сохранён здесь только для вызывающего Rust owner-а и не меняет её порядок
+/// или внешний wire-контракт.
+#[derive(Debug)]
+pub enum WorldErrorLogDelivery {
+    SkippedNullText,
+    Sent {
+        message_type: i8,
+        server_ip: i32,
+        world_id: i32,
+        text: Vec<u8>,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+/// Строит и ставит `SendErrLog` packet указанному Login transport.
+///
+/// Выделен из `CGame` только для save-owner-а, который эксклюзивно держит
+/// `m_DBData`, но заимствует независимый Login FIFO до async DB traversal.
+/// Машинная привязка: S_PUB32 `.exe/Nworldserver.exe`
+/// `?SendErrLog@@YAXDJJPBD@Z` `1:00000f30` (пара с `WorldServer.pdb`, RSDS
+/// совпадает) зафиксирована ранее; новых machine-проверок не потребовалось.
+pub fn send_err_log_to_login(
+    sender: Option<&ClientSendQueue>,
+    message_type: i8,
+    server_ip: i32,
+    world_id: i32,
+    text: Option<&[u8]>,
+) -> WorldErrorLogDelivery {
+    let Some(text) = text else {
+        return WorldErrorLogDelivery::SkippedNullText;
+    };
+    let text = &text[..text.iter().position(|byte| *byte == 0).unwrap_or(text.len())];
+
+    let mut message = CMessage::new(0x0001_FE08);
+    message.base_mut().add_char(message_type);
+    message.base_mut().add_long(server_ip);
+    message.base_mut().add_long(world_id);
+    message.base_mut().add(text);
+    message.base_mut().add_char(0);
+    let wire = message.as_wire_bytes().to_vec();
+    let delivery = message.send(sender, false);
+
+    WorldErrorLogDelivery::Sent {
+        message_type,
+        server_ip,
+        world_id,
+        text: text.to_vec(),
+        wire,
+        delivery,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorldGenerateDbDataBlock {
     PlayerCodec(PlayerCodecError),
@@ -1000,4 +1074,20 @@ pub fn prepare_save_thread_launch(
         creation_flags: 0,
         thread_id_output_requested: true,
     }
+}
+
+/// Первый локальный IPv4 процесса через nodename-lookup системного resolver-а.
+///
+/// Тело перенесено из `worldserver/worldserver/game.rs` без изменений (нормализация
+/// только `pub(crate)` → `pub`); старый пакет получает форму реэкспортом.
+pub fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
+    let hostname = uname();
+    let hostname = hostname.nodename().to_str().ok()?;
+    (hostname, 0)
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|address| match address {
+            SocketAddr::V4(address) => Some(*address.ip()),
+            SocketAddr::V6(_) => None,
+        })
 }
