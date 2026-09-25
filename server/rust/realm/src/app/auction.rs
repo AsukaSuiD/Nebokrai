@@ -1,5 +1,3 @@
-//! Тип результата удаления из bai-tan списка, извлечён из мирового game.
-//!
 //! Auction-сообщения `OnMSG_S2W_AUCTION` из `auction.cpp`, подтверждённые
 //! `worldserver.exe` и `worldserver.pdb`.
 //!
@@ -11,16 +9,11 @@
 //! `bAuction != 0`, без `Update`. Money restore вызывает BACK, при неполном
 //! результате UNDO и SUCCESSED с остатком; `LoadMoneyById` выполняется всегда.
 //! Owned notes и safe codecs заменяют allocator/virtual plumbing, сохраняя wire.
+//! Bai-tan ветви (`ADD_BAI_TAN_REQUEST`/`REMOVE_BAI_TAN`) работают через шов
+//! [`crate::app::world_game_view::WorldGameView`]; сам реестр — в
+//! [`crate::app::baitan`].
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WorldBaiTanRemoval {
-    pub player_id: i32,
-    pub mapped_ip: Option<u32>,
-    pub remaining_ip_refcount: Option<i32>,
-    pub player_ip_removed: bool,
-    pub player_route_removed: bool,
-}
-
+use crate::app::baitan::WorldBaiTanRemoval;
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::persistence::dbmisc::{CDbMisc, DbMiscContext, DbNote, OperatorType};
 use crate::auction::auctionlog::{

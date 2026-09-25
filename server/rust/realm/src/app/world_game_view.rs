@@ -15,7 +15,7 @@ use crate::activities::jjcsystem::CJJcSystem;
 use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
 use crate::app::loginreconnectworker::WorldLoginReconnectThreadRestart;
 use crate::app::servermessage::WorldCompletedSaveResponseLaunchReport;
-use crate::app::auction::WorldBaiTanRemoval;
+use crate::app::baitan::WorldBaiTanRemoval;
 use crate::app::gmmessage::{WorldNamedRegionLookup, WorldRegionIdRouteScan};
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQueueBlock};
