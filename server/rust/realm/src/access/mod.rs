@@ -5,6 +5,7 @@ pub mod acclogqueue;
 pub mod acclogthread;
 pub mod asmessage;
 pub mod authhandler;
+pub mod authgame;
 pub mod authmanager;
 pub mod authproc;
 pub mod configreader;
