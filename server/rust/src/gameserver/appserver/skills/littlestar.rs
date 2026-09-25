@@ -64,7 +64,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -76,6 +76,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerLittleStarExecutionState, LittleStarProgress};
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
@@ -88,28 +89,6 @@ const SKILL_USAGE_SKILL_PERSIST_TIME: u32 = 10_007;
 const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const LITTLE_STAR_SKILL_ID: u32 = 0x1a4;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLittleStarExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    path: Option<Vec<(i32, i32, u8)>>,
-    last_attack_ms: u32,
-}
-impl PlayerLittleStarExecutionState {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.last_attack_ms = 0;
-        drop(self.path.take());
-    }
-
-    fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), path: None, last_attack_ms: 0 }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    fn attack_due(&self, now_ms: u32, frequency_ms: u32) -> bool {
-        self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
@@ -403,34 +382,6 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
         terminal(QueuedSkillExecutionState::Completed)
     } else {
         terminal(QueuedSkillExecutionState::Pending)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LittleStarProgress {
-    path: Vec<(i32, i32, u8)>,
-    last_attack_ms: u32,
-}
-
-impl LittleStarProgress {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.last_attack_ms = 0;
-        drop(std::mem::take(&mut self.path));
-    }
-
-    fn new(path: Vec<(i32, i32, u8)>) -> Self {
-        Self {
-            path,
-            last_attack_ms: 0,
-        }
-    }
-
-    fn attack_due(&self, now_ms: u32, frequency_ms: u32) -> bool {
-        self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
-    }
-
-    fn record_attack(&mut self, now_ms: u32) {
-        self.last_attack_ms = now_ms;
     }
 }
 

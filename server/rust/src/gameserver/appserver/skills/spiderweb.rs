@@ -19,7 +19,7 @@
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::blindstate::begin_primary_blind_state;
-use super::kernel::{skill_is_restored, PlayerSkillExecution, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, PlayerSkillExecution, SkillStage, SkillTermination};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderwebstate::SpiderWebState;
 use super::stateskill::{
@@ -41,6 +41,7 @@ use crate::gameserver::gameserver::game::{
     ServerRegionOwner,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerSpiderWebExecutionState, SpiderWebProgress};
 
 const BLOCK_UNFLY: u8 = 2;
 const CURE_SKILL_ID: u32 = 0x131;
@@ -49,43 +50,6 @@ const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
 const SKILL_USAGE_CONST: u32 = 20_010;
 pub(crate) const SPIDER_WEB_SKILL_ID: u32 = 0x199;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSpiderWebExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    flight: SpiderWebProgress,
-}
-
-impl PlayerSpiderWebExecutionState {
-    fn before_check(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        let mut kernel = SkillExecutionKernel::begin(dispatch, started);
-        kernel.clear_phase_for_end();
-        Self { kernel, flight: SpiderWebProgress::new(0) }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.flight = SpiderWebProgress::new(0);
-        true
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SpiderWebProgress {
-    missile_flying_time_ms: u32,
-}
-
-impl SpiderWebProgress {
-    pub(crate) const fn new(missile_flying_time_ms: u32) -> Self {
-        Self { missile_flying_time_ms }
-    }
-
-    pub(crate) const fn missile_flying_time_ms(self) -> u32 {
-        self.missile_flying_time_ms
-    }
-}
 
 fn flight(skill: &MoveShapeSkill) -> u32 {
     skill.player_state::<PlayerSpiderWebExecutionState>().map(|state| &state.flight)

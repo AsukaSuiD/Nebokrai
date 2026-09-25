@@ -44,11 +44,12 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerSummonCreatureExecutionState};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -58,20 +59,6 @@ const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME: u32 = 30_001;
 const SKILL_USAGE_SUMMONED_CREATURE_ID: u32 = 30_003;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSummonCreatureExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    destination: (i32, i32),
-}
-
-impl PlayerSummonCreatureExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
 
 fn player_skill_id(dispatch: PlayerSkillDispatch) -> u32 {
     match dispatch {

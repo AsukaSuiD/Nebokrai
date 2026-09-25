@@ -15,7 +15,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME}
 use super::dash::{apply_dash_attack, check_dash_path, publish_dash_visual};
 use super::playercast::execute_registered_player_cast;
 use super::flash::{cell_views, weapon_is_valid};
-use super::kernel::{PlayerSkillExecution, SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{PlayerSkillExecution, SkillStage, skill_is_restored};
 use super::littleflash2::{EMPTY_PATH_MESSAGE_ID as LITTLE_FLASH_2_EMPTY_PATH_MESSAGE_ID, LITTLE_FLASH_2_SKILL_ID};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::skillfactory::SkillOwner;
@@ -27,6 +27,7 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{LittleFlashExecutionState};
 
 pub(crate) const LITTLE_FLASH_SKILL_ID: u32 = 0x71;
 const PLAYER_TYPE: i32 = 400;
@@ -52,33 +53,6 @@ impl LittleFlashVariant {
             Self::Second => LITTLE_FLASH_2_EMPTY_PATH_MESSAGE_ID,
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LittleFlashExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    path: Vec<(i32, i32, u8)>,
-    attacked_creatures: Vec<ShapeIdentity>,
-    attacking_started: bool,
-    attacked: bool,
-}
-
-impl LittleFlashExecutionState {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacked = false;
-        self.attacking_started = false;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked_creatures));
-    }
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            path: Vec::new(), attacked_creatures: Vec::new(),
-            attacking_started: false, attacked: false,
-        }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {

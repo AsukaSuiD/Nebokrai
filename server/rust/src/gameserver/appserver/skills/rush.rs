@@ -23,7 +23,7 @@ use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::playercast::execute_registered_player_cast;
 use super::flash::cell_views;
 use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage};
+use super::kernel::{skill_is_restored, SkillStage};
 use super::rushstate::{begin_primary_rush_state, RushState, RUSH_STATE_ID};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::skillfactory::SkillOwner;
@@ -43,6 +43,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{RushExecutionState};
 
 pub(crate) const RUSH_SKILL_ID: u32 = 0x73;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -53,22 +54,6 @@ const TARGET_MAX_DISTANCE: u32 = 5_003;
 const STATE_PERSIST_TIME: u32 = 10_002;
 const TARGET_BACK_STEP: u32 = 1_001;
 const TARGET_MOVE_SPEED: u32 = 2_001;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RushExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    path: Vec<(i32, i32, u8)>,
-}
-
-impl RushExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), path: Vec::new() }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) fn clear_end_paths(&mut self) { drop(std::mem::take(&mut self.path)); }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

@@ -27,7 +27,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::boalockattack::apply_boa_lock_attack;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     CastPathBlock, check_cast_mana, check_skill_path, spend_cast_mana, terminal,
@@ -46,36 +46,11 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{BoaLockExecutionState};
 
 pub(crate) const BOA_LOCK_SKILL_ID: u32 = 0xD2;
 const PLAYER_TYPE: i32 = 400;
 const MISSILE_FLYING_TIME: u32 = 10_008;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BoaLockExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    missile_flying_time: u32,
-}
-
-impl BoaLockExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            attacking_started: false,
-            missile_flying_time: 0,
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.attacking_started = false;
-        self.missile_flying_time = 0;
-        true
-    }
-}
 
 fn failure(
     game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, mode: u32, text: &[u8],

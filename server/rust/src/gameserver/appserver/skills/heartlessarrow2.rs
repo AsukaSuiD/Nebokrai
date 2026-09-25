@@ -29,7 +29,7 @@ use super::basemagic::{
 use super::heartlessarrow::HeartlessArrowExecutionState;
 use super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
 use super::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     CastManaRule, CastPathBlock, RangedWeaponKind, check_ranged_weapon_and_mana,
@@ -51,30 +51,13 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{HeartlessArrowAreaExecutionState};
 
 pub(crate) const HEARTLESS_ARROW_2_SKILL_ID: u32 = 0xe5;
 const PLAYER_TYPE: i32 = 400;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HeartlessArrowAreaExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    missile_flying_time_ms: u32,
-}
-
-impl HeartlessArrowAreaExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), missile_flying_time_ms: 0 }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.missile_flying_time_ms = 0;
-        true
-    }
-}
 
 pub(super) fn check_heartless_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,

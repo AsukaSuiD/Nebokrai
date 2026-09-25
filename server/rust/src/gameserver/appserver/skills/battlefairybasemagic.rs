@@ -31,7 +31,7 @@ use super::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
 use super::battlefairyskill::{
     check_battle_fairy_target_states, execute_registered_battle_fairy_skill,
 };
-use super::kernel::{BattleFairyExecution, SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{BattleFairyExecution, SkillStage, skill_is_restored};
 use super::thunder::{fail_battle_fairy_summon, master_info, terminal};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -43,30 +43,9 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
+pub(crate) use nebokrai_zone::skills::execution::{BattleFairyBaseMagicExecutionState};
 
 pub(crate) const BATTLE_FAIRY_BASE_MAGIC_SKILL_ID: u32 = 0x224;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyBaseMagicExecutionState {
-    kernel: SkillExecutionKernel<BattleFairySkillDispatch>,
-    attack_time: u32,
-}
-
-impl BattleFairyBaseMagicExecutionState {
-    pub(crate) const fn begin(dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), attack_time: 0 }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<BattleFairySkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
-        &mut self.kernel
-    }
-
-    pub(crate) const fn attack_time(&self) -> u32 { self.attack_time }
-}
 
 pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,

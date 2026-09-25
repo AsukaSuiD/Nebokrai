@@ -33,7 +33,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -45,6 +45,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{SevenShootingStarExecutionState};
 
 pub(crate) const SEVEN_SHOOTING_STAR_SKILL_ID: u32 = 0x136;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -55,43 +56,6 @@ const USER_MP_LOSE: u32 = 2;
 const TARGET_MAX_DISTANCE: u32 = 5_003;
 const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_PERSIST_TIME: u32 = 10_007;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SevenShootingStarExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    path: Option<Vec<(i32, i32, u8)>>,
-    destination: Option<(i32, i32)>,
-    last_attack_ms: u32,
-}
-
-impl SevenShootingStarExecutionState {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.last_attack_ms = 0;
-        drop(self.path.take());
-    }
-
-    pub(crate) fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            path: None,
-            destination: None,
-            last_attack_ms: 0,
-        }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    fn path(&self) -> Option<&[(i32, i32, u8)]> { self.path.as_deref() }
-    fn destination(&self) -> Option<(i32, i32)> { self.destination }
-    fn needs_path_refresh(&self) -> bool { self.last_attack_ms == 0 }
-    fn set_path(&mut self, path: Vec<(i32, i32, u8)>, destination: (i32, i32)) {
-        self.path = Some(path);
-        self.destination = Some(destination);
-    }
-    fn attack_due(&self, now_ms: u32, frequency_ms: u32) -> bool {
-        self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
-    }
-    fn record_attack(&mut self, now_ms: u32) { self.last_attack_ms = now_ms; }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

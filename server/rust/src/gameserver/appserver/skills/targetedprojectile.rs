@@ -22,7 +22,7 @@
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{CastPathBlock, check_skill_path, spend_cast_mana, terminal};
 use super::seal::{apply_seal_attack, check_seal_cast};
@@ -42,6 +42,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{TargetedProjectileProgress, TargetedProjectileExecutionState};
 
 const MISSILE_TIME: u32 = 10_008;
 
@@ -72,34 +73,6 @@ impl TargetedProjectileProfile {
 
     const fn rechecks_target_effectiveness(self) -> bool {
         matches!(self, Self::Seal)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct TargetedProjectileProgress {
-    pub(crate) attacking: bool,
-    pub(crate) flight: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TargetedProjectileExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    progress: TargetedProjectileProgress,
-}
-
-impl TargetedProjectileExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), progress: TargetedProjectileProgress::default() }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn progress(&self) -> &TargetedProjectileProgress { &self.progress }
-    pub(crate) fn progress_mut(&mut self) -> &mut TargetedProjectileProgress { &mut self.progress }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.progress = TargetedProjectileProgress::default();
-        true
     }
 }
 

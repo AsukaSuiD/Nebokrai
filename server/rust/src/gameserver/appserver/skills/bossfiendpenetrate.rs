@@ -48,7 +48,7 @@ use super::baseattack::{
     time_reached,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
+use super::kernel::{skill_is_restored, SkillTermination};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, resolve_owned_monster_attack_target,
@@ -75,6 +75,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerBossFiendPenetrateExecutionState, BossFiendPenetrateProgress};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -86,46 +87,6 @@ const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 
 pub(crate) const BOSS_FIEND_PENETRATE_SKILL_ID: u32 = 0x1fa;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerBossFiendPenetrateExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    destination: (i32, i32),
-    condition_checked: bool,
-    path: Vec<(i32, i32, u8)>,
-    attack_cell_count: usize,
-    current_cell: usize,
-    attacked: Vec<ShapeIdentity>,
-}
-impl PlayerBossFiendPenetrateExecutionState {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.condition_checked = false;
-        self.attack_cell_count = 0;
-        self.current_cell = 0;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked));
-    }
-
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, now_ms),
-            destination,
-            condition_checked: false,
-            path: Vec::new(),
-            attack_cell_count: 0,
-            current_cell: 0,
-            attacked: Vec::new(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-}
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
@@ -668,53 +629,6 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         }
     }
     player_terminal(QueuedSkillExecutionState::Pending)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BossFiendPenetrateProgress {
-    destination_x: i32,
-    destination_y: i32,
-    path: Vec<(i32, i32, u8)>,
-    current_cell: usize,
-    attack_cell_count: usize,
-    attacked: Vec<ShapeIdentity>,
-    fired: bool,
-}
-
-impl BossFiendPenetrateProgress {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.fired = false;
-        self.attack_cell_count = 0;
-        self.current_cell = 0;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked));
-    }
-
-    pub(crate) const fn new(destination_x: i32, destination_y: i32) -> Self {
-        Self {
-            destination_x,
-            destination_y,
-            path: Vec::new(),
-            current_cell: 0,
-            attack_cell_count: 0,
-            attacked: Vec::new(),
-            fired: false,
-        }
-    }
-
-    const fn destination(&self) -> (i32, i32) {
-        (self.destination_x, self.destination_y)
-    }
-
-    fn fire(&mut self, path: Vec<(i32, i32, u8)>) {
-        self.attack_cell_count = path
-            .iter()
-            .position(|cell| cell.2 == BLOCK_UNFLY)
-            .unwrap_or(path.len());
-        self.path = path;
-        self.current_cell = 0;
-        self.fired = true;
-    }
 }
 
 fn send_start(

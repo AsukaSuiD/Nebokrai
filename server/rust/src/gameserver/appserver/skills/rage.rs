@@ -33,7 +33,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -49,6 +49,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
+pub(crate) use nebokrai_zone::skills::execution::{RageExecutionState};
 
 pub(crate) const RAGE_SKILL_ID: u32 = 0x6d;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -56,37 +57,6 @@ const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 const USER_RP_GAIN: u32 = 23;
 const TARGET_AFFECT_FREQUENCY: u32 = 6001;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RageExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    last_using_time_ms: u32,
-}
-
-impl RageExecutionState {
-    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            last_using_time_ms: 0,
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-
-    pub(crate) const fn last_using_time_ms(self) -> u32 {
-        self.last_using_time_ms
-    }
-
-    pub(crate) const fn mark_used(&mut self, now_ms: u32) {
-        self.last_using_time_ms = now_ms;
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {

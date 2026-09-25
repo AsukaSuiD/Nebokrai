@@ -19,7 +19,7 @@
 use super::baseattack::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::impactattack::{apply_thunder_blow_2_attack, knock_back_impact_target};
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -33,31 +33,12 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{ThunderBlow2Execution};
 
 pub(crate) const THUNDER_BLOW_2_SKILL_ID: u32 = 0x14d;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 const PILLAR_STATE_ID: u32 = 0x74;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ThunderBlow2Execution {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-}
-
-impl ThunderBlow2Execution {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), attacking_started: false }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.attacking_started = false;
-        true
-    }
-}
 
 fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

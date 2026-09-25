@@ -29,6 +29,7 @@
 //! не проверяет IsAttackAble до RNG и не увеличивает RP атакующему.
 
 use crate::nets::netserver::message::CMessage;
+pub(crate) use nebokrai_zone::skills::execution::{MonsterFastAttackProgress};
 
 pub(crate) const MONSTER_FAST_ATTACK_SKILL_ID: u32 = 0x2d1;
 pub(crate) const SKILL_USAGE_FIRST_TIME: u32 = 15_001;
@@ -52,30 +53,4 @@ pub(crate) fn fast_attack_fire_message(
     message.add_long(target_x);
     message.add_long(target_y);
     message
-}
-
-/// Состояние двух последовательных ударов принадлежит конкретному навыку;
-/// общий `SkillExecutionKernel` по-прежнему хранит начало и основные стадии.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MonsterFastAttackProgress {
-    visual_started: bool,
-    first_attack_done: bool,
-}
-
-impl MonsterFastAttackProgress {
-    pub(crate) const fn visual_started(self) -> bool {
-        self.visual_started
-    }
-
-    pub(crate) const fn first_attack_done(self) -> bool {
-        self.first_attack_done
-    }
-
-    pub(crate) const fn mark_visual_started(&mut self) {
-        self.visual_started = true;
-    }
-
-    pub(crate) const fn mark_first_attack_done(&mut self) {
-        self.first_attack_done = true;
-    }
 }

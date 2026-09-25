@@ -28,7 +28,7 @@ use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
 use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::skills::kernel::{
-    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillStage, SkillTermination,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -36,6 +36,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
+pub(crate) use nebokrai_zone::skills::execution::{SpriteBurnExecutionState};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -47,25 +48,6 @@ const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_CONST: u32 = 20_010;
 
 pub(crate) const SPRITE_BURN_SKILL_ID: u32 = 0x1a6;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SpriteBurnExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-}
-
-impl SpriteBurnExecutionState {
-    const fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms) }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-}
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
@@ -173,7 +155,6 @@ fn add_sprite_burn_poison(
         game, region_id, target, Some(user), Some(sufferer), state, placement, now,
     );
 }
-
 
 fn apply_scope(
     game: &mut CGame,

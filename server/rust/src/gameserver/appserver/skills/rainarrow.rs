@@ -31,7 +31,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::rangedweaponcast::{
     ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast, prepare_ranged_weapon_player, terminal,
 };
@@ -51,53 +51,12 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{RainArrowExecutionState};
 
 const MINIMUM_ANGLE: u32 = 2_002;
 const MAXIMUM_ANGLE: u32 = 2_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const DAMAGE_FACTOR: u32 = 20_003;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RainArrowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    angle_bits: u32,
-    missile_flying_time: u32,
-    right: RainArrowPath,
-    center: RainArrowPath,
-    left: RainArrowPath,
-}
-
-impl RainArrowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started), angle_bits: 0,
-            missile_flying_time: 0,
-            right: RainArrowPath { cells: Vec::new(), active_cells: 0 },
-            center: RainArrowPath { cells: Vec::new(), active_cells: 0 },
-            left: RainArrowPath { cells: Vec::new(), active_cells: 0 },
-        }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-    pub(crate) fn right_impact(&self) -> Option<(i32, i32)> { impact(&self.right) }
-    pub(crate) fn left_impact(&self) -> Option<(i32, i32)> { impact(&self.left) }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.missile_flying_time = 0;
-        self.right.active_cells = 0;
-        self.center.active_cells = 0;
-        self.left.active_cells = 0;
-        self.angle_bits = 0;
-        self.right.cells.clear();
-        self.center.cells.clear();
-        self.left.cells.clear();
-    }
-}
-
-fn impact(path: &RainArrowPath) -> Option<(i32, i32)> {
-    path.active_cells.checked_sub(1).and_then(|index| path.cells.get(index as usize)).map(|cell| (cell.0, cell.1))
-}
 
 fn round_rotated(value: f32) -> i32 {
     let truncated = truncate_original(f64::from(value));

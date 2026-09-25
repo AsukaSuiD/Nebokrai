@@ -18,7 +18,7 @@
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::dash::{apply_dash_attack, check_dash_path, publish_dash_visual};
 use super::playercast::execute_registered_player_cast;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::skillfactory::SkillOwner;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -36,6 +36,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{FlashExecutionState};
 
 pub(crate) const FLASH_SKILL_ID: u32 = 0x69;
 const PLAYER_TYPE: i32 = 400;
@@ -46,35 +47,6 @@ const TARGET_MAX_DISTANCE: u32 = 5_003;
 const ACTION_INTERVAL: u32 = 10_009;
 const PILLAR_SKILL_ID: u32 = 0x74;
 const RAGE_BREAK_STATE_ID: u32 = 0x6e;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FlashExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    condition_checked: bool,
-    attacked: bool,
-    path: Vec<(i32, i32, u8)>,
-    attacked_creatures: Vec<ShapeIdentity>,
-}
-
-impl FlashExecutionState {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.condition_checked = false;
-        self.attacked = false;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked_creatures));
-    }
-
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            condition_checked: false, attacked: false,
-            path: Vec::new(), attacked_creatures: Vec::new(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

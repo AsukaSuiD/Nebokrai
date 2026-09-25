@@ -40,11 +40,12 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target;
-use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerSpiderMistExecutionState, SpiderMistProgress};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -55,27 +56,6 @@ const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME: u32 = 30_001;
 pub(crate) use nebokrai_zone::skills::SPIDER_MIST_SKILL_ID;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSpiderMistExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    destination: (i32, i32),
-}
-
-impl PlayerSpiderMistExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SpiderMistProgress {
-    pub(crate) destination_x: i32,
-    pub(crate) destination_y: i32,
-}
 
 fn send_start(
     game: &CGame,

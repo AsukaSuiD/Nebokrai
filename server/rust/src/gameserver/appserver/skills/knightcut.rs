@@ -22,7 +22,7 @@
 //! аргументом; direction не сбрасывается. Отдельного command-tail End нет.
 
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::knightcutattack::run_knight_cut_attack;
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -37,6 +37,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{KnightCutExecutionState};
 
 pub(crate) use super::knightcutvisual::publish_knight_cut_visual;
 
@@ -44,22 +45,6 @@ pub(crate) const KNIGHT_CUT_SKILL_ID: u32 = 0x67;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 const USER_RP_LOSE: u32 = 3;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct KnightCutExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    direction: i32,
-}
-
-impl KnightCutExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), direction: -1 }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(super) const fn direction(&self) -> i32 { self.direction }
-}
 
 fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

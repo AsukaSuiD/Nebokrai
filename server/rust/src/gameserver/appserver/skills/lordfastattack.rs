@@ -51,7 +51,7 @@ use super::baseattack::{
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use super::monsterfastattack::{MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -66,6 +66,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{LordFastAttackExecutionState};
 
 pub(crate) const LORD_FAST_ATTACK_SKILL_ID: u32 = 0x1f5;
 
@@ -77,33 +78,6 @@ const BUILD_TYPE: i32 = 1100;
 const CITY_GATE_TYPE: i32 = 1200;
 const BLOCK_UNFLY: u8 = 2;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LordFastAttackExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    condition_checked: bool,
-    fire_started: bool,
-    first_attack_done: bool,
-}
-
-impl LordFastAttackExecutionState {
-    const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            condition_checked: false,
-            fire_started: false,
-            first_attack_done: false,
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {

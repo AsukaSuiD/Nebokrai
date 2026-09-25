@@ -20,7 +20,7 @@ use super::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use super::armybreakattack::run_army_break_attack;
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::skillfactory::SkillOwner;
@@ -39,31 +39,13 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{ArmyBreakExecutionState};
 
 pub(crate) const ARMY_BREAK_SKILL_ID: u32 = 0x68;
 const PLAYER_TYPE: i32 = 400;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const USER_MP_LOSE: u32 = 2;
 const USER_RP_LOSE: u32 = 3;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ArmyBreakExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    direction: i32,
-}
-
-impl ArmyBreakExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), direction: -1 }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.direction = -1;
-        true
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

@@ -182,7 +182,9 @@
 //! записи) перенесён в Zone `regions/skillregistry.rs` (порция 4 волны
 //! moveshape): переходный агрегат ниже хранит `SkillRegistry<MoveShapeSkill>`
 //! и делегирует ему поведение без изменения сигнатур своих методов; execution
-//! kernel и retained данные полёта остаются hub-владением записи. Exact
+//! kernel и retained данные полёта вместе с полной записью перенесены в Zone
+//! `skills/execution::RegisteredSkillRecord` (порция 5), `MoveShapeSkill`
+//! остаётся её специализацией с hub-monster payload на generic-сварке. Exact
 //! `Stiffen` (RVA 0x000CD2F0) идёт общей операцией Zone `regions/moveshape.rs`
 //! над скалярами этого владельца с setup value-формой.
 //! AutoStartPassiveSkill (0x004CDBB0) обходит state-категорию в порядке
@@ -312,7 +314,7 @@ use crate::gameserver::appserver::skills::bossbluefurystate::{
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory, SkillOwner};
+use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory};
 use crate::gameserver::appserver::skills::statefactory::{decode_state_record_into_cache, known_state_record_offsets, known_state_record_spans};
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -332,99 +334,130 @@ use nebokrai_zone::regions::moveshape::{
     MoveShapeSetPositionOutcome, RegionSpanView, force_move_wire, on_move_wire,
     on_set_position_wire, set_pos_xy_core,
 };
-use nebokrai_zone::regions::skillregistry::{
-    SkillIdentity, SkillIdentityAccess, SkillRegistry,
+use nebokrai_zone::regions::skillregistry::SkillRegistry;
+use nebokrai_zone::skills::execution::{
+    ChainLightningProgress, LightningProgress, MonsterSkillExecutionAccess,
+    RegisteredSkillRecord, TargetedProjectileProgress,
 };
 pub(crate) use nebokrai_zone::regions::moveshape::{
     KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePet, MoveShapePositionBlock,
     MoveShapePositionFacts, MoveShapePropertyModifiers,
 };
 pub(crate) use nebokrai_zone::regions::skillregistry::{SKILL_BASE_DEFENSE, SkillSlot};
+pub(crate) use nebokrai_zone::skills::execution::RegisteredSkillDispatch;
 
 const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum RegisteredSkillExecution {
-    Inactive(SkillLifecycle),
-    Player(PlayerSkillExecution),
-    BattleFairy(BattleFairyExecution),
-    Monster(super::monster::MonsterSkillExecution),
-}
+/// Полная запись зарегистрированного навыка: скалярная база `SkillIdentity`
+/// (Zone `regions/skillregistry`), execution kernel и retained данные полёта
+/// перенесены в Zone `skills/execution::RegisteredSkillRecord` (порция 5 волны
+/// moveshape, тела фасадов — буквально). Hub-владением записи остаётся только
+/// payload исполнения монстра (`super::monster::MonsterSkillExecution` с его
+/// progress-каталогом): его тип живёт у `CMonster`, поэтому запись связана с
+/// ним двумя generic-сварками (ниже с обоснованием).
+pub(crate) type MoveShapeSkill = RegisteredSkillRecord<super::monster::MonsterSkillExecution>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RegisteredSkillDispatch {
-    Player(super::player::PlayerSkillDispatch),
-    BattleFairy(super::player::BattleFairySkillDispatch),
-}
+/// Сварка записи Zone с hub-monster payload: kernel, End-hooks и три общих
+/// progress-типа извлекаются из живой записи `CMonster` ровно теми ветвями,
+/// которые раньше проходил enum каталог hub `MonsterSkillProgress`; игровые
+/// ветви не дублируются (прецедент — `SkillIdentityAccess`).
+impl MonsterSkillExecutionAccess for super::monster::MonsterSkillExecution {
+    type Dispatch = super::monster::MonsterBaseAttackDispatch;
 
-impl RegisteredSkillExecution {
-    fn lifecycle(&self) -> &SkillLifecycle {
-        match self {
-            Self::Inactive(lifecycle) => lifecycle,
-            Self::Player(execution) => execution.lifecycle(),
-            Self::BattleFairy(execution) => execution.lifecycle(),
-            Self::Monster(execution) => execution.kernel.lifecycle(),
+    fn kernel(&self) -> &super::monster::MonsterBaseAttackCast {
+        &self.kernel
+    }
+
+    fn kernel_mut(&mut self) -> &mut super::monster::MonsterBaseAttackCast {
+        &mut self.kernel
+    }
+
+    fn prepare_derived_end(&mut self) {
+        super::monster::MonsterSkillExecution::prepare_derived_end(self);
+    }
+
+    fn clear_end_paths(&mut self) {
+        super::monster::MonsterSkillExecution::clear_end_paths(self);
+    }
+
+    fn targeted_projectile_progress(&self) -> Option<&TargetedProjectileProgress> {
+        match self.progress.as_ref()? {
+            super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
+            _ => None,
         }
     }
 
-    fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
-        match self {
-            Self::Inactive(lifecycle) => lifecycle,
-            Self::Player(execution) => execution.lifecycle_mut(),
-            Self::BattleFairy(execution) => execution.lifecycle_mut(),
-            Self::Monster(execution) => execution.kernel.lifecycle_mut(),
+    fn targeted_projectile_progress_mut(&mut self) -> Option<&mut TargetedProjectileProgress> {
+        match self.progress.as_mut()? {
+            super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn lightning_progress(&self) -> Option<&LightningProgress> {
+        match self.progress.as_ref()? {
+            super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn lightning_progress_mut(&mut self) -> Option<&mut LightningProgress> {
+        match self.progress.as_mut()? {
+            super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn chain_lightning_progress(&self) -> Option<&ChainLightningProgress> {
+        match self.progress.as_ref()? {
+            super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn chain_lightning_progress_mut(&mut self) -> Option<&mut ChainLightningProgress> {
+        match self.progress.as_mut()? {
+            super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
+            _ => None,
         }
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum SkillRetainedData {
-    None,
-    BaseProjectile(super::skills::baseprojectilecast::BaseProjectileProgress),
-    PathProjectile(super::skills::energybolt::PathProjectileProgress),
-    DirectProjectile(super::skills::directprojectile::DirectProjectileProgress),
-}
+/// Typed извлечение и установка конкретного progress-состояния внутри hub
+/// `MonsterSkillExecution`: перечислены все девять hub-вариантов каталога,
+/// чтобы обобщённые фасады записи (`monster_progress`/`set_monster_progress`)
+/// покрывали его полностью, не теряя ни одного владельца.
+macro_rules! monster_skill_progress_states {
+    ($($variant:ident($state:ty)),+ $(,)?) => {$ (
+        impl nebokrai_zone::skills::execution::MonsterSkillProgressState<super::monster::MonsterSkillExecution> for $state {
+            fn from_execution(execution: &super::monster::MonsterSkillExecution) -> Option<&Self> {
+                match execution.progress.as_ref()? {
+                    super::monster::MonsterSkillProgress::$variant(state) => Some(state),
+                    _ => None,
+                }
+            }
 
-impl SkillRetainedData {
-    fn for_owner(owner: SkillOwner) -> Self {
-        match owner {
-            SkillOwner::CArchery | SkillOwner::CBaseMagic | SkillOwner::CFireBolt =>
-                Self::BaseProjectile(Default::default()),
-            SkillOwner::CEnergyBolt | SkillOwner::CSnakeBolt | SkillOwner::CZombieClaw =>
-                Self::PathProjectile(Default::default()),
-            SkillOwner::CChuckStone | SkillOwner::CSkeletonArchery =>
-                Self::DirectProjectile(Default::default()),
-            _ => Self::None,
+            fn install(execution: &mut super::monster::MonsterSkillExecution, progress: Self) {
+                execution.progress = Some(super::monster::MonsterSkillProgress::$variant(progress));
+            }
         }
-    }
+    )+};
 }
 
-/// Достигнутая common-проекция `CSkill`: скалярная база (identity, level,
-/// concrete owner, item position, reuse, owned visual) перенесена в Zone
-/// `regions/skillregistry` типом `SkillIdentity`, а исполнение и retained
-/// данные полёта остаются hub-владением этой записи. Алгоритмы concrete
-/// attack/defense/state/summon остаются у skill owners; исполнение, его
-/// ресурсы и reuse принадлежат каждому экземпляру.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct MoveShapeSkill {
-    identity: SkillIdentity,
-    execution: RegisteredSkillExecution,
-    retained_data: SkillRetainedData,
+monster_skill_progress_states! {
+    FastAttack(super::skills::monsterfastattack::MonsterFastAttackProgress),
+    TargetedProjectile(TargetedProjectileProgress),
+    Lightning(LightningProgress),
+    ChainLightning(ChainLightningProgress),
+    BossFiendPenetrate(super::skills::bossfiendpenetrate::BossFiendPenetrateProgress),
+    LittleStar(super::skills::littlestar::LittleStarProgress),
+    SpiderWeb(super::skills::spiderweb::SpiderWebProgress),
+    SpiderMist(super::skills::spidermist::SpiderMistProgress),
+    YunShengLightning(super::skills::yunshenglightning::YunShengLightningProgress),
 }
 
-/// Связка записи старого пакета с реестром Zone: правила реестра смотрят
-/// только в скалярную identity, execution/retained достраивает эта запись.
-impl SkillIdentityAccess for MoveShapeSkill {
-    fn identity(&self) -> &SkillIdentity {
-        &self.identity
-    }
-
-    fn identity_mut(&mut self) -> &mut SkillIdentity {
-        &mut self.identity
-    }
-}
 
 pub(crate) use nebokrai_zone::effects::UndeadState;
 
@@ -442,379 +475,6 @@ pub(crate) fn undead_state_from_factory(
 }
 
 
-impl MoveShapeSkill {
-    /// Свежая регистрация: Inactive с общей базой lifecycle и retained
-    /// выбором concrete owner-а (конструктор `CSkill` обнуляет timestamp
-    /// +0x40; новая запись не наследует его от удалённого того же ID).
-    fn registered(id: u32, level: i32, owner: SkillOwner) -> Self {
-        Self {
-            identity: SkillIdentity::new_registered(id, level, owner),
-            execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
-            retained_data: SkillRetainedData::for_owner(owner),
-        }
-    }
-
-    pub(crate) const fn owner(&self) -> SkillOwner {
-        self.identity.owner()
-    }
-
-    pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
-        self.execution.lifecycle()
-    }
-
-    pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
-        self.execution.lifecycle_mut()
-    }
-
-    pub(crate) fn player_state<State: super::skills::kernel::PlayerSkillState>(&self) -> Option<&State> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(execution) => State::from_execution(execution),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn player_state_mut<State: super::skills::kernel::PlayerSkillState>(&mut self) -> Option<&mut State> {
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(execution) => State::from_execution_mut(execution),
-            _ => None,
-        }
-    }
-
-    /// Один payload полёта находится в активной ветви исполнения владельца.
-    /// Player и Monster не копируют его друг у друга при callbacks.
-    pub(crate) fn targeted_projectile_progress(&self) -> Option<&super::skills::targetedprojectile::TargetedProjectileProgress> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::TargetedProjectile(state)) => Some(state.progress()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
-                super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn targeted_projectile_progress_mut(&mut self) -> Option<&mut super::skills::targetedprojectile::TargetedProjectileProgress> {
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::TargetedProjectile(state)) => Some(state.progress_mut()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
-                super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn path_projectile_progress(&self) -> Option<&super::skills::energybolt::PathProjectileProgress> {
-        match &self.retained_data {
-            SkillRetainedData::PathProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn direct_projectile_progress(&self) -> Option<&super::skills::directprojectile::DirectProjectileProgress> {
-        match &self.retained_data {
-            SkillRetainedData::DirectProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn direct_projectile_progress_mut(&mut self) -> Option<&mut super::skills::directprojectile::DirectProjectileProgress> {
-        match &mut self.retained_data {
-            SkillRetainedData::DirectProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn path_projectile_progress_mut(&mut self) -> Option<&mut super::skills::energybolt::PathProjectileProgress> {
-        match &mut self.retained_data {
-            SkillRetainedData::PathProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn lightning_progress(&self) -> Option<&super::skills::lightning::LightningProgress> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::Lightning(state)) => Some(state.progress()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
-                super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn lightning_progress_mut(&mut self) -> Option<&mut super::skills::lightning::LightningProgress> {
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::Lightning(state)) => Some(state.progress_mut()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
-                super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn chain_lightning_progress(&self) -> Option<&super::skills::chainlightning::ChainLightningProgress> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::ChainLightning(state)) => Some(state.progress()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
-                super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn chain_lightning_progress_mut(&mut self) -> Option<&mut super::skills::chainlightning::ChainLightningProgress> {
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(PlayerSkillExecution::ChainLightning(state)) => Some(state.progress_mut()),
-            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
-                super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn execution_stage(&self) -> Option<super::skills::kernel::SkillStage> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution.kernel().stage()),
-            RegisteredSkillExecution::Monster(execution) => Some(execution.kernel.stage()),
-            RegisteredSkillExecution::BattleFairy(execution) => Some(execution.kernel().stage()),
-            RegisteredSkillExecution::Inactive(_) => None,
-        }
-    }
-
-    pub(crate) fn base_projectile_progress(&self) -> Option<&super::skills::baseprojectilecast::BaseProjectileProgress> {
-        match &self.retained_data {
-            SkillRetainedData::BaseProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn base_projectile_progress_mut(&mut self) -> Option<&mut super::skills::baseprojectilecast::BaseProjectileProgress> {
-        match &mut self.retained_data {
-            SkillRetainedData::BaseProjectile(progress) => Some(progress),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn advance_execution(
-        &mut self,
-        from: super::skills::kernel::SkillStage,
-        to: super::skills::kernel::SkillStage,
-    ) -> bool {
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(execution) => execution.kernel_mut().advance(from, to),
-            RegisteredSkillExecution::Monster(execution) => execution.kernel.advance(from, to),
-            RegisteredSkillExecution::BattleFairy(execution) => execution.kernel_mut().advance(from, to),
-            RegisteredSkillExecution::Inactive(_) => false,
-        }
-    }
-
-    pub(crate) fn monster_kernel(&self) -> Option<&super::monster::MonsterBaseAttackCast> {
-        match &self.execution {
-            RegisteredSkillExecution::Monster(execution) => Some(&execution.kernel),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn monster_kernel_mut(&mut self) -> Option<&mut super::monster::MonsterBaseAttackCast> {
-        match &mut self.execution {
-            RegisteredSkillExecution::Monster(execution) => Some(&mut execution.kernel),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn monster_progress<State: super::monster::MonsterSkillProgressState>(&self) -> Option<&State> {
-        match &self.execution {
-            RegisteredSkillExecution::Monster(execution) => State::from_progress(execution.progress.as_ref()?),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn set_monster_progress(&mut self, progress: impl Into<super::monster::MonsterSkillProgress>) {
-        if let RegisteredSkillExecution::Monster(execution) = &mut self.execution {
-            execution.progress = Some(progress.into());
-        }
-    }
-
-    pub(crate) fn execution_dispatch(&self) -> Option<RegisteredSkillDispatch> {
-        match &self.execution {
-            RegisteredSkillExecution::Player(execution) =>
-                Some(RegisteredSkillDispatch::Player(execution.kernel().dispatch())),
-            RegisteredSkillExecution::BattleFairy(execution) =>
-                Some(RegisteredSkillDispatch::BattleFairy(execution.kernel().dispatch())),
-            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Monster(_) => None,
-        }
-    }
-
-    pub(crate) fn player_dispatch(&self) -> Option<super::player::PlayerSkillDispatch> {
-        match self.execution_dispatch() {
-            Some(RegisteredSkillDispatch::Player(dispatch)) => Some(dispatch),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn battle_fairy_dispatch(&self) -> Option<super::player::BattleFairySkillDispatch> {
-        match self.execution_dispatch() {
-            Some(RegisteredSkillDispatch::BattleFairy(dispatch)) => Some(dispatch),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn battle_fairy_execution_state(&self) -> Option<&BattleFairyExecution> {
-        match &self.execution {
-            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn battle_fairy_execution_state_mut(&mut self) -> Option<&mut BattleFairyExecution> {
-        match &mut self.execution {
-            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
-            _ => None,
-        }
-    }
-
-    /// Материализация сохраняет уже начатую базу именно этого экземпляра.
-    pub(crate) fn install_player_execution(&mut self, mut execution: PlayerSkillExecution) -> bool {
-        if execution.kernel().dispatch().skill_id() != self.id()
-            || !matches!(self.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Player(_))
-        {
-            return false;
-        }
-        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
-        execution.kernel_mut().replace_lifecycle(lifecycle);
-        self.execution = RegisteredSkillExecution::Player(execution);
-        true
-    }
-
-    /// Материализация сохраняет уже начатую базу именно этого экземпляра.
-    pub(crate) fn install_battle_fairy_execution(&mut self, mut execution: BattleFairyExecution) -> bool {
-        if execution.kernel().dispatch().skill_id() != self.id()
-            || !matches!(self.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_))
-        {
-            return false;
-        }
-        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
-        execution.kernel_mut().replace_lifecycle(lifecycle);
-        self.execution = RegisteredSkillExecution::BattleFairy(execution);
-        true
-    }
-
-    /// Убирает только payload этого экземпляра, без повторного поиска по ID.
-    /// Общая база, visual и reuse не получают дополнительных End-переходов.
-    pub(crate) fn clear_execution(&mut self, expected: RegisteredSkillDispatch) -> bool {
-        if self.execution_dispatch() != Some(expected) {
-            return false;
-        }
-        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
-        self.execution = RegisteredSkillExecution::Inactive(lifecycle);
-        true
-    }
-
-    pub(crate) fn is_execution_inactive(&self) -> bool {
-        matches!(self.execution, RegisteredSkillExecution::Inactive(_))
-    }
-
-    pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
-        let owner = self.owner();
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(execution) => {
-                if owner.end_policy().reset_phase {
-                    execution.kernel_mut().clear_phase_for_end();
-                }
-                if !execution.prepare_derived_end(argument) {
-                    return false;
-                }
-            }
-            RegisteredSkillExecution::Monster(execution) => execution.prepare_derived_end(),
-            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
-        }
-        if let SkillRetainedData::DirectProjectile(progress) = &mut self.retained_data {
-            progress.prepare_derived_end();
-        }
-        true
-    }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        if let SkillRetainedData::PathProjectile(progress) = &mut self.retained_data {
-            progress.clear_end_paths();
-        }
-        match &mut self.execution {
-            RegisteredSkillExecution::Player(execution) => execution.clear_end_paths(),
-            RegisteredSkillExecution::Monster(execution) => execution.clear_end_paths(),
-            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
-        }
-    }
-
-    pub(crate) fn mark_used(&mut self, now_ms: u32) {
-        self.identity.mark_used(now_ms);
-    }
-
-    pub(crate) const fn last_used_ms(&self) -> u32 {
-        self.identity.last_used_ms()
-    }
-
-    pub(crate) fn replace_visual_effect(&mut self, effect: SkillVisualEffect) {
-        self.identity.replace_visual_effect(effect);
-    }
-
-    pub(crate) fn visual_effect_mut(&mut self) -> Option<&mut SkillVisualEffect> {
-        self.identity.visual_effect_mut()
-    }
-
-    pub(crate) fn visual_effect(&self) -> Option<&SkillVisualEffect> {
-        self.identity.visual_effect()
-    }
-
-    /// Общий хвост CSkill::End после concrete cleanup и OnEndSkill.
-    /// Владеющий visual не входит в копируемый снимок скалярного lifecycle.
-    pub(crate) fn finish_base(&mut self, termination: SkillTermination) {
-        self.clear_base_end_context();
-        self.finish_cleared_base_end(termination);
-    }
-
-    pub(crate) fn clear_base_end_context(&mut self) {
-        self.execution.lifecycle_mut().clear_end_context();
-    }
-
-    /// Visual и IsEnded следуют после отдельного native reuse-clock; общая
-    /// очистка принадлежит Zone-identity этой записи.
-    pub(crate) fn finish_cleared_base_end(&mut self, termination: SkillTermination) {
-        self.identity
-            .finish_cleared_base_end(self.execution.lifecycle_mut(), termination);
-    }
-
-    pub(crate) const fn id(&self) -> u32 {
-        self.identity.id()
-    }
-
-    pub(crate) const fn level(&self) -> i32 {
-        self.identity.level()
-    }
-
-    pub(crate) fn minimum_range(&self, factory: &CSkillFactory) -> u32 {
-        self.identity.minimum_range(factory)
-    }
-
-    pub(crate) const fn skill_type(&self) -> u32 {
-        self.identity.skill_type()
-    }
-
-    pub(crate) fn name<'a>(&self, factory: &'a CSkillFactory) -> Option<&'a [u8]> {
-        self.identity.name(factory)
-    }
-
-    pub(crate) const fn item_position(&self) -> i32 {
-        self.identity.item_position()
-    }
-
-    pub(crate) const fn set_item_position(&mut self, position: i32) {
-        self.identity.set_item_position(position);
-    }
-}
 
 /// Шов Zone-основы wire-команд `0xBF603/604/605` к переходному владельцу
 /// хранилищ: основе достаточно span и запрета клетки, а вся запись позиции
@@ -2163,7 +1823,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&SkillLifecycle> {
-        Some(self.skill(skill_id, factory)?.execution.lifecycle())
+        Some(self.skill(skill_id, factory)?.lifecycle())
     }
 
     pub(crate) fn skill_lifecycle_mut(
@@ -2171,7 +1831,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut SkillLifecycle> {
-        Some(self.skill_mut(skill_id, factory)?.execution.lifecycle_mut())
+        Some(self.skill_mut(skill_id, factory)?.lifecycle_mut())
     }
 
     pub(crate) fn skill_visual_effect_mut(
@@ -2209,10 +1869,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&super::monster::MonsterSkillExecution> {
-        match &self.skill(skill_id, factory)?.execution {
-            RegisteredSkillExecution::Monster(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill(skill_id, factory)?.monster_payload()
     }
 
     pub(crate) fn monster_skill_execution_mut(
@@ -2220,26 +1877,17 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut super::monster::MonsterSkillExecution> {
-        match &mut self.skill_mut(skill_id, factory)?.execution {
-            RegisteredSkillExecution::Monster(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill_mut(skill_id, factory)?.monster_payload_mut()
     }
 
     pub(crate) fn install_monster_execution(
         &mut self,
-        mut execution: super::monster::MonsterSkillExecution,
+        execution: super::monster::MonsterSkillExecution,
         factory: &CSkillFactory,
     ) -> bool {
         let skill_id = execution.kernel.dispatch().skill_id;
         let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Monster(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        execution.kernel.replace_lifecycle(lifecycle);
-        skill.execution = RegisteredSkillExecution::Monster(execution);
-        true
+        skill.install_monster_execution(execution)
     }
 
     pub(crate) fn clear_monster_execution(
@@ -2248,12 +1896,7 @@ impl CMoveShape {
         factory: &CSkillFactory,
     ) -> bool {
         let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::Monster(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
-        true
+        skill.clear_monster_execution()
     }
 
     pub(crate) fn player_execution(
@@ -2261,10 +1904,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&PlayerSkillExecution> {
-        match &self.skill(skill_id, factory)?.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill(skill_id, factory)?.player_execution()
     }
 
     pub(crate) fn player_execution_mut(
@@ -2272,10 +1912,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut PlayerSkillExecution> {
-        match &mut self.skill_mut(skill_id, factory)?.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill_mut(skill_id, factory)?.player_execution_mut()
     }
 
     pub(crate) fn install_player_execution(

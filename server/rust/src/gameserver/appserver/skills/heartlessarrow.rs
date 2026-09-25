@@ -36,7 +36,7 @@ use super::fightdefense::truncate_original;
 use nebokrai_zone::effects::CURE_STATE_SKILL_ID;
 use nebokrai_zone::skills::DAUB_POISON_SKILL_ID;
 use super::heartlessarrow2::check_heartless_cast;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     CastPathBlock, RangedWeaponKind, check_skill_path, prepare_ranged_weapon_player, terminal,
@@ -56,6 +56,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{HeartlessArrowExecutionState};
 
 pub(crate) const HEARTLESS_ARROW_SKILL_ID: u32 = 0xca;
 const ACTION_INTERVAL: u32 = 10_009;
@@ -65,40 +66,6 @@ const STATE_PERSIST_TIME_MODIFIER: u32 = 10_003;
 const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const POISON_CONSTANT: u32 = 20_010;
 const WEAPON_DAMAGE_LEVEL_MODIFIER: u32 = 20_018;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HeartlessArrowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    skill_casted: bool,
-    hold_time_ms: u32,
-    missile_flying_time_ms: u32,
-}
-
-impl HeartlessArrowExecutionState {
-    pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
-        if argument != 0 && self.kernel.stage() == SkillStage::Check && !self.attacking_started {
-            self.attacking_started = true;
-            return false;
-        }
-        self.kernel.clear_phase_for_end();
-        self.attacking_started = false;
-        self.skill_casted = false;
-        self.missile_flying_time_ms = 0;
-        self.hold_time_ms = 0;
-        true
-    }
-
-    fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            attacking_started: false, skill_casted: false, hold_time_ms: 0, missile_flying_time_ms: 0,
-        }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(super) const fn missile_flying_time_ms(&self) -> u32 { self.missile_flying_time_ms }
-}
 
 fn progress(game: &CGame, instance: RegisteredSkill) -> Option<&HeartlessArrowExecutionState> {
     game.registered_skill(instance)?.player_state()

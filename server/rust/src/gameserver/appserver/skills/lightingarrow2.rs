@@ -29,8 +29,7 @@ use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::cell_views;
 use super::heartlessarrow::apply_daub_poison;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
-use super::lightingarrowphalanx::ArrowTargetIdentity;
+use super::kernel::{SkillStage, SkillTermination};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast,
@@ -48,57 +47,13 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{LightingArrow2ExecutionState};
 
 pub(crate) const LIGHTING_ARROW_2_SKILL_ID: u32 = 0xE7;
 const PLAYER_TYPE: i32 = 400;
 const TARGET_MAX_DISTANCE: u32 = 5_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LightingArrow2ExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    missile_flying_time: u32,
-    path: Vec<(i32, i32, u8)>,
-    attack_cell_count: u32,
-    current_cell: u32,
-    attacked_creatures: Vec<ArrowTargetIdentity>,
-}
-
-impl LightingArrow2ExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            attacking_started: false,
-            missile_flying_time: 0,
-            path: Vec::new(),
-            attack_cell_count: 0,
-            current_cell: 0,
-            attacked_creatures: Vec::new(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-
-    fn mark_target_attacked(&mut self, target: (i32, ShapeIdentity)) -> bool {
-        let key = ArrowTargetIdentity::new(target.0, target.1);
-        if self.attacked_creatures.contains(&key) { return false; }
-        self.attacked_creatures.push(key);
-        true
-    }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacking_started = false;
-        self.missile_flying_time = 0;
-        self.attack_cell_count = 0;
-        self.current_cell = 0;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked_creatures));
-    }
-}
 
 fn attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),

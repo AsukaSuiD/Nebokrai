@@ -35,7 +35,7 @@ use super::basemagic::{
 };
 use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::baseprojectilecheck::{base_projectile_attack_path, check_base_projectile_cast};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{spend_cast_mana, terminal};
 use super::soulcollectstate::consume_soul_collect_snapshot;
@@ -59,6 +59,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{BaseProjectileProgress, BaseProjectileExecutionState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BaseProjectileKind { Archery, Magic, FireBolt, FireBall }
@@ -78,26 +79,6 @@ impl BaseProjectileKind {
             Self::FireBolt => SkillOwner::CFireBolt, Self::FireBall => SkillOwner::CFireBall,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BaseProjectileProgress {
-    attack_time_ms: i32,
-}
-impl BaseProjectileProgress {
-    pub(crate) const fn attack_time_ms(&self) -> i32 { self.attack_time_ms }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BaseProjectileExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-}
-impl BaseProjectileExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started) }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
 
 fn distance(game: &CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity)) -> Option<i32> {

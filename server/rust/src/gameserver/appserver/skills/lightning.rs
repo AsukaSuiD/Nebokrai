@@ -21,7 +21,7 @@
 
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::directelementattack::apply_direct_element_attack;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     CastPathBlock, check_cast_mana_without_movement, check_skill_path, spend_cast_mana, terminal,
@@ -43,38 +43,9 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{LightningProgress, LightningExecutionState};
 
 pub(crate) const LIGHTNING_SKILL_ID: u32 = 0x133;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct LightningProgress {
-    pub(crate) attacking: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LightningExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    progress: LightningProgress,
-}
-
-impl LightningExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            progress: LightningProgress::default(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn progress(&self) -> &LightningProgress { &self.progress }
-    pub(crate) fn progress_mut(&mut self) -> &mut LightningProgress { &mut self.progress }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.progress = LightningProgress::default();
-        true
-    }
-}
 
 fn check_lightning_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill,

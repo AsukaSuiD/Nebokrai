@@ -49,6 +49,7 @@ use crate::gameserver::gameserver::game::{
     ServerRegionOwner,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PathProjectileScope, PathProjectileProgress};
 
 pub(crate) const ENERGY_BOLT_SKILL_ID: u32 = 0x1a0;
 
@@ -78,128 +79,6 @@ impl PathProjectileProfile {
 
     const fn locks_free_mana(self) -> bool {
         !matches!(self, Self::EnergyBolt)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PathProjectileScope {
-    Cell,
-    Square3,
-}
-
-impl PathProjectileScope {
-    const fn for_level(level: i32) -> Self {
-        if matches!(level, 1 | 2) { Self::Cell } else { Self::Square3 }
-    }
-
-    const fn radius(self) -> i32 {
-        match self {
-            Self::Cell => 0,
-            Self::Square3 => 1,
-        }
-    }
-}
-
-/// Сохраняемая часть конкретного владельца: область заменяет выделение в
-/// исходной куче и не очищается End, остальные поля принадлежат текущему полёту.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PathProjectileProgress {
-    scope: Option<PathProjectileScope>,
-    path: Vec<(i32, i32, u8)>,
-    current_position: usize,
-    end_x: i32,
-    end_y: i32,
-    visual_target: Option<ShapeIdentity>,
-    missile_flying_time_ms: u32,
-    fired: bool,
-}
-
-impl PathProjectileProgress {
-    pub(crate) fn clear_end_paths(&mut self) {
-        drop(std::mem::take(&mut self.path));
-        self.current_position = 0;
-        self.end_x = 0;
-        self.end_y = 0;
-        self.visual_target = None;
-        self.missile_flying_time_ms = 0;
-        self.fired = false;
-    }
-
-    fn ensure_scope(&mut self, level: i32) {
-        if self.scope.is_none() {
-            self.scope = Some(PathProjectileScope::for_level(level));
-        }
-    }
-
-    fn scope(&self) -> Option<PathProjectileScope> {
-        self.scope
-    }
-
-    fn fired(&self) -> bool {
-        self.fired
-    }
-
-    fn prepare_flight(&mut self, path: Vec<(i32, i32, u8)>, flying_unit_ms: u32) {
-        let unfly = path.iter().position(|cell| cell.2 == BLOCK_UNFLY);
-        let end_index = unfly.unwrap_or(path.len());
-        if let Some(&(x, y, _)) = unfly.and_then(|index| path.get(index)).or_else(|| path.last()) {
-            self.end_x = x;
-            self.end_y = y;
-        }
-        self.path = path;
-        self.visual_target = None;
-        self.missile_flying_time_ms = flying_unit_ms.wrapping_mul(end_index as u32);
-    }
-
-    fn start_flight(&mut self) {
-        self.fired = true;
-    }
-
-    fn current_position(&self) -> usize {
-        self.current_position
-    }
-
-    fn path_len(&self) -> usize {
-        self.path.len()
-    }
-
-    fn current_cell(&self) -> Option<(i32, i32)> {
-        self.path.get(self.current_position).map(|&(x, y, _)| (x, y))
-    }
-
-    fn set_end_position(&mut self, x: i32, y: i32) {
-        self.end_x = x;
-        self.end_y = y;
-    }
-
-    fn select_visual_target_if_empty(&mut self, target: ShapeIdentity) {
-        if self.visual_target.is_none() {
-            self.visual_target = Some(target);
-        }
-    }
-
-    fn finish_after_collision(&mut self) {
-        self.current_position = self.path.len().wrapping_add(1);
-    }
-
-    fn finish_after_unfly(&mut self) {
-        self.current_position = self.path.len();
-    }
-
-    fn advance(&mut self) {
-        self.current_position = self.current_position.wrapping_add(1);
-    }
-
-    pub(crate) const fn end_position(&self) -> (i32, i32) {
-        (self.end_x, self.end_y)
-    }
-
-    pub(crate) const fn visual_target(&self) -> Option<ShapeIdentity> {
-        self.visual_target
-    }
-
-    pub(crate) const fn missile_flying_time_ms(&self) -> u32 {
-        self.missile_flying_time_ms
     }
 }
 

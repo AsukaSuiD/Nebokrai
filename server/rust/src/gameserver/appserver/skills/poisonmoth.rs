@@ -27,7 +27,7 @@
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::crossbowattack::run_poison_moth_cell;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast,
@@ -46,56 +46,13 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PoisonMothExecutionState};
 
 pub(crate) const POISON_MOTH_SKILL_ID: u32 = 0xCF;
 pub(super) const PLAYER_TYPE: i32 = 400;
 pub(super) const MONSTER_TYPE: i32 = 600;
 const TARGET_MAX_DISTANCE: u32 = 5_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PoisonMothExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    missile_flying_time: u32,
-    path: Vec<(i32, i32, u8)>,
-    current_position: u32,
-    end_tile: (i32, i32),
-    visual_target: (i32, i32),
-}
-
-impl PoisonMothExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            attacking_started: false,
-            missile_flying_time: 0,
-            path: Vec::new(),
-            current_position: 0,
-            end_tile: (0, 0),
-            visual_target: (0, 0),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-    pub(crate) const fn end_tile(&self) -> (i32, i32) { self.end_tile }
-    pub(crate) const fn visual_target(&self) -> (i32, i32) { self.visual_target }
-
-    pub(super) fn set_visual_target(&mut self, target: ShapeIdentity) {
-        self.visual_target = (target.object_type, target.id);
-    }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacking_started = false;
-        self.missile_flying_time = 0;
-        self.current_position = 0;
-        self.end_tile = (0, 0);
-        self.visual_target = (0, 0);
-        drop(std::mem::take(&mut self.path));
-    }
-}
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,

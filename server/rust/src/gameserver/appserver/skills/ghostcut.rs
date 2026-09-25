@@ -23,12 +23,11 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME}
 use super::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use super::ghostcut3::GHOST_CUT_3_SKILL_ID;
 use super::ghostcutattack::attack_ghost_cut_cell;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
     resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
@@ -38,53 +37,13 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{GhostCutExecutionState};
 
 pub(crate) const GHOST_CUT_SKILL_ID: u32 = 0x66;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 const TARGET_MAX_DISTANCE: u32 = 5_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GhostCutExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    missile_flying_time: u32,
-    path: Vec<(i32, i32, u8)>,
-    current_position: u32,
-    attacked: Vec<ShapeIdentity>,
-}
-
-impl GhostCutExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            attacking_started: false,
-            missile_flying_time: 0,
-            path: Vec::new(),
-            current_position: 0,
-            attacked: Vec::new(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-
-    pub(super) fn mark_target_attacked(&mut self, identity: ShapeIdentity) -> bool {
-        if self.attacked.contains(&identity) { return false; }
-        self.attacked.push(identity);
-        true
-    }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacking_started = false;
-        self.missile_flying_time = 0;
-        self.current_position = 0;
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked));
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

@@ -65,7 +65,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use nebokrai_shared::values::CGuid;
@@ -75,6 +75,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerBossBlueQuakeExecutionState};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -96,37 +97,6 @@ fn scaled_monster_duration(persist: u32, time_percent: u32) -> u32 {
 }
 
 pub(crate) const BOSS_BLUE_QUAKE_SKILL_ID: u32 = 0x1f8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerBossBlueQuakeExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    direction: i32,
-}
-
-impl PlayerBossBlueQuakeExecutionState {
-    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, now_ms),
-            direction: -1,
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-
-    pub(crate) const fn direction(&self) -> i32 {
-        self.direction
-    }
-
-    pub(crate) const fn set_direction(&mut self, direction: i32) {
-        self.direction = direction;
-    }
-}
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {

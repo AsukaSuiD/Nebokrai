@@ -50,7 +50,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -61,6 +61,7 @@ use crate::gameserver::appserver::states::attackpower::{
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{PlayerYunShengLightningExecutionState, YunShengLightningProgress};
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
@@ -72,62 +73,6 @@ const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const YUNSHENG_LIGHTNING_SKILL_ID: u32 = 0x19e;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerYunShengLightningExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    destination: (i32, i32),
-    condition_checked: bool,
-}
-
-impl PlayerYunShengLightningExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, condition_checked: false } }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct YunShengLightningProgress {
-    destination_x: i32,
-    destination_y: i32,
-    flying_time_ms: u32,
-    fired: bool,
-}
-
-impl YunShengLightningProgress {
-    pub(crate) const fn new(destination_x: i32, destination_y: i32) -> Self {
-        Self {
-            destination_x,
-            destination_y,
-            flying_time_ms: 0,
-            fired: false,
-        }
-    }
-
-    pub(crate) const fn fired(self) -> bool {
-        self.fired
-    }
-
-    pub(crate) const fn destination(self) -> (i32, i32) {
-        (self.destination_x, self.destination_y)
-    }
-
-    pub(crate) const fn flying_time_ms(self) -> u32 {
-        self.flying_time_ms
-    }
-
-    pub(crate) fn fire(
-        &mut self,
-        destination_x: i32,
-        destination_y: i32,
-        flying_time_ms: u32,
-    ) {
-        self.destination_x = destination_x;
-        self.destination_y = destination_y;
-        self.flying_time_ms = flying_time_ms;
-        self.fired = true;
-    }
-}
 
 fn send_start(
     game: &CGame,

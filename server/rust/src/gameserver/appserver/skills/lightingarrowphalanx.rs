@@ -41,18 +41,7 @@ use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use nebokrai_shared::values::CGuid;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ArrowTargetIdentity {
-    region_id: i32,
-    identity: ShapeIdentity,
-}
-
-impl ArrowTargetIdentity {
-    pub(super) const fn new(region_id: i32, identity: ShapeIdentity) -> Self {
-        Self { region_id: if identity.object_type == 400 { 0 } else { region_id }, identity }
-    }
-}
+pub(crate) use nebokrai_zone::skills::execution::{ArrowTargetIdentity};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CLightingArrowPhalanx {

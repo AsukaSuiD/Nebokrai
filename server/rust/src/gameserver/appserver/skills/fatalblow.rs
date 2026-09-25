@@ -30,7 +30,7 @@ use super::battlefairyskill::{
 use super::battlefairytransfer::send_goods_update;
 use super::fatalblowphalanx::CFatalBlowPhalanx;
 use super::kernel::{
-    BattleFairyExecution, SkillExecutionKernel, SkillStage,
+    BattleFairyExecution, SkillStage,
     battle_fairy_mana_text_cost, skill_is_restored,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -46,34 +46,13 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
+pub(crate) use nebokrai_zone::skills::execution::{FatalBlowExecutionState};
 
 pub(crate) const FATAL_BLOW_SKILL_ID: u32 = 0x21c;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FatalBlowExecutionState {
-    kernel: SkillExecutionKernel<BattleFairySkillDispatch>,
-    missile_flying_time: u32,
-}
-
-impl FatalBlowExecutionState {
-    pub(crate) const fn begin(dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), missile_flying_time: 0 }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<BattleFairySkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-
-    pub(crate) const fn set_missile_flying_time(&mut self, missile_flying_time: u32) {
-        self.missile_flying_time = missile_flying_time;
-    }
-
-    pub(crate) fn prepare_derived_end(&mut self) { self.missile_flying_time = 0; }
-}
 
 fn fail(
     game: &mut CGame, instance: RegisteredSkill, player_id: Option<i32>, mode: u32, text: &[u8],

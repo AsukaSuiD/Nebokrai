@@ -24,8 +24,7 @@
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::directelementattack::apply_direct_element_attack;
 use super::flash::cell_views;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
-use super::lightingarrowphalanx::ArrowTargetIdentity;
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{spend_cast_mana, terminal};
 use super::skillfactory::SkillOwner;
@@ -46,50 +45,10 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{ChainLightningProgress, ChainLightningExecutionState};
 
 pub(crate) const CHAIN_LIGHTNING_SKILL_ID: u32 = 0x13e;
 const ACTION_INTERVAL: u32 = 10_009;
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ChainLightningProgress {
-    path: Vec<(i32, i32, u8)>,
-    attacked_targets: Vec<ArrowTargetIdentity>,
-    attacked: bool,
-}
-
-impl ChainLightningProgress {
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacked = false;
-        self.path.clear();
-        self.attacked_targets.clear();
-    }
-
-    fn has_attacked(&self, target: (i32, ShapeIdentity)) -> bool {
-        self.attacked_targets.contains(&ArrowTargetIdentity::new(target.0, target.1))
-    }
-
-    fn append_target(&mut self, target: (i32, ShapeIdentity)) {
-        self.attacked_targets.push(ArrowTargetIdentity::new(target.0, target.1));
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ChainLightningExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    progress: ChainLightningProgress,
-}
-
-impl ChainLightningExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), progress: ChainLightningProgress::default() }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn progress(&self) -> &ChainLightningProgress { &self.progress }
-    pub(crate) fn progress_mut(&mut self) -> &mut ChainLightningProgress { &mut self.progress }
-    pub(crate) fn clear_end_paths(&mut self) { self.progress.clear_end_paths(); }
-}
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill,

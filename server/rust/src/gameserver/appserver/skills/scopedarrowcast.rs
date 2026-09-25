@@ -34,8 +34,7 @@
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::crossbowattack::run_scoped_arrow_attack;
-use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::lightingarrowphalanx::ArrowTargetIdentity;
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast,
@@ -53,6 +52,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{ScopedArrowExecutionState};
 
 pub(crate) const BLOOD_ROSE_SKILL_ID: u32 = 0xD0;
 pub(crate) const EXPLOSIVE_ARROW_SKILL_ID: u32 = 0xD6;
@@ -69,66 +69,6 @@ fn weapon_kind(skill_id: u32) -> Option<RangedWeaponKind> {
         BLOOD_ROSE_SKILL_ID | EXPLOSIVE_ARROW_SKILL_ID => Some(RangedWeaponKind::Crossbow),
         EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => Some(RangedWeaponKind::ExplosiveBow),
         _ => None,
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScopedArrowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    attacking_started: bool,
-    missile_flying_time: u32,
-    current_position: u32,
-    end_tile: (i32, i32),
-    visual_target: (i32, i32),
-    path: Vec<(i32, i32, u8)>,
-    attacked: Vec<ArrowTargetIdentity>,
-}
-
-impl ScopedArrowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            attacking_started: false,
-            missile_flying_time: 0,
-            current_position: 0,
-            end_tile: (0, 0),
-            visual_target: (0, 0),
-            path: Vec::new(),
-            attacked: Vec::new(),
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
-    pub(crate) const fn end_tile(&self) -> (i32, i32) { self.end_tile }
-    pub(crate) const fn visual_target(&self) -> (i32, i32) { self.visual_target }
-
-    pub(super) fn is_target_attacked(&self, target: (i32, ShapeIdentity)) -> bool {
-        self.attacked.contains(&ArrowTargetIdentity::new(target.0, target.1))
-    }
-
-    pub(super) fn mark_target_attacked(&mut self, target: (i32, ShapeIdentity)) -> bool {
-        let key = ArrowTargetIdentity::new(target.0, target.1);
-        if self.attacked.contains(&key) { return false; }
-        self.attacked.push(key);
-        true
-    }
-
-    pub(super) fn select_visual_target_if_empty(&mut self, identity: ShapeIdentity) {
-        if self.visual_target == (0, 0) {
-            self.visual_target = (identity.object_type, identity.id);
-        }
-    }
-
-    pub(crate) fn clear_end_paths(&mut self) {
-        self.attacking_started = false;
-        self.missile_flying_time = 0;
-        self.current_position = 0;
-        self.end_tile = (0, 0);
-        self.visual_target = (0, 0);
-        drop(std::mem::take(&mut self.path));
-        drop(std::mem::take(&mut self.attacked));
     }
 }
 

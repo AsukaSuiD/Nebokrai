@@ -27,7 +27,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_LIFETIME,
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillStage, SkillTermination};
 use super::lightingarrowphalanx::CLightingArrowPhalanx;
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
@@ -46,25 +46,11 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{LightingArrowExecutionState};
 
 pub(crate) const LIGHTING_ARROW_SKILL_ID: u32 = 0xcb;
 const PLAYER_TYPE: i32 = 400;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LightingArrowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    path: Vec<(i32, i32, u8)>,
-}
-
-impl LightingArrowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), path: Vec::new() }
-    }
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(crate) fn clear_end_paths(&mut self) { self.path.clear(); }
-}
 
 fn summon<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),

@@ -24,7 +24,7 @@
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     ArrowCastPathRule, CastPathBlock, RangedWeaponKind, check_ranged_weapon_cast,
@@ -48,34 +48,13 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{ScorpionExecutionState};
 
 pub(crate) const SCORPION_SKILL_ID: u32 = 0xD1;
 const FIRST_TIME: u32 = 15_001;
 const SECOND_TIME: u32 = 15_002;
 const THIRD_TIME: u32 = 15_003;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ScorpionExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    first_attack: bool,
-    second_attack: bool,
-}
-
-impl ScorpionExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started), first_attack: false, second_attack: false }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.first_attack = false;
-        self.second_attack = false;
-        true
-    }
-}
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,

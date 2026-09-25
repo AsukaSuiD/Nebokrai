@@ -73,66 +73,6 @@ impl DirectProjectileKind {
     }
 }
 
-/// Поля конкретного C++-экземпляра между Begin, выпуском и End.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct DirectProjectileProgress {
-    available: bool,
-    condition_checked: bool,
-    attacking_started: bool,
-    missile_flying_time_ms: u32,
-    auto_restart: bool,
-}
-
-impl DirectProjectileProgress {
-    fn begin_after_check(&mut self) {
-        self.available = true;
-        self.condition_checked = false;
-        self.attacking_started = false;
-        self.missile_flying_time_ms = 0;
-    }
-
-    fn is_available(self) -> bool {
-        self.available
-    }
-
-    fn condition_checked(self) -> bool {
-        self.condition_checked
-    }
-
-    fn attacking_started(self) -> bool {
-        self.attacking_started
-    }
-
-    fn mark_condition_checked(&mut self) {
-        self.condition_checked = true;
-    }
-
-    fn start_flight(&mut self, missile_flying_time_ms: u32) {
-        self.missile_flying_time_ms = missile_flying_time_ms;
-    }
-
-    fn mark_attacking_started(&mut self) {
-        self.attacking_started = true;
-    }
-
-    fn auto_restart(self) -> bool {
-        self.auto_restart
-    }
-
-    pub(crate) const fn missile_flying_time_ms(&self) -> u32 {
-        self.missile_flying_time_ms
-    }
-
-    /// `CChuckStone::End` / `CSkeletonArchery::End` сбрасывает эти четыре
-    /// поля до `GetUser()->SetMoveable(true)` и базового End.
-    pub(crate) fn prepare_derived_end(&mut self) {
-        self.available = false;
-        self.condition_checked = false;
-        self.attacking_started = false;
-        self.missile_flying_time_ms = 0;
-    }
-}
-
 fn direct_projectile_path(
     game: &CGame,
     skill: &MoveShapeSkill,

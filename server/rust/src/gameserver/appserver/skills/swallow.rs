@@ -20,7 +20,7 @@
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::swallowattack::run_swallow_attack;
@@ -35,39 +35,12 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::public::tools::get_line_direction;
+pub(crate) use nebokrai_zone::skills::execution::{SwallowExecutionState};
 
 pub(crate) const SWALLOW_SKILL_ID: u32 = 0x6a;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 const ACTION_INTERVAL: u32 = 10_009;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SwallowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    first_attack_done: bool,
-    direction: i32,
-}
-
-impl SwallowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started),
-            first_attack_done: false,
-            direction: -1,
-        }
-    }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-    pub(super) const fn direction(&self) -> i32 { self.direction }
-
-    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
-        self.first_attack_done = false;
-        self.kernel.lifecycle_mut().set_available(true);
-        self.direction = -1;
-        true
-    }
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }

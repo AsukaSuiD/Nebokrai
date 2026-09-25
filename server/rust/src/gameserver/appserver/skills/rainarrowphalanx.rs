@@ -35,10 +35,9 @@ use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use nebokrai_shared::values::CGuid;
+pub(crate) use nebokrai_zone::skills::execution::{RainArrowPath, RainArrowCell};
 
 pub(crate) const RAIN_ARROW_SKILL_ID: u32 = 0xce;
-pub(crate) type RainArrowCell = (i32, i32, u8);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RainArrowBeam { Center, Right, Left }
 
@@ -46,12 +45,6 @@ impl RainArrowBeam {
     const fn index(self) -> usize {
         match self { Self::Center => 0, Self::Right => 1, Self::Left => 2 }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct RainArrowPath {
-    pub(super) cells: Vec<RainArrowCell>,
-    pub(super) active_cells: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
