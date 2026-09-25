@@ -13,59 +13,11 @@
 //! Rust-композиция `CBaseObject -> CShape -> CMoveShape` заменяет ABI/vtable;
 //! короткий wire сохраняет уже выполненные присваивания до ошибки.
 
-use std::error::Error;
-use std::fmt;
+use super::baseobject::CBaseObject;
 
-use super::baseobject::{BaseObjectDecodeError, CBaseObject};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ShapeDecodeError {
-    BaseObject(BaseObjectDecodeError),
-    UnexpectedEnd {
-        field: &'static str,
-        offset: usize,
-        needed: usize,
-        available: usize,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ShapeTileCoordinateBlock {
-    pub(crate) axis: &'static str,
-    pub(crate) value_bits: u32,
-}
-
-impl fmt::Display for ShapeDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BaseObject(error) => error.fmt(formatter),
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "поле {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for ShapeDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::BaseObject(error) => Some(error),
-            Self::UnexpectedEnd { .. } => None,
-        }
-    }
-}
-
-impl From<BaseObjectDecodeError> for ShapeDecodeError {
-    fn from(error: BaseObjectDecodeError) -> Self {
-        Self::BaseObject(error)
-    }
-}
+pub(crate) use nebokrai_realm::regions::shapetypes::{
+    ShapeDecodeError, ShapeTileCoordinateBlock,
+};
 
 pub(crate) struct CShape {
     base_object: CBaseObject,

@@ -32,42 +32,7 @@ use nebokrai_shared::values::CGuid;
 
 const LEGACY_NAME_CAPACITY: usize = 0x100;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BaseObjectDecodeError {
-    UnexpectedEnd {
-        field: &'static str,
-        offset: usize,
-        needed: usize,
-        available: usize,
-    },
-    LegacyNameOverflow {
-        first_out_of_bounds_offset: usize,
-    },
-}
-
-impl fmt::Display for BaseObjectDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "поле {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-            Self::LegacyNameOverflow {
-                first_out_of_bounds_offset,
-            } => write!(
-                formatter,
-                "имя вышло за старый 256-байтовый буфер на offset {first_out_of_bounds_offset}"
-            ),
-        }
-    }
-}
-
-impl Error for BaseObjectDecodeError {}
+pub(crate) use nebokrai_realm::regions::shapetypes::BaseObjectDecodeError;
 
 /// Безопасная замена единственной достигаемой null-границы
 /// `CBaseObject::CreateChildObject`.
