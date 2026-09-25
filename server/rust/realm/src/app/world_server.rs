@@ -18,8 +18,9 @@
 //! `CServer` владеет I/O/runtime, а этот слой сохраняет только World
 //! component state и callbacks. Типизированное `LoginClientReconnected`
 //! заменяет исходную публикацию `0x3FC03 + CMyNetClient*`: тот же тип
-//! присутствует в диспетчере Get-пути домена (`cmp eax,0x3FC03` внутри
-//! `OnTeamMessage` `0x4AAD40`, jump table его owner-а), а wire-передача
+//! обрабатывает сам диспетчер `OnServerMessage` (`cmp eax,0x3FC03` по
+//! адресу `0x4ADD4A`; ранняя запись ошибочно относила сравнение к
+//! `OnTeamMessage` — в его теле ссылок на тип нет), а wire-передача
 //! указателя не получает Rust-значения.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
