@@ -21,6 +21,41 @@ use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::{WorldPlayerDeleteLogWrite, WorldWriteLogCommand};
 use crate::sessions::csessionfactory::CSessionFactory;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldCreateRoleRequest {
+    pub name: Vec<u8>,
+    pub sex: u8,
+    pub occupation: u8,
+    pub head_picture: u8,
+    pub face_picture: u8,
+    pub country: u8,
+    pub account: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldCreateRoleFailureStage {
+    DatabaseCount,
+    CharacterLimit,
+    OccupationSex,
+    Country,
+    WordsFilter,
+    DuplicateName,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldCreateRoleAppendCollision {
+    DuplicateCreationId,
+    ExistingMapOwner,
+}
+
+pub const CREATE_ROLE_REQUEST: i32 = 0x0004_FB04;
+pub const CREATE_ROLE_RESPONSE: i32 = 0x0001_FF03;
+pub const CREATE_ROLE_INVALID_STATUS: i8 = 0x01;
+pub const CREATE_ROLE_LIMIT_STATUS: i8 = 0x02;
+pub const CREATE_ROLE_FILTER_STATUS: i8 = 0x03;
+pub const CREATE_ROLE_DUPLICATE_STATUS: i8 = 0x05;
+pub const CREATE_ROLE_SUCCESS_STATUS: i8 = 0x00;
+
 pub const RESTORE_ROLE_REQUEST: i32 = 0x0004_FB03;
 pub const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 pub const RESTORE_ROLE_STATUS: i8 = 0x15;

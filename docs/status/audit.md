@@ -1,5 +1,11 @@
 # Аудит готовности серверной реконструкции
 
+## Realm app: DB-шов и типы запроса для create_role `0x4FB04`, 25 сентября 2026
+
+Подготовительный DB-этап ветки создания роли: в [`WorldGameView`](../../server/rust/realm/src/app/world_game_view.rs) созвучно [`WorldRenameDbView`]/[`WorldDeleteRoleDbView`] добавлен третий узкий DB-шов [`WorldCreateRoleDbView`](../../server/rust/realm/src/app/world_game_view.rs) — boxed future `get_player_count_in_cdkey` и `is_name_exist` поверх `RsPlayerOwner::<CPlayer>` (та же ADR-0013), реализация рядом у владельца игрока `dbaccess/worlddb/rsplayer.rs`. Чистые типы `WorldCreateRoleRequest`, `WorldCreateRoleFailureStage`, `WorldCreateRoleAppendCollision` и константы ветви перенесены в [`realm/app/logmessage.rs`](../../server/rust/realm/src/app/logmessage.rs); старый обработчик всё ещё содержит тяжёлую создания игрока (load_default_property, launch-goods) и сами эти типы — остаются `pub(crate)` дублями, синхронизируемые с realm до перехода на полный outcome.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): публичные символы сборки содержат семейство `OnLogMessage`; opcodes `0x4FB04`/`0x1FF05` и статусы `0x00..0x05` сохраняют прежний статус заголовков. Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm app: обработчик списка персонажей `0x4FB01`, 25 сентября 2026
 
 Ветка `player_base` целиком перенесена в [`realm/app/player_base.rs`](../../server/rust/realm/src/app/player_base.rs); старый `OnLogMessage` только направляет запрос и оборачивает результат. `RsPlayerOwner<CPlayer>` используется как обобщённый контракт БД без нового dyn-адаптера. Узкий `WorldPlayerBaseGameView` хранит связанный тип организационного контекста: его реализация на `CGame` вызывает прежние методы клонирования игрока из карты или очереди сохранения и перечисления создаваемых игроков. Тело обработчика сравнено с предыдущим коммитом: оно совпадает за исключением двух имён методов шва; исправление ширины нулевой записи сделано отдельным предыдущим шагом. Порядок строк БД, подмены снимком и добавления создаваемых игроков в Rust не менялся.

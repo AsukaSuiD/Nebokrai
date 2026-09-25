@@ -326,6 +326,28 @@ pub trait WorldDeleteRoleDbView {
     ) -> Pin<Box<dyn Future<Output = Vec<u8>> + 'a>>;
 }
 
+/// Узкий dyn-заменитель двух DB-запросов ветви создания роли: счётчик
+/// персонажей аккаунта и проверка занятости имени в базе. По той же причине
+/// dyn-несовместимости `RsPlayerOwner`, что и у [`WorldRenameDbView`], оба
+/// запроса публикуются boxed future по ADR-0013; реализация живёт у
+/// владельца игрока в старом пакете и делегирует одноимённым методам
+/// `RsPlayerOwner::<CPlayer>`.
+#[allow(clippy::type_complexity, reason = "boxed-формы повторяют параметры owner-методов один к одному")]
+pub trait WorldCreateRoleDbView {
+    fn get_player_count_in_cdkey<'a>(
+        &'a mut self,
+        account: &'a [u8],
+        creation_count: u8,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = Option<u8>> + 'a>>;
+
+    fn is_name_exist<'a>(
+        &'a mut self,
+        player_name: &'a [u8],
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
+}
+
 /// Узкий dyn-шов проверки должности игрока в стране к владельцу страновых
 /// состояний: `CCountryHandler` держит live-таблицу, а контекст текста
 /// короля получает игру извне — поэтому метод принимает `&dyn WorldGameView`
