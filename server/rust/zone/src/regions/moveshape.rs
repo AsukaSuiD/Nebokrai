@@ -30,7 +30,14 @@
 //! LONG размером `0x64` по полю `CMoveShape +0x84`; имена и порядок полей
 //! сохранены типизированной структурой — это не wire-layout и не копия
 //! свойств монстра.
+//! Общая операция `CMoveShape::Stiffen` (RVA `0x000CD2F0`, порция 4) ведёт
+//! окно/limit по скалярам owner-а и получает setup value-формой
+//! (`GlobeStiffenSetup`, typed-проекция Shared resources); сверена по
+//! машинному коду: второй замер часов при просроченном окне, damage ratio по
+//! unsigned HP, скан таблицы thresholds/probabilities сверху вниз, вычитание
+//! `GetReAnk` перед signed-сравнением с `random(100)` и возврат delay.
 
+use nebokrai_shared::resources::GlobeStiffenSetup;
 use nebokrai_shared::runtime::get_line_direction;
 
 use super::region::{CRegion, RegionCellAccessBlock};
@@ -375,6 +382,51 @@ pub const fn reset_region_entry_control(
     *can_fight = true;
     *moveable_count = 0;
     *can_fight_count = 0;
+}
+
+/// Exact `CMoveShape::Stiffen` (RVA `0x000CD2F0`): окно и limit проверяются
+/// до RNG, просроченное окно делает второй замер часов, а вероятность
+/// уменьшается на `GetReAnk` перед signed-сравнением с `random(100)`.
+/// `GlobeStiffenSetup` передаётся value-формой — это POD проекция Shared
+/// resources, а не ссылка на setup-владельца.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "scalars owner-а, damage-параметры, setup и два clock/RNG шва сохраняют исходные границы"
+)]
+pub fn stiffen(
+    stiffen_started_ms: &mut u32,
+    stiffen_count: &mut i32,
+    damage: u16,
+    maximum_hp: u32,
+    reank: u16,
+    setup: GlobeStiffenSetup,
+    mut now_ms: impl FnMut() -> u32,
+    mut random: impl FnMut(i32) -> i32,
+) -> u32 {
+    let now = now_ms();
+    if stiffen_started_ms.wrapping_add(setup.bound_time_ms) < now {
+        *stiffen_started_ms = now_ms();
+        *stiffen_count = 0;
+    } else if *stiffen_count >= setup.limit {
+        return 0;
+    }
+
+    let damage_ratio = f32::from(damage) / maximum_hp as f32;
+    let probability = setup
+        .damage_thresholds
+        .iter()
+        .zip(setup.probabilities)
+        .take(usize::from(setup.count).min(4))
+        .find_map(|(threshold, probability)| {
+            (damage_ratio >= *threshold).then_some(probability)
+        })
+        .unwrap_or_default();
+    let chance = i32::from(probability) - i32::from(reank);
+    if random(100) > chance {
+        return 0;
+    }
+    *stiffen_count = stiffen_count.wrapping_add(1);
+    setup.delay_ms
 }
 
 /// Typed-отказ wire-команд движения `CMoveShape` (`0xBF603/604/605`):

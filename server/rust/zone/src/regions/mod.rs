@@ -13,6 +13,7 @@ pub mod region; // CRegion: spatial/persistence поверхность реги�
 pub mod regionparam; // tagRegionParam: wire-проекция налогов и владения городом.
 pub mod serverregion; // CServerRegion: data-типы и позиционное ядро региона.
 pub mod shape; // CShape: spatial/membership-часть и геометрия фигуры.
+pub mod skillregistry; // CMoveShape: реестр навыков (категории, current/item, скалярная identity записи).
 pub mod summonedcreature; // CSummonedCreature: жизненный цикл призванного монстра.
 
 pub use identity::ShapeIdentity;
