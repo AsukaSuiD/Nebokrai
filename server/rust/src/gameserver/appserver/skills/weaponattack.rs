@@ -1,30 +1,29 @@
 //! Общий оружейный расчёт обычных, фронтальных и усиленных мечевых ударов.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые владельцы skills.
 //!
+//! Формульная база (виды roll, порядок живых чтений, quirk-ширины,
+//! компоненты, критический хвост и выбор property источника по типу
+//! владельца) перенесена в `nebokrai_zone::combat::weaponattack`; основание
+//! и машинные статусы см. там. Сырая ветвь `PlayerWeaponRoll::Archery`
+//! прежнего файла не имела вызывающих (живой Archery-roll — в
+//! `nebokrai_zone::skills::projectile`) и удалена. Здесь остаются
+//! CGame-разрешение живых полей и владельцы стадий навыков.
+//!
 //! Расчёт сохраняет PK-флаги и принадлежность CPlayer до Calculate. Обычный
 //! контакт доставляет сырой OnBeenAttacked без повторного допуска, затем
 //! вызывает IncreaseRp независимо от результата. NULL таблица Calculate оставляет
 //! исходный UNKNOWN/1, но не отменяет удар. Допуск и дедупликация принадлежат AI.
-//! RawRange читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
-//! AbsoluteRange читает MAX→MIN и использует abs(max-min)+1. Обе ветки
-//! снова читают MIN после RNG. CapturedMinimumAbsoluteRange читает MIN→MAX
-//! и abs-ширину, но прибавляет сохранённый первый MIN.
-//! Archery читает MAX→MIN→второй MIN до RNG, использует max(MAX-MIN,0)
-//! без прибавления единицы и сохраняет второй MIN до результата RNG.
 //! Mosou оставляет единичный коэффициент, не читая уровень цели и модификатор
-//! оружия. Фронтальные удары добавляют живую
-//! ловкость CPlayer после второго MIN. InverseChopped после hit modifier
-//! расходует первое EnergyHolding и умножает три компонента с усечением
-//! к младшему DWORD от i64; его контакт не начисляет RP.
-//! Сохранены живые getter-ы CMoveShape, оба RNG,
-//! unsigned коэффициент в x87 до записи float и усечение критического
-//! множителя к нулю. У CMonster используются его MIN/MAX/SOUL; ELEMENT после
-//! native нижней границы и CCH равны нулю. NPC, Build и CityGate наследуют
-//! нулевые компоненты/CCH, единичный weapon modifier и пустой IncreaseRp.
+//! оружия. Фронтальные удары добавляют живую ловкость CPlayer после второго
+//! MIN, а InverseChopped после hit modifier расходует первое EnergyHolding и
+//! передаёт его множитель формуле Zone; оба вида различаются начислением RP.
+//! Сохранены unsigned коэффициент в x87 до записи float и единичный weapon
+//! modifier для монстра/NPC/Build/CityGate с пустым IncreaseRp.
 //! LightingArrowPhalanx использует тот же порядок компонентов и RNG без
 //! ловкости; её сохранённый знаковый коэффициент и яд остаются у формы.
 //! PoisonMoth использует сырую ширину, BloodRose дополнительно читает свою
-//! добавку после физического урона, непосредственно перед живым ELEMENT.
+//! добавку после физического урона, непосредственно перед живым ELEMENT —
+//! добавка вычисляется колбэком в момент, заданный формулой Zone.
 //! Первые два удара Scorpion сохраняют живой weapon modifier без запроса
 //! skill factor; третий использует обычный WeaponUsage. RP остаётся у caller-а.
 //! Strike меняет знак hit modifier сразу после запроса, до компонентов и RNG.
@@ -36,28 +35,21 @@
 //! skeletonarchery.cpp) используют RawRange без оружейного множителя и RP.
 //! Их Calculate не меняет исходные UNKNOWN/1 даже при найденной таблице;
 //! перед тремя компонентами записываются только нулевой damage modifier и hit.
-//! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
-use super::fightdefense::truncate_original;
 use super::flash::master_info;
-use super::thunder::truncate_original_i64_low;
+use nebokrai_zone::combat::{
+    WeaponDamageLiveField, WeaponPowerBoost, WeaponSourceCombat, weapon_source_property,
+};
+pub(super) use nebokrai_zone::combat::{PlayerWeaponRoll, WeaponSourceProperty as SourceProperty};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 const USER_HIT_MODIFIER: u32 = 20_001;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PlayerWeaponRoll {
-    AbsoluteRange,
-    RawRange,
-    CapturedMinimumAbsoluteRange,
-    Archery,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PlayerWeaponDamageFactor {
@@ -76,43 +68,38 @@ enum WeaponPowerMode {
     EnergyHolding,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum SourceProperty {
-    Minimum,
-    Maximum,
-    Element,
-    Soul,
-    CriticalChance,
-}
-
 pub(super) fn source_property(game: &CGame, source: (i32, ShapeIdentity), property: SourceProperty) -> Option<u32> {
     resolve_state_move_shape(game, source.0, source.1)?;
     match source.1.object_type {
         400 => {
             let combat = game.find_player(source.1.id)?.combat_properties();
-            Some(match property {
-                SourceProperty::Minimum => combat.minimum_attack,
-                SourceProperty::Maximum => combat.maximum_attack,
-                SourceProperty::Element => combat.add_element_attack,
-                SourceProperty::Soul => u32::from(combat.add_soul_attack),
-                SourceProperty::CriticalChance => u32::from(combat.cch),
-            })
+            weapon_source_property(400, property, Some(WeaponSourceCombat {
+                minimum_attack: combat.minimum_attack,
+                maximum_attack: combat.maximum_attack,
+                add_element_attack: combat.add_element_attack,
+                add_soul_attack: combat.add_soul_attack,
+                critical_chance: combat.cch,
+            }))
         }
         600 => {
             // GetAddElementAtk монстра умножает pet factor на ноль. Даже
             // нечисловой factor после native FISTP и нижней границы даёт 0.
-            if matches!(property, SourceProperty::Element | SourceProperty::CriticalChance) { return Some(0); }
+            if matches!(property, SourceProperty::Element | SourceProperty::CriticalChance) {
+                return weapon_source_property(600, property, None);
+            }
             let monster = game.find_region(source.0)?.base().find_monster_by_id(source.1.id)?;
             let resource = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some(match property {
-                SourceProperty::Minimum => monster.state_attack_bounds(resource.minimum_attack, resource.maximum_attack).0,
-                SourceProperty::Maximum => monster.state_attack_bounds(resource.minimum_attack, resource.maximum_attack).1,
-                SourceProperty::Soul => u32::from(monster.soul_attack(resource)),
-                SourceProperty::Element | SourceProperty::CriticalChance => 0,
-            })
+            let (minimum_attack, maximum_attack) =
+                monster.state_attack_bounds(resource.minimum_attack, resource.maximum_attack);
+            weapon_source_property(600, property, Some(WeaponSourceCombat {
+                minimum_attack,
+                maximum_attack,
+                add_element_attack: 0,
+                add_soul_attack: monster.soul_attack(resource),
+                critical_chance: 0,
+            }))
         }
-        500 | 1_100 | 1_200 => Some(0),
-        _ => None,
+        object_type => weapon_source_property(object_type, property, None),
     }
 }
 
@@ -158,10 +145,14 @@ fn fill_player_weapon_attack(
     if matches!(hit_sign, WeaponHitSign::Penalty) {
         attack.hit_modifier = attack.hit_modifier.wrapping_neg();
     }
-    let multiplier = if power_mode == WeaponPowerMode::EnergyHolding {
-        consume_energy_holding_multiplier(game, source)
-    } else { 1.0 };
-    fill_weapon_damage(game, source, roll, power_mode, multiplier, None, || 0, attack);
+    let boost = match power_mode {
+        WeaponPowerMode::Ordinary => WeaponPowerBoost::None,
+        WeaponPowerMode::Dexterity => WeaponPowerBoost::Dexterity,
+        WeaponPowerMode::EnergyHolding => {
+            WeaponPowerBoost::EnergyHolding(consume_energy_holding_multiplier(game, source))
+        }
+    };
+    fill_weapon_damage(game, source, roll, boost, None, || 0, attack);
 }
 
 pub(super) fn fill_ordinary_weapon_damage(
@@ -175,7 +166,7 @@ pub(super) fn fill_ordinary_weapon_damage_with_element_addition(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
     element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
 ) {
-    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, None, element_addition, attack);
+    fill_weapon_damage(game, source, roll, WeaponPowerBoost::None, None, element_addition, attack);
 }
 
 pub(super) fn fill_captured_weapon_damage(
@@ -184,77 +175,55 @@ pub(super) fn fill_captured_weapon_damage(
 ) {
     fill_weapon_damage(
         game, source, PlayerWeaponRoll::CapturedMinimumAbsoluteRange,
-        WeaponPowerMode::Ordinary, 1.0, Some(critical_chance), || 0, attack,
+        WeaponPowerBoost::None, Some(critical_chance), || 0, attack,
     );
 }
 
 fn fill_weapon_damage(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
-    power_mode: WeaponPowerMode, multiplier: f64, captured_critical_chance: Option<i32>,
+    boost: WeaponPowerBoost, captured_critical_chance: Option<i32>,
     element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
 ) {
-    let scale = |damage: i32| {
-        if power_mode == WeaponPowerMode::EnergyHolding {
-            truncate_original_i64_low(f64::from(damage) * multiplier)
-        } else { damage }
-    };
-    let (width, captured_minimum) = match roll {
-        PlayerWeaponRoll::AbsoluteRange => {
-            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
-            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1), None)
-        }
-        PlayerWeaponRoll::RawRange => {
-            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
-            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_add(1), None)
-        }
-        PlayerWeaponRoll::CapturedMinimumAbsoluteRange => {
-            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
-            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1), Some(minimum))
-        }
-        PlayerWeaponRoll::Archery => {
-            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
-            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            let width = (maximum as i32).wrapping_sub(minimum as i32).max(0);
-            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            (width, Some(minimum))
-        }
-    };
-    let random = game.skill_random_below(width);
-    let Some(minimum) = captured_minimum.or_else(|| source_property(game, source, SourceProperty::Minimum)) else { return; };
-    let mut physical = (minimum as i32).wrapping_add(random);
-    if power_mode != WeaponPowerMode::Ordinary && source.1.object_type == 400 {
-        let Some(player) = game.find_player(source.1.id) else { return; };
-        physical = physical.wrapping_add(player.combat_properties().dexterity as i32);
-    }
-    attack.damages.push(AttackPower { kind: AttackPowerType::Physical, hp_damage: scale(physical.max(0)), mp_damage: 0 });
-    let element_addition = element_addition();
-    let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: scale((element.wrapping_add(element_addition) as i32).max(0)), mp_damage: 0 });
-    let Some(soul) = source_property(game, source, SourceProperty::Soul) else { return; };
-    attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: scale(i32::from(soul as u16)), mp_damage: 0 });
-    let critical_chance = match captured_critical_chance {
-        Some(chance) => chance,
-        None => {
-            let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-            i32::from(chance as u16)
-        }
-    };
-    apply_weapon_critical(game, critical_chance, attack);
+    let critical_rate = game.globe_setup().critical_rate();
+    nebokrai_zone::combat::fill_weapon_damage(
+        roll, boost, captured_critical_chance, critical_rate, element_addition,
+        |field| match field {
+            WeaponDamageLiveField::RandomBelow(bound) => Some(game.skill_random_below(bound)),
+            WeaponDamageLiveField::MinimumAttack => {
+                source_property(game, source, SourceProperty::Minimum).map(|value| value as i32)
+            }
+            WeaponDamageLiveField::MaximumAttack => {
+                source_property(game, source, SourceProperty::Maximum).map(|value| value as i32)
+            }
+            WeaponDamageLiveField::AddElementAttack => {
+                source_property(game, source, SourceProperty::Element).map(|value| value as i32)
+            }
+            WeaponDamageLiveField::AddSoulAttack => {
+                source_property(game, source, SourceProperty::Soul).map(|value| value as i32)
+            }
+            WeaponDamageLiveField::CriticalChance => {
+                source_property(game, source, SourceProperty::CriticalChance)
+                    .map(|value| value as i32)
+            }
+            WeaponDamageLiveField::Dexterity => {
+                if source.1.object_type == 400 {
+                    game.find_player(source.1.id)
+                        .map(|player| player.combat_properties().dexterity as i32)
+                } else {
+                    Some(0)
+                }
+            }
+        },
+        attack,
+    );
 }
 
 pub(super) fn apply_weapon_critical(
     game: &mut CGame, critical_chance: i32, attack: &mut AttackInformation,
 ) {
-    if game.skill_random_below(100) < critical_chance {
-        attack.critical = true;
-        let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages {
-            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
-        }
-    }
+    let rate = game.globe_setup().critical_rate();
+    let roll = game.skill_random_below(100);
+    nebokrai_zone::combat::apply_weapon_critical(attack, critical_chance, roll, rate);
 }
 
 pub(super) fn apply_direct_projectile_attack<Runtime: GameMainLoopRuntime>(
