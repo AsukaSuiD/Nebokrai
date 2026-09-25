@@ -37,8 +37,11 @@ use crate::dbaccess::worlddb::rssetup::{
 };
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::setup::leitingsetup::CThingSetup;
+use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use crate::worldserver::appworld::player::{CPlayer, PlayerLoadDataOwner};
+use crate::worldserver::appworld::player::{
+    CPlayer, PlayerLoadDataOwner, PlayerLoadedGoodsInsertBlock,
+};
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRankAddBlock};
 
@@ -485,10 +488,14 @@ pub(crate) trait RsPlayerOwner {
     ) -> PlayerLoadOutcome
     where
         J: RsJjcSysOwner,
-        G: DbGoodsOwner,
+        G: DbGoodsOwner<
+            CPlayer,
+            AddonBlock = GoodsLoadedAddonBlock,
+            InsertBlock = PlayerLoadedGoodsInsertBlock,
+        >,
         WeekDay: FnMut() -> u16;
 
-    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
+    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,
@@ -496,7 +503,7 @@ pub(crate) trait RsPlayerOwner {
         goods_owner: &mut G,
     ) -> PlayerCreateOutcome;
 
-    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
+    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,
@@ -603,7 +610,11 @@ pub(crate) enum TiberiusPlayerLoadDataBlock {
 impl<J, G, WeekDay> PlayerLoadDataOwner for TiberiusPlayerLoadData<'_, J, G, WeekDay>
 where
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<
+        CPlayer,
+        AddonBlock = GoodsLoadedAddonBlock,
+        InsertBlock = PlayerLoadedGoodsInsertBlock,
+    >,
     WeekDay: FnMut() -> u16,
 {
     type Block = TiberiusPlayerLoadDataBlock;
@@ -2078,7 +2089,11 @@ impl RsPlayerOwner for TiberiusRsPlayer {
     ) -> PlayerLoadOutcome
     where
         J: RsJjcSysOwner,
-        G: DbGoodsOwner,
+        G: DbGoodsOwner<
+            CPlayer,
+            AddonBlock = GoodsLoadedAddonBlock,
+            InsertBlock = PlayerLoadedGoodsInsertBlock,
+        >,
         WeekDay: FnMut() -> u16,
     {
         let mut standalone_connection;
@@ -2903,7 +2918,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
     }
 
-    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
+    async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,
@@ -2946,7 +2961,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         }
     }
 
-    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
+    async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner<CPlayer>>(
         &mut self,
         snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
         active_transaction: Option<&mut WorldTdsClient>,

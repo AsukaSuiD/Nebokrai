@@ -3457,7 +3457,7 @@ impl CPlayer {
     where
         P: RsPlayerOwner,
         J: RsJjcSysOwner,
-        G: DbGoodsOwner,
+        G: DbGoodsOwner<CPlayer>,
     {
         player_database
             .save_player(Some(snapshot), connection, jjc_database, goods_database)

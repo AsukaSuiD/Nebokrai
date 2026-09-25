@@ -11,6 +11,7 @@
 //! signedness соответствуют World wire. `Vec` и borrowed slices заменяют STL
 //! копии и ручной lifecycle без изменения результатов.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -84,6 +85,11 @@ pub struct CGoodsBaseProperties {
     equip_place: i32,
     addon_properties: Vec<GoodsBaseAddonProperty>,
 }
+
+/// Реестр base properties по goods index — исходная карта `CGoodsFactory`
+/// без повторного lookup-правила; совпадает со старым
+/// `GoodsBasePropertiesRegistry` по типу.
+pub type GoodsBasePropertiesRegistry = BTreeMap<u32, Option<CGoodsBaseProperties>>;
 
 impl CGoodsBaseProperties {
     pub const fn with_constructor_defaults() -> Self {

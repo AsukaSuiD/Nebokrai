@@ -1308,7 +1308,7 @@ pub(crate) async fn save_new_character_entry<P, J, G>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
 {
     let Some(snapshot) = snapshot else {
         return NewCharacterSaveReport {
@@ -1460,7 +1460,7 @@ pub(crate) async fn save_new_characters_from_world_snapshot<P, J, G>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
 {
     let logged_count = legacy_snapshot_count("New Character", world.creation_players_len())?;
     let mut entries = Vec::with_capacity(world.creation_players_len());
@@ -2190,7 +2190,7 @@ where
     V: RsGenVarOwner,
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
     F: RsFactionOwner,
 {
@@ -3244,7 +3244,7 @@ async fn save_character_entry<P, J, G>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
 {
     let begin_error = run_transaction_command(connection, BEGIN_TRANSACTION_SQL)
         .await
@@ -3311,7 +3311,7 @@ pub(crate) async fn save_characters<P, J, G>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
 {
     let mut entries = Vec::with_capacity(snapshot.players.len());
     let mut log_events = vec![add_log_event(b"Save Charactor Data...".to_vec())];
@@ -3394,7 +3394,7 @@ pub(crate) async fn save_characters_from_world_snapshot<P, J, G>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
 {
     let keys = world.players().keys().copied().collect::<Vec<_>>();
     let mut entries = Vec::with_capacity(keys.len());
@@ -3534,7 +3534,7 @@ pub(crate) async fn do_save_data_after_unions<P, J, G, R, B, E, C, L>(
 where
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
     R: RsRegionOwner,
     B: RsGodsBattleOwner,
     E: RsEnemyFactionsOwner,
@@ -3929,7 +3929,7 @@ where
     V: RsGenVarOwner,
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
     F: RsFactionOwner,
     R: RsRegionOwner,
@@ -4144,7 +4144,7 @@ where
     V: RsGenVarOwner,
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
     F: RsFactionOwner,
     R: RsRegionOwner,

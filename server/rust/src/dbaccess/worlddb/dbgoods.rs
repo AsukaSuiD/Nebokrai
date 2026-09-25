@@ -1,4 +1,6 @@
-//! DB-владелец товаров WorldServer из `dbgoods.cpp`.
+//! DB-владелец товаров WorldServer из `dbgoods.cpp`; трейт `DbGoodsOwner` и
+//! его data-семья перенесены в Realm `content/dbgoods`, здесь остаётся
+//! Tiberius-реализация и их реэкспорт для переходных потребителей.
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Контракт охватывает delete/load/save товара, base fields и addon properties.
@@ -6,22 +8,20 @@
 //! исходные значения отказа сохраняются. Caller-connection остаётся внешним;
 //! Tiberius и typed goods snapshots заменяют ADO/COM и vararg buffers без
 //! дополнительной транзакции, фильтра или перестановки частичных записей.
+//!
+//! Realm-трейт параметризован игроком; локальная реализация для
+//! `TiberiusDbGoods` разрешена orphan-правилом и связывает generic-параметр с
+//! `CPlayer`, а block-типы загрузки — associated types impl-а.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::error::Error;
-use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use tiberius::Query;
 
 use crate::dbaccess::row::{get_integer, get_value};
-use crate::dbaccess::worlddb::goodslistener::{
-    GoodsContainerTraversalSnapshot, GoodsListener, GoodsTraversalBlock,
-};
-use crate::dbaccess::worlddb::rssetup::{
-    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
-};
+use crate::dbaccess::worlddb::goodslistener::GoodsListener;
+use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -33,213 +33,20 @@ pub(crate) use nebokrai_realm::content::goodsdb::{
     GoodsAddonPropertySnapshot, GoodsAddonPropertyValue, GoodsAddonValueCountBlock,
     GoodsObjectSnapshot, GoodsPropertiesSnapshot,
 };
+pub(crate) use nebokrai_realm::content::dbgoods::{
+    DbGoodsNotice, DbGoodsOperation, DbGoodsOwner, DbGoodsSaveError,
+    GoodsFiledSaveOutcome, GoodsLoadFailure, GoodsSaveBlock, GoodsSaveOutcome, GoodsSaveSnapshot,
+    PlayerGoodsFiledSnapshot,
+};
 
-pub(crate) struct GoodsSaveSnapshot<'goods> {
-    pub(crate) player_id: i32,
-    pub(crate) goods: &'goods GoodsObjectSnapshot,
-    pub(crate) place: u8,
-    pub(crate) position: u8,
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsSaveBlock {
-    GuidGeneration(getrandom::Error),
-    EscapedNameBuffer { required_bytes: usize },
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsSaveOutcome {
-    Saved,
-    Failed,
-    BlockedMissingFact(GoodsSaveBlock),
-}
-
-pub(crate) struct PlayerGoodsFiledSnapshot<'snapshot> {
-    pub(crate) player_id: i32,
-    pub(crate) packet: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) equipment: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) hand: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) wallet: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) yuan_bao: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) ji_fen: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) bank: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) depot: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) fairy: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) battle_fairy: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) auction_goods: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) auction_wallet: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) auction: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) ci_qing: GoodsContainerTraversalSnapshot<'snapshot>,
-    pub(crate) compose_ci_qing: GoodsContainerTraversalSnapshot<'snapshot>,
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsFiledSaveOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(GoodsTraversalBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsLoadFailure {
-    Connection(WorldDatabaseConnectionError),
-    Database {
-        row_index: Option<usize>,
-        source: tiberius::error::Error,
-    },
-    MissingRequiredValue {
-        row_index: usize,
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        row_index: usize,
-        column: &'static str,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsLoadBlock {
-    NameOutsideWindows1251 {
-        row_index: usize,
-    },
-    GoodsGuid {
-        row_index: usize,
-        source: uuid::Error,
-    },
-    ChangedGuid {
-        row_index: usize,
-        source: getrandom::Error,
-    },
-    Addon {
-        row_index: usize,
-        source: GoodsLoadedAddonBlock,
-    },
-    Insert {
-        row_index: usize,
-        source: PlayerLoadedGoodsInsertBlock,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum GoodsLoadOutcome {
-    ReturnedTrue {
-        row_count: usize,
-        created_count: usize,
-        skipped_count: usize,
-    },
-    ReturnedFalse(GoodsLoadFailure),
-    BlockedMissingFact(GoodsLoadBlock),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum DbGoodsOperation {
-    DeleteGoods,
-    SaveGoodsFiled,
-    SaveGoods,
-    SaveGoodsProperties,
-}
-
-#[derive(Debug)]
-pub(crate) struct DbGoodsNotice {
-    pub(crate) operation: DbGoodsOperation,
-    pub(crate) error: DbGoodsSaveError,
-}
-
-#[derive(Debug)]
-pub(crate) enum DbGoodsSaveError {
-    Database(DbGoodsDatabaseError),
-    MissingConnection,
-    NestedDeleteFailed,
-    NestedPropertiesFailed,
-}
-
-impl fmt::Display for DbGoodsSaveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Database(error) => error.fmt(formatter),
-            Self::MissingConnection => write!(formatter, "не передано соединение World goods DB"),
-            Self::NestedDeleteFailed => {
-                write!(
-                    formatter,
-                    "предварительное удаление вещей завершилось ошибкой"
-                )
-            }
-            Self::NestedPropertiesFailed => {
-                write!(formatter, "сохранение addon properties завершилось ошибкой")
-            }
-        }
-    }
-}
-
-impl Error for DbGoodsSaveError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Database(error) => Some(error),
-            Self::MissingConnection | Self::NestedDeleteFailed | Self::NestedPropertiesFailed => {
-                None
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct DbGoodsDatabaseError(tiberius::error::Error);
-
-impl fmt::Display for DbGoodsDatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "ошибка TDS World goods DB: {}", self.0)
-    }
-}
-
-impl Error for DbGoodsDatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<tiberius::error::Error> for DbGoodsDatabaseError {
-    fn from(error: tiberius::error::Error) -> Self {
-        Self(error)
-    }
-}
-
-pub(crate) trait DbGoodsOwner {
-    async fn load_goods(
-        &mut self,
-        player: &mut CPlayer,
-        active_transaction: Option<&mut WorldTdsClient>,
-        registry: &GoodsBasePropertiesRegistry,
-        changed_goods_indices: &BTreeMap<u32, u32>,
-        dakong_addon_types: &BTreeSet<i32>,
-    ) -> GoodsLoadOutcome;
-
-    async fn delete_goods(
-        &mut self,
-        player_id: i32,
-        active_transaction: &mut WorldTdsClient,
-    ) -> bool;
-
-    async fn save_goods_properties(
-        &mut self,
-        properties: &[GoodsAddonPropertySnapshot],
-        row_id: CGuid,
-        active_transaction: &mut WorldTdsClient,
-    ) -> bool;
-
-    async fn save_goods(
-        &mut self,
-        snapshot: &GoodsSaveSnapshot<'_>,
-        active_transaction: &mut WorldTdsClient,
-    ) -> GoodsSaveOutcome;
-
-    async fn save_goods_filed(
-        &mut self,
-        snapshot: &PlayerGoodsFiledSnapshot<'_>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> GoodsFiledSaveOutcome;
-
-    fn pop_notice(&mut self) -> Option<DbGoodsNotice>;
-}
+pub(crate) type GoodsLoadBlock = nebokrai_realm::content::dbgoods::GoodsLoadBlock<
+    GoodsLoadedAddonBlock,
+    PlayerLoadedGoodsInsertBlock,
+>;
+pub(crate) type GoodsLoadOutcome = nebokrai_realm::content::dbgoods::GoodsLoadOutcome<
+    GoodsLoadedAddonBlock,
+    PlayerLoadedGoodsInsertBlock,
+>;
 
 pub(crate) struct TiberiusDbGoods {
     settings: WorldDatabaseSettings,
@@ -255,7 +62,10 @@ impl TiberiusDbGoods {
     }
 }
 
-impl DbGoodsOwner for TiberiusDbGoods {
+impl DbGoodsOwner<CPlayer> for TiberiusDbGoods {
+    type AddonBlock = GoodsLoadedAddonBlock;
+    type InsertBlock = PlayerLoadedGoodsInsertBlock;
+
     async fn load_goods(
         &mut self,
         player: &mut CPlayer,

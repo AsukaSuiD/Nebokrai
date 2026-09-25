@@ -10,6 +10,9 @@ use std::fmt;
 
 use uuid::{Builder, Uuid};
 
+#[doc(no_inline)]
+pub use uuid::Error as GuidParseError;
+
 /// 16-байтовый GUID в Microsoft layout для сообщений и структур сервера.
 ///
 /// Тип имеет размер 16 и выравнивание 4. Его порядок определяется сырыми

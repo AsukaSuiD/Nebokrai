@@ -21340,7 +21340,7 @@ where
     V: RsGenVarOwner,
     P: RsPlayerOwner,
     J: RsJjcSysOwner,
-    G: DbGoodsOwner,
+    G: DbGoodsOwner<CPlayer>,
     U: RsUnionOwner,
     F: RsFactionOwner,
     R: RsRegionOwner,
