@@ -1,7 +1,12 @@
-//! Хранилище экземпляров `CMoveShape::m_vStates` из GameServer.exe/GameServer.pdb.
-//! Исходный владелец — CMoveShape; сохранённые RAW RemoveState (0x004CDAB0,
-//! 0x004CDB20) и AddExStatesToByteArray (0x004D10F0) находятся в родительском
-//! moveshape.rs, общий UpdateAbnormality (0x004CFD00) — в states/state.rs.
+//! Арена экземпляров `CMoveShape::m_vStates` из GameServer.exe/GameServer.pdb
+//! (пара gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
+//! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
+//! Перенесена из переходного Game: хранилище — бывший
+//! `appserver/moveshape/state_storage.rs`, `CanonicalStateStorage` и
+//! `LegacyStateCodec` — бывший `appserver/moveshape.rs` (шаг B moveshape п3).
+//! Сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20) и
+//! AddExStatesToByteArray (0x004D10F0) остаются у владельца hub moveshape,
+//! общий UpdateAbnormality (0x004CFD00) — в его states/state.rs.
 //! Порядок добавления и пустые позиции после удаления принадлежат этому
 //! контейнеру; уплотнение выполняется только явно. Новый экземпляр получает
 //! новый поколенческий ключ даже при замене в прежней позиции. Общий End
@@ -17,7 +22,7 @@
 //! Единственный enum-каталог объединяет существующие typed payload, не вводя
 //! второго каталога игровых ID. Codec и таймеры повторного приёма предметов
 //! остаются отдельными данными владельца, а не дополнительными состояниями.
-//! Игровой AI/End-dispatch находится в states/state.rs; это хранилище не
+//! Игровой AI/End-dispatch находится в hub states/state.rs; это хранилище не
 //! вызывает callbacks при Drop и не подменяет End общим сбросом payload.
 //! Запись арены различает runtime-установку и загрузку: StartAllStates
 //! (0x004CE050) вызывает Begin(nullptr, holder), не превращая пустой GetUser
@@ -41,15 +46,40 @@
 //! Serializer заимствует ту же арену в ReadOnly либо Save-режиме. Только Save
 //! допускает запись уже вычисленного remaining в текущий ключ до следующей
 //! позиции; адаптер не знает игровых типов, не копирует арену и не читает часы.
+//! Клиентская проекция записей и runtime-план visual — соседний `catalog`.
 
-use super::*;
-use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
+use std::ops::{Deref, DerefMut};
+
+use slotmap::{SlotMap, new_key_type};
+
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
+
+use crate::effects::{
+    AgilityState2, AutomaticRestoreState, BattleFairyAttributeState, BlindState, BloodLossState,
+    BoaLockState, BossBlueFuryState, BossBlueQuakeState, CHANGE_BODY_STATE_ID, CTeamState,
+    CVisualEffect, CallosityFamilyState, ChangeBodyState, ConsumableRestoreIntervals,
+    ConsumableRestoreState, CureState, DaubPoisonState, DefenseShieldState, EnergyHoldingState,
+    EnlargeFullMissState, EnlargeMaxHpState, EnlargeMaxMpState, ExtendedState, FuryState,
+    GodBlessState, HealState, HeartenState, KnightCutState, KnockOutState, LeafCutState,
+    MeteorArrowState, OriginState, ParticularState, PersistentAgilityFamilyState, PillarState,
+    PoisonFogState, RIDE_STATE_ID, RageBreakState, RideState, RoarState, ScriptMoveState,
+    SoulCollectState, SpiderWebState, SwordshipState, TaiJiState, TianShenXiaFanState,
+    UNDEAD_STATE_ID, UndeadState, WangshengState, WeakState, WuXingState,
+};
+use crate::regions::ShapeIdentity;
+use crate::skills::is_cure_removable_state_id;
+use crate::skills::statefactory::{
+    KeroseneState, LeafCutState2, LeafCutState3, PoisonArrowState, Rush2State, RushState,
+    SealState, SpiderPoisonState, SpriteBurnState, StrikeState,
+};
+
+use super::catalog::registered_runtime_state_visual;
 
 new_key_type! {
-    pub(crate) struct StateKey;
+    pub struct StateKey;
 }
 
-pub(crate) trait AppliedState: Sized + 'static {
+pub trait AppliedState: Sized + 'static {
     fn into_data(self) -> StateData;
     fn as_data_ref(data: &StateData) -> Option<&Self>;
     fn as_data_mut(data: &mut StateData) -> Option<&mut Self>;
@@ -59,12 +89,12 @@ pub(crate) trait AppliedState: Sized + 'static {
 macro_rules! applied_states {
     ($($variant:ident($payload:ty) => |$state:ident| $id:expr),+ $(,)?) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
-        pub(crate) enum StateData {
+        pub enum StateData {
             $($variant($payload)),+
         }
 
         impl StateData {
-            pub(crate) fn state_id(&self) -> u32 {
+            pub fn state_id(&self) -> u32 {
                 match self {
                     $(Self::$variant($state) => $id as u32),+
                 }
@@ -162,7 +192,7 @@ applied_states! {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct AppliedStateEntries {
+pub struct AppliedStateEntries {
     instances: SlotMap<StateKey, AppliedStateInstance>,
     order: Vec<Option<StateKey>>,
 }
@@ -206,7 +236,7 @@ struct AppliedStateInstance {
 impl AppliedStateInstance {
     fn new(payload: StateData, from_save: bool) -> Self {
         let visual = (!from_save)
-            .then(|| crate::gameserver::appserver::states::state::registered_runtime_state_visual(&payload))
+            .then(|| registered_runtime_state_visual(&payload))
             .flatten();
         Self {
             payload: Some(payload),
@@ -218,11 +248,11 @@ impl AppliedStateInstance {
 }
 
 impl StateData {
-    pub(crate) fn is_curable(&self) -> bool {
-        nebokrai_zone::skills::is_cure_removable_state_id(self.state_id())
+    pub fn is_curable(&self) -> bool {
+        is_cure_removable_state_id(self.state_id())
     }
 
-    pub(crate) fn is_blind(&self) -> bool {
+    pub fn is_blind(&self) -> bool {
         matches!(self, Self::Blind(_) | Self::KnockOut(_) | Self::SpiderWeb(_)
             | Self::Seal(_) | Self::Strike(_) | Self::KnightCut(_))
     }
@@ -230,7 +260,7 @@ impl StateData {
 }
 
 #[derive(Debug)]
-pub(crate) struct StateBatch<T> {
+pub struct StateBatch<T> {
     keys: Vec<StateKey>,
     values: Vec<T>,
 }
@@ -245,7 +275,7 @@ impl<T> Default for StateBatch<T> {
 }
 
 impl<T> StateBatch<T> {
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.values
     }
 }
@@ -267,20 +297,20 @@ impl PartialEq for AppliedStateEntries {
 
 impl Eq for AppliedStateEntries {}
 
-pub(super) enum StateSerialization<'a> {
+pub enum StateSerialization<'a> {
     ReadOnly(&'a AppliedStateEntries),
     Save(&'a mut AppliedStateEntries),
 }
 
 impl StateSerialization<'_> {
-    pub(super) fn entries(&self) -> &AppliedStateEntries {
+    pub fn entries(&self) -> &AppliedStateEntries {
         match self {
             Self::ReadOnly(entries) => entries,
             Self::Save(entries) => entries,
         }
     }
 
-    pub(super) fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
+    pub fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
         match self {
             Self::ReadOnly(_) => None,
             Self::Save(entries) => entries.get_mut(key),
@@ -289,27 +319,27 @@ impl StateSerialization<'_> {
 }
 
 impl AppliedStateEntries {
-    pub(crate) fn append<T: AppliedState>(&mut self, state: T) -> StateKey {
+    pub fn append<T: AppliedState>(&mut self, state: T) -> StateKey {
         self.insert_data(state.into_data(), false)
     }
 
-    pub(crate) fn append_loaded_data(&mut self, state: StateData, span: (usize, usize)) -> StateKey {
+    pub fn append_loaded_data(&mut self, state: StateData, span: (usize, usize)) -> StateKey {
         let key = self.insert_data(state, true);
         self.set_serialized_span(key, span);
         key
     }
 
-    pub(crate) fn serialized_span(&self, key: StateKey) -> Option<(usize, usize)> {
+    pub fn serialized_span(&self, key: StateKey) -> Option<(usize, usize)> {
         self.instances.get(key)?.serialized_span
     }
 
-    pub(crate) fn set_serialized_span(&mut self, key: StateKey, span: (usize, usize)) {
+    pub fn set_serialized_span(&mut self, key: StateKey, span: (usize, usize)) {
         if let Some(instance) = self.instances.get_mut(key) {
             instance.serialized_span = Some(span);
         }
     }
 
-    pub(crate) fn shift_serialized_spans_after_remove(&mut self, offset: usize, amount: usize) {
+    pub fn shift_serialized_spans_after_remove(&mut self, offset: usize, amount: usize) {
         let Some(end) = offset.checked_add(amount) else { return };
         for instance in self.instances.values_mut() {
             let Some((start, size)) = instance.serialized_span else { continue };
@@ -321,7 +351,7 @@ impl AppliedStateEntries {
         }
     }
 
-    pub(crate) fn shift_serialized_spans_for_insert(&mut self, offset: usize, amount: usize) {
+    pub fn shift_serialized_spans_for_insert(&mut self, offset: usize, amount: usize) {
         for instance in self.instances.values_mut() {
             let Some((start, size)) = instance.serialized_span else { continue };
             if start >= offset {
@@ -338,68 +368,68 @@ impl AppliedStateEntries {
         key
     }
 
-    pub(crate) fn get(&self, key: StateKey) -> Option<&StateData> {
+    pub fn get(&self, key: StateKey) -> Option<&StateData> {
         self.instances.get(key)?.payload.as_ref()
     }
 
-    pub(crate) fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
+    pub fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
         self.instances.get_mut(key)?.payload.as_mut()
     }
 
-    pub(crate) fn mark_ended(&mut self, key: StateKey) -> bool {
+    pub fn mark_ended(&mut self, key: StateKey) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(true);
         true
     }
 
-    pub(crate) fn mark_begun(&mut self, key: StateKey, region_id: i32) -> bool {
+    pub fn mark_begun(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(false);
         instance.sufferer = Some(StateParticipant::Holder { region_id: Some(region_id) });
         true
     }
 
-    pub(crate) fn user(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+    pub fn user(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
         Some(self.instances.get(key)?.user.as_ref()?.resolve(holder_region, holder))
     }
 
-    pub(crate) fn sufferer(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+    pub fn sufferer(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
         Some(self.instances.get(key)?.sufferer.as_ref()?.resolve(holder_region, holder))
     }
 
-    pub(crate) fn set_user(&mut self, key: StateKey, user: Option<(i32, ShapeIdentity)>) -> bool {
+    pub fn set_user(&mut self, key: StateKey, user: Option<(i32, ShapeIdentity)>) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.user = user.map(StateParticipant::from_address);
         true
     }
 
-    pub(crate) fn set_sufferer(&mut self, key: StateKey, sufferer: Option<(i32, ShapeIdentity)>) -> bool {
+    pub fn set_sufferer(&mut self, key: StateKey, sufferer: Option<(i32, ShapeIdentity)>) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.sufferer = sufferer.map(StateParticipant::from_address);
         true
     }
 
-    pub(crate) fn set_user_region(&mut self, key: StateKey, region_id: i32) -> bool {
+    pub fn set_user_region(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         if let Some(user) = &mut instance.user { user.set_region(region_id); }
         true
     }
 
-    pub(crate) fn set_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
+    pub fn set_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         if let Some(sufferer) = &mut instance.sufferer { sufferer.set_region(region_id); }
         true
     }
 
-    pub(crate) fn has_visual(&self, key: StateKey) -> bool {
+    pub fn has_visual(&self, key: StateKey) -> bool {
         self.instances.get(key).is_some_and(|instance| instance.visual.is_some())
     }
 
-    pub(crate) fn visual_ended(&self, key: StateKey) -> Option<bool> {
+    pub fn visual_ended(&self, key: StateKey) -> Option<bool> {
         Some(self.instances.get(key)?.visual.as_ref()?.is_ended())
     }
 
-    pub(crate) fn begin_visual(&mut self, key: StateKey, loop_value: i32) -> bool {
+    pub fn begin_visual(&mut self, key: StateKey, loop_value: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         let mut visual = CVisualEffect::new();
         visual.begin_visual_effect(loop_value);
@@ -407,54 +437,54 @@ impl AppliedStateEntries {
         true
     }
 
-    pub(crate) fn update_visual_base(&mut self, key: StateKey) -> bool {
+    pub fn update_visual_base(&mut self, key: StateKey) -> bool {
         let Some(visual) = self.instances.get_mut(key).and_then(|entry| entry.visual.as_mut()) else { return false };
         visual.update_visual_effect();
         true
     }
 
-    pub(crate) fn address(&self, index: usize) -> Option<StateKey> {
+    pub fn address(&self, index: usize) -> Option<StateKey> {
         self.order.get(index).copied().flatten()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.order.len()
     }
 
-    pub(crate) fn index_of(&self, key: StateKey) -> Option<usize> {
+    pub fn index_of(&self, key: StateKey) -> Option<usize> {
         self.order
             .iter()
             .position(|address| *address == Some(key))
     }
 
-    pub(crate) fn remove_at(&mut self, index: usize) -> Option<StateData> {
+    pub fn remove_at(&mut self, index: usize) -> Option<StateData> {
         let key = self.order.get_mut(index)?.take()?;
         self.instances.remove(key)?.payload
     }
 
-    pub(crate) fn first_key<T: AppliedState>(&self) -> Option<StateKey> {
+    pub fn first_key<T: AppliedState>(&self) -> Option<StateKey> {
         self.key_at::<T>(0)
     }
 
-    pub(crate) fn key_at<T: AppliedState>(&self, index: usize) -> Option<StateKey> {
+    pub fn key_at<T: AppliedState>(&self, index: usize) -> Option<StateKey> {
         self.order.iter().filter_map(|address| {
             let key = (*address)?;
             T::as_data_ref(self.get(key)?).map(|_| key)
         }).nth(index)
     }
 
-    pub(crate) fn entries(&self) -> impl DoubleEndedIterator<Item = (StateKey, &StateData)> {
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = (StateKey, &StateData)> {
         self.order.iter().filter_map(|address| {
             let key = (*address)?;
             Some((key, self.get(key)?))
         })
     }
 
-    pub(crate) fn iter_data(&self) -> impl DoubleEndedIterator<Item = &StateData> {
+    pub fn iter_data(&self) -> impl DoubleEndedIterator<Item = &StateData> {
         self.entries().map(|(_, state)| state)
     }
 
-    pub(crate) fn keys<T: AppliedState>(&self) -> Vec<StateKey> {
+    pub fn keys<T: AppliedState>(&self) -> Vec<StateKey> {
         self.order
             .iter()
             .filter_map(|address| {
@@ -464,37 +494,37 @@ impl AppliedStateEntries {
             .collect()
     }
 
-    pub(crate) fn first<T: AppliedState>(&self) -> Option<&T> {
+    pub fn first<T: AppliedState>(&self) -> Option<&T> {
         T::as_data_ref(self.get(self.first_key::<T>()?)?)
     }
 
-    pub(crate) fn first_mut<T: AppliedState>(&mut self) -> Option<&mut T> {
+    pub fn first_mut<T: AppliedState>(&mut self) -> Option<&mut T> {
         let key = self.first_key::<T>()?;
         T::as_data_mut(self.get_mut(key)?)
     }
 
-    pub(crate) fn nth<T: AppliedState>(&self, position: usize) -> Option<&T> {
+    pub fn nth<T: AppliedState>(&self, position: usize) -> Option<&T> {
         self.iter::<T>().nth(position)
     }
 
-    pub(crate) fn nth_mut<T: AppliedState>(&mut self, position: usize) -> Option<&mut T> {
+    pub fn nth_mut<T: AppliedState>(&mut self, position: usize) -> Option<&mut T> {
         let key = self.key_at::<T>(position)?;
         T::as_data_mut(self.get_mut(key)?)
     }
 
-    pub(crate) fn take_nth<T: AppliedState>(&mut self, position: usize) -> Option<T> {
+    pub fn take_nth<T: AppliedState>(&mut self, position: usize) -> Option<T> {
         let key = self.key_at::<T>(position)?;
         self.take(key)
     }
 
-    pub(crate) fn iter<T: AppliedState>(&self) -> impl Iterator<Item = &T> {
+    pub fn iter<T: AppliedState>(&self) -> impl Iterator<Item = &T> {
         self.order.iter().filter_map(|address| {
             let key = (*address)?;
             T::as_data_ref(self.get(key)?)
         })
     }
 
-    pub(crate) fn for_each_mut<T: AppliedState>(&mut self, mut update: impl FnMut(&mut T)) {
+    pub fn for_each_mut<T: AppliedState>(&mut self, mut update: impl FnMut(&mut T)) {
         for address in &self.order {
             let Some(key) = address else {
                 continue;
@@ -509,17 +539,17 @@ impl AppliedStateEntries {
         }
     }
 
-    pub(crate) fn take<T: AppliedState>(&mut self, key: StateKey) -> Option<T> {
+    pub fn take<T: AppliedState>(&mut self, key: StateKey) -> Option<T> {
         T::as_data_ref(self.get(key)?)?;
         let index = self.index_of(key)?;
         T::from_data(self.remove_at(index)?)
     }
 
-    pub(crate) fn take_first<T: AppliedState>(&mut self) -> Option<T> {
+    pub fn take_first<T: AppliedState>(&mut self) -> Option<T> {
         self.take(self.first_key::<T>()?)
     }
 
-    pub(crate) fn replace_first<T: AppliedState>(&mut self, state: T) -> Option<T> {
+    pub fn replace_first<T: AppliedState>(&mut self, state: T) -> Option<T> {
         match self.first_key::<T>().and_then(|key| self.index_of(key)) {
             Some(index) => self.replace_at(index, state).and_then(T::from_data),
             None => {
@@ -531,7 +561,7 @@ impl AppliedStateEntries {
 
     /// Позиция уже существует, в том числе после удаления старого экземпляра.
     /// Его End вызывает владелец до замены, а не этот контейнер.
-    pub(crate) fn replace_at<T: AppliedState>(&mut self, index: usize, state: T) -> Option<StateData> {
+    pub fn replace_at<T: AppliedState>(&mut self, index: usize, state: T) -> Option<StateData> {
         let address = &mut self.order[index];
         let key = self.instances.insert(AppliedStateInstance::new(state.into_data(), false));
         match address.replace(key) {
@@ -540,7 +570,7 @@ impl AppliedStateEntries {
         }
     }
 
-    pub(crate) fn take_batch<T: AppliedState>(&mut self) -> StateBatch<T> {
+    pub fn take_batch<T: AppliedState>(&mut self) -> StateBatch<T> {
         let keys = self.keys::<T>();
         let values = keys
             .iter()
@@ -555,7 +585,7 @@ impl AppliedStateEntries {
         StateBatch { keys, values }
     }
 
-    pub(crate) fn restore_batch<T: AppliedState>(&mut self, batch: StateBatch<T>) {
+    pub fn restore_batch<T: AppliedState>(&mut self, batch: StateBatch<T>) {
         for (key, value) in batch.keys.into_iter().zip(batch.values) {
             if let Some(instance) = self.instances.get_mut(key)
                 && instance.payload.is_none()
@@ -567,14 +597,87 @@ impl AppliedStateEntries {
 
     /// Техническая замена DB/runtime snapshot, не игровой ClearAllStates/End.
     /// Сама SlotMap остаётся на месте, чтобы прежние ключи не ожили после загрузки.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.instances.clear();
         self.order.clear();
     }
 
-    pub(crate) fn compact(&mut self) -> bool {
+    pub fn compact(&mut self) -> bool {
         let previous_len = self.order.len();
         self.order.retain(Option::is_some);
         self.order.len() != previous_len
     }
+}
+
+/// Каноническое хранилище применённых состояний владельца: живая арена,
+/// таймеры повторного приёма расходуемых предметов и сырой codec проекции
+/// GameSave. Исходный владелец — `CMoveShape`; поля доступны hub moveshape
+/// напрямую через `Deref`.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct CanonicalStateStorage {
+    pub state_entries: AppliedStateEntries,
+    pub consumable_restore_intervals: ConsumableRestoreIntervals,
+    pub ex_states: LegacyStateCodec,
+}
+
+/// Сырой Vec-проекция Save-потока состояний с непрозрачным хвостом:
+/// записи с неизвестным ID или усечённые сохраняются как есть и дописываются
+/// обратно после типизированной части. Служит только Save/Load проекции.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LegacyStateCodec {
+    pub payload: Vec<u8>,
+    pub opaque_tail: Vec<u8>,
+    pub opaque_count: u32,
+    pub header_was_present: bool,
+}
+
+impl LegacyStateCodec {
+    pub fn replace(&mut self, payload: Vec<u8>) {
+        self.header_was_present = payload.len() >= 4;
+        self.payload = payload;
+        self.opaque_tail.clear();
+        self.opaque_count = 0;
+    }
+
+    pub fn clear(&mut self) {
+        self.replace(Vec::new());
+    }
+
+    pub fn with_opaque_tail(&self, mut payload: Vec<u8>) -> Vec<u8> {
+        if !self.header_was_present && read_u32(&payload, 0).unwrap_or(0) == 0 {
+            return self.opaque_tail.clone();
+        }
+        if self.opaque_count == 0 && self.opaque_tail.is_empty() {
+            return payload;
+        }
+        if payload.len() < 4 {
+            payload = 0u32.to_le_bytes().to_vec();
+        }
+        let count = read_u32(&payload, 0).unwrap_or(0);
+        write_u32(&mut payload, 0, count.wrapping_add(self.opaque_count));
+        payload.extend_from_slice(&self.opaque_tail);
+        payload
+    }
+}
+
+impl Deref for LegacyStateCodec {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload
+    }
+}
+
+impl DerefMut for LegacyStateCodec {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.payload
+    }
+}
+
+fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
+    LegacyReader::at(source, offset).ok()?.read_u32().ok()
+}
+
+fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
+    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле состояния");
 }

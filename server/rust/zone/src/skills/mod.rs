@@ -16,7 +16,7 @@ mod lifecycle;
 mod masked_area;
 mod pillar;
 mod poisonfog;
-mod projectile; // Прицельные снаряды: общий полёт, элементный контакт и усилитель душами.
+mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery и общий серверный decoder.
 mod roar;
 pub mod skillfactory;
 mod snowstorm;
@@ -75,5 +75,6 @@ pub use wangsheng::{WANGSHENG_SKILL_ID, wangsheng_restored_health};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
 pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
     encode_related_phalanx_snapshot, next_summon_shape_id};
-pub use projectile::{BaseProjectileFlight, ElementProjectileAttack,
-    ElementProjectileLiveField, SoulProjectileAmplification};
+pub use projectile::{ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack,
+    ArcheryProjectileLiveField, BaseProjectileFlight, ElementProjectileAttack,
+    ElementProjectileLiveField, ProjectileServerSnapshotPrefix, SoulProjectileAmplification};

@@ -1,6 +1,7 @@
 //! Общие callbacks и доступ состояний GameServer; клиентское представление
 //! (проекция записей и runtime-план visual) перенесено в Zone `skills::state`
-//! и делегируется отсюда, включая шов `StateClientPayload` для `StateData`.
+//! и делегируется отсюда; enum-каталог payload `StateData` переехал туда же
+//! шагом B, и сварочный шов `StateClientPayload` снят.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/states/state.h/.cpp
 //! и операции состояний appserver/moveshape.cpp, GetObject appserver/serverregion.cpp.
 //!
@@ -35,7 +36,6 @@ use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
-use nebokrai_zone::skills::state::{StateClientPayload, StatePayloadView};
 
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
@@ -980,75 +980,6 @@ state_callbacks! {
         CGame::update_move_shape_ride_state_properties
     ),
 }
-
-/// Сварка единого enum-каталога payload арены `moveshape` с клиентскими
-/// контрактами Zone `skills::state`. Снимается шагом B переноса хранилища:
-/// тогда `StateData` переедет в Zone вместе с этим impl, и match каталога
-/// пойдёт прямо по `&StateData` без трейта и вида.
-impl<'a> StateClientPayload<'a> for StateData {
-    fn state_payload_view(&'a self) -> StatePayloadView<'a> {
-        match self {
-            StateData::PersistentAgility(state) => StatePayloadView::PersistentAgility(state),
-            StateData::TaiJi(state) => StatePayloadView::TaiJi(state),
-            StateData::EnlargeFullMiss(state) => StatePayloadView::EnlargeFullMiss(state),
-            StateData::EnlargeMaxHp(state) => StatePayloadView::EnlargeMaxHp(state),
-            StateData::EnlargeMaxMp(state) => StatePayloadView::EnlargeMaxMp(state),
-            StateData::Origin(state) => StatePayloadView::Origin(state),
-            StateData::MeteorArrow(state) => StatePayloadView::MeteorArrow(state),
-            StateData::EnergyHolding(state) => StatePayloadView::EnergyHolding(state),
-            StateData::SoulCollect(state) => StatePayloadView::SoulCollect(state),
-            StateData::Swordship(state) => StatePayloadView::Swordship(state),
-            StateData::WuXing(state) => StatePayloadView::WuXing(state),
-            StateData::Agility2(state) => StatePayloadView::Agility2(state),
-            StateData::Callosity(state) => StatePayloadView::Callosity(state),
-            StateData::Hearten(state) => StatePayloadView::Hearten(state),
-            StateData::RageBreak(state) => StatePayloadView::RageBreak(state),
-            StateData::Pillar(state) => StatePayloadView::Pillar(state),
-            StateData::TianShenXiaFan(state) => StatePayloadView::TianShenXiaFan(state),
-            StateData::Wangsheng(state) => StatePayloadView::Wangsheng(state),
-            StateData::Blind(state) => StatePayloadView::Blind(state),
-            StateData::Rush(state) => StatePayloadView::Rush(state),
-            StateData::Rush2(state) => StatePayloadView::Rush2(state),
-            StateData::KnockOut(state) => StatePayloadView::KnockOut(state),
-            StateData::KnightCut(state) => StatePayloadView::KnightCut(state),
-            StateData::SpiderWeb(state) => StatePayloadView::SpiderWeb(state),
-            StateData::Seal(state) => StatePayloadView::Seal(state),
-            StateData::Strike(state) => StatePayloadView::Strike(state),
-            StateData::Heal(state) => StatePayloadView::Heal(state),
-            StateData::PoisonArrow(state) => StatePayloadView::PoisonArrow(state),
-            StateData::SpiderPoison(state) => StatePayloadView::SpiderPoison(state),
-            StateData::SpriteBurn(state) => StatePayloadView::SpriteBurn(state),
-            StateData::BloodLoss(state) => StatePayloadView::BloodLoss(state),
-            StateData::LeafCut(state) => StatePayloadView::LeafCut(state),
-            StateData::LeafCut2(state) => StatePayloadView::LeafCut2(state),
-            StateData::LeafCut3(state) => StatePayloadView::LeafCut3(state),
-            StateData::Kerosene(state) => StatePayloadView::Kerosene(state),
-            StateData::Cure(state) => StatePayloadView::Cure(state),
-            StateData::BossBlueQuake(state) => StatePayloadView::BossBlueQuake(state),
-            StateData::BoaLock(state) => StatePayloadView::BoaLock(state),
-            StateData::GodBless(state) => StatePayloadView::GodBless(state),
-            StateData::Roar(state) => StatePayloadView::Roar(state),
-            StateData::Weak(state) => StatePayloadView::Weak(state),
-            StateData::Fury(state) => StatePayloadView::Fury(state),
-            StateData::BossBlueFury(state) => StatePayloadView::BossBlueFury(state),
-            StateData::PoisonFog(state) => StatePayloadView::PoisonFog(state),
-            StateData::BattleFairyAttribute(state) => StatePayloadView::BattleFairyAttribute(state),
-            StateData::DefenseShield(state) => StatePayloadView::DefenseShield(state),
-            StateData::DaubPoison(state) => StatePayloadView::DaubPoison(state),
-            StateData::AutomaticRestore(state) => StatePayloadView::AutomaticRestore(state),
-            StateData::ConsumableRestore(state) => StatePayloadView::ConsumableRestore(state),
-            StateData::Particular(state) => StatePayloadView::Particular(state),
-            StateData::Team(state) => StatePayloadView::Team(state),
-            StateData::Script(state) => StatePayloadView::Script(state),
-            StateData::ChangeBody(state) => StatePayloadView::ChangeBody(state),
-            StateData::Extended(state) => StatePayloadView::Extended(state),
-            StateData::Undead(state) => StatePayloadView::Undead(state),
-            StateData::Ride(state) => StatePayloadView::Ride(state),
-        }
-    }
-}
-
-
 
 /// Факты объектного CState::Begin при временно извлечённом регионе.
 /// Запоминаются только region/type/id, без нового GUID-фильтра. Для

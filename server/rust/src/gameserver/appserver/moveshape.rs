@@ -253,21 +253,24 @@
 //! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
-mod state_storage;
-pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateBatch, StateData, StateKey};
-use state_storage::StateSerialization;
+// Арена состояний, её enum-каталог и codec/интервалы перенесены в Zone
+// `skills::state`; путь `super::moveshape` сохраняет прежние имена.
+pub(crate) use nebokrai_zone::skills::state::{
+    AppliedState, StateBatch, StateData, StateKey,
+};
+use nebokrai_zone::skills::state::{CanonicalStateStorage, LegacyStateCodec, StateSerialization};
 
 use std::ops::{Deref, DerefMut};
 use slotmap::{SlotMap, new_key_type};
 
 use super::ai::baseai::CBaseAI;
-use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyState};
+use super::chbystate::ChangeBodyState;
 use super::exstate::{ExtendedState, ExtendedStateKind};
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
-use super::ridestate::{RIDE_STATE_ID, RideState};
-use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreState};
+use super::ridestate::RideState;
+use super::restorestate::ConsumableRestoreState;
 use super::restorehpstate::RestoreHpState;
 use super::restorempstate::RestoreMpState;
 use super::scriptstate::ScriptMoveState;
@@ -276,56 +279,26 @@ use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLif
 use super::states::visualeffect::SkillVisualEffect;
 use super::teamstate::CTeamState;
 use super::shape::{CShape, ShapeAreaCoordinates, ShapeFigure, ShapeIdentity, ShapeResolver};
-use crate::gameserver::appserver::skills::agilitystate::PersistentAgilityFamilyState;
 use crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill;
-use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
-use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
-use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
-use crate::gameserver::appserver::skills::heartenstate::HeartenState;
-use crate::gameserver::appserver::skills::healstate::HealState;
-use crate::gameserver::appserver::skills::furystate::FuryState;
-use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
-use crate::gameserver::appserver::skills::rushstate::RushState;
-use crate::gameserver::appserver::skills::rushstate2::Rush2State;
-use crate::gameserver::appserver::skills::roarstate::{
-    RoarState,
-};
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState,
 };
-use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
-use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
-use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
-use crate::gameserver::appserver::skills::blindstate::BlindState;
-use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::{
     PillarState,
 };
-use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
-use crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState;
-use crate::gameserver::appserver::skills::meteorarrowstate::MeteorArrowState;
-use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
-use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
-use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
-use crate::gameserver::appserver::skills::strikestate::StrikeState;
-use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
-use crate::gameserver::appserver::skills::kerosenestate::KeroseneState;
-use crate::gameserver::appserver::skills::leafcutstate::LeafCutState;
-use crate::gameserver::appserver::skills::leafcutstate2::LeafCutState2;
-use crate::gameserver::appserver::skills::leafcutstate3::LeafCutState3;
 use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BOSS_BLUE_FURY_STATE_BYTES,
@@ -343,11 +316,7 @@ use crate::gameserver::appserver::skills::tianshenxiafanstate::{
 use crate::gameserver::appserver::skills::wangshengstate::{
     WangshengState,
 };
-use crate::gameserver::appserver::skills::weakstate::WeakState;
 use crate::gameserver::appserver::skills::wuxingstate::WuXingState;
-use crate::gameserver::appserver::skills::godblessstate::{
-    GodBlessState,
-};
 use crate::gameserver::appserver::states::automaticrestore::{
     AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
 };
@@ -359,7 +328,7 @@ use nebokrai_zone::regions::moveshape::{
 };
 pub(crate) use nebokrai_zone::regions::moveshape::{
     KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePet, MoveShapePositionBlock,
-    MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapePropertyModifiers,
+    MoveShapePositionFacts, MoveShapePropertyModifiers,
 };
 
 pub(crate) const SKILL_BASE_DEFENSE: u32 = 10;
@@ -495,7 +464,7 @@ impl SkillCollection {
     }
 }
 
-pub(crate) use nebokrai_zone::effects::{UNDEAD_STATE_ID, UndeadState};
+pub(crate) use nebokrai_zone::effects::UndeadState;
 
 /// Тонкая оболочка переходного Game: фабрика навыков остаётся у старого
 /// владельца, а данные и 76-байтный кодек — в Zone `effects/undead.rs`.
@@ -920,64 +889,6 @@ pub(crate) struct CMoveShape {
     stiffen_started_ms: u32,
     stiffen_count: i32,
     killed_by: Option<KillingAttackIdentity>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct LegacyStateCodec {
-    payload: Vec<u8>,
-    opaque_tail: Vec<u8>,
-    opaque_count: u32,
-    header_was_present: bool,
-}
-
-impl LegacyStateCodec {
-    fn replace(&mut self, payload: Vec<u8>) {
-        self.header_was_present = payload.len() >= 4;
-        self.payload = payload;
-        self.opaque_tail.clear();
-        self.opaque_count = 0;
-    }
-
-    fn clear(&mut self) {
-        self.replace(Vec::new());
-    }
-
-    fn with_opaque_tail(&self, mut payload: Vec<u8>) -> Vec<u8> {
-        if !self.header_was_present && read_u32(&payload, 0).unwrap_or(0) == 0 {
-            return self.opaque_tail.clone();
-        }
-        if self.opaque_count == 0 && self.opaque_tail.is_empty() {
-            return payload;
-        }
-        if payload.len() < 4 {
-            payload = 0u32.to_le_bytes().to_vec();
-        }
-        let count = read_u32(&payload, 0).unwrap_or(0);
-        write_u32(&mut payload, 0, count.wrapping_add(self.opaque_count));
-        payload.extend_from_slice(&self.opaque_tail);
-        payload
-    }
-}
-
-impl Deref for LegacyStateCodec {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.payload
-    }
-}
-
-impl DerefMut for LegacyStateCodec {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.payload
-    }
-}
-
-#[derive(Debug, Default, Eq, PartialEq)]
-pub(crate) struct CanonicalStateStorage {
-    state_entries: AppliedStateEntries,
-    consumable_restore_intervals: ConsumableRestoreIntervals,
-    ex_states: LegacyStateCodec,
 }
 
 impl Deref for CMoveShape {

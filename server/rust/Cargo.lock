@@ -1001,6 +1001,7 @@ dependencies = [
  "indexmap",
  "nebokrai-shared",
  "parking_lot",
+ "slotmap",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

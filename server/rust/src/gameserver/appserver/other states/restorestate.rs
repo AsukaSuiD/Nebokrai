@@ -34,8 +34,7 @@ use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::values::CGuid;
 
 pub(crate) use nebokrai_zone::effects::{
-    CONSUMABLE_RESTORE_STATE_BYTES, ConsumableRestoreIntervals, ConsumableRestoreState,
-    RestoreStateData,
+    CONSUMABLE_RESTORE_STATE_BYTES, ConsumableRestoreState, RestoreStateData,
 };
 
 pub(crate) fn begin_primary_consumable_restore_state(
