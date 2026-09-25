@@ -10,7 +10,15 @@
 //! Rust не вводит второй singleton либо дополнительный process lifecycle.
 //! Здесь же опубликованы resource/reload context-границы и типовой блок
 //! перезагрузки world-сервера; их владельцы-железо реализуют процесс.
+//!
+//! В конце файла собраны data-контракты бывшего `CGame`, цитируемые полями
+//! диспетчерских outcome/report-типов `app::servermessage`: CD-key snapshot,
+//! reconnect/region transition/save response записи, ping/region decode итоги и
+//! запуск save-thread. Их fn-владельцы и trait `WorldSaveRuntimeContext`
+//! остаются у process-owner-а `game.rs`.
 
+use std::error::Error;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -39,6 +47,8 @@ use crate::activities::countrywarsys::CountryWarReloadBlock;
 use crate::activities::fournationwarsys::FourNationWarSerializationBlock;
 use crate::activities::villagewarsys::VillageWarReloadBlock;
 use crate::app::organsysmessage::OrganizingCityWarResultContextBlock;
+use crate::app::world_message::SendMessageError;
+use crate::characters::player::PlayerCodecError;
 use crate::content::battlefairyproperty::{BattleFairyComposeWireError, CBattleFairyProperty};
 use crate::content::cgoodsfactory::{
     GoodsNameIndex, GoodsOriginalNameIndex, GoodsRegistryLoadError, GoodsRegistrySerializeError,
@@ -48,12 +58,18 @@ use crate::content::skillfactory::SkillFactorySerializeError;
 use crate::content::TimeToReturnLoadError;
 use crate::content::{DefaultClientResourceOwner, find_script_files};
 use crate::organizations::faction::FactionReinitializationBlock;
+use crate::organizations::organizingctrl::{
+    OrganizingSaveDataBlock, OrganizingSaveDataReport, PlayerEnterGameOutcome, PlayerExitGameOutcome,
+};
 use crate::persistence::writelogqueue::WorldWriteLogQueue;
+use crate::regions::region::RegionSerializationBlock;
 use crate::regions::worldcityregion::{WorldCityRegionLoadError, WorldCityRegionSerializationBlock};
 use crate::regions::worldcountrywarregion::{
     WorldCountryWarRegionLoadError, WorldCountryWarRegionSerializationBlock,
 };
-use crate::regions::worldregion::{WorldRegionLoadError, WorldRegionSerializationBlock};
+use crate::regions::worldregion::{
+    WorldRegionLoadError, WorldRegionParamDecodeError, WorldRegionSerializationBlock,
+};
 use crate::regions::worldwarregion::WorldWarRegionSerializationBlock;
 
 const LEGACY_LOG_BUFFER_CAPACITY: usize = 64_000;
@@ -704,4 +720,284 @@ pub struct WorldRegionListBlock {
 pub struct WorldReloadRegionSnapshotBlock {
     pub region_id: i32,
     pub source: WorldRegionOwnerSerializationBlock,
+}
+
+// Data-контракты бывшего `CGame` для полей диспетчерских типов
+// `nebokrai_realm::app::servermessage`. Перенесены из
+// `worldserver/worldserver/game.rs`, но его trait `WorldSaveRuntimeContext`
+// цитирует `WorldSaveThreadJob` и поэтому остаётся у process-owner-а.
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldGameServerLookupError {
+    PortUnavailable { index: u32 },
+}
+
+impl fmt::Display for WorldGameServerLookupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PortUnavailable { index } => write!(
+                formatter,
+                "у GameServer {index} не назначен port для точного сравнения"
+            ),
+        }
+    }
+}
+
+impl Error for WorldGameServerLookupError {}
+
+#[derive(Debug)]
+pub struct WorldCdkeySnapshot {
+    pub declared_online_players: u32,
+    pub delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldOnlinePlayerAppendOutcome {
+    pub inserted: bool,
+    pub organizing: PlayerEnterGameOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldReconnectedPlayerOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+        offline_inserted: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldReconnectedPlayerDecode {
+    pub requested_player_id: u32,
+    pub decoded_player_id: i32,
+    pub owner: WorldReconnectedPlayerOwner,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldServerSnapshotPlayerOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldServerSnapshotPlayerDecode {
+    pub requested_player_id: u32,
+    pub decoded_player_id: i32,
+    pub owner: WorldServerSnapshotPlayerOwner,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldPlayerSaveResponseProgress {
+    pub previous_responses: i32,
+    pub completion_counted: bool,
+    pub responses_before_reset: i32,
+    pub connected_game_servers: i32,
+    pub save_triggered: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldOnlinePlayerRemoveOutcome {
+    pub removed_occurrences: usize,
+    pub organizing: PlayerExitGameOutcome,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldRegionChangePlayerTransition {
+    pub requested_player_id: u32,
+    pub decoded_player_id: u32,
+    pub target_region_id: i32,
+    pub tile_x: i32,
+    pub tile_y: i32,
+    pub direction: i32,
+    pub direction_applied: bool,
+    pub team_id: i32,
+    pub owner_type: i32,
+    pub owner_id: i32,
+    pub offline_removal_completed: bool,
+    pub online_removal: WorldOnlinePlayerRemoveOutcome,
+    pub login_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldCdkeySnapshotError {
+    MissingWorldNumber,
+    OnlinePlayerCountOutsideLegacyRange { count: usize },
+    MissingPlayerOwner { player_id: u32 },
+}
+
+impl fmt::Display for WorldCdkeySnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingWorldNumber => {
+                formatter.write_str("World setup не назначил поле dwNumber")
+            }
+            Self::OnlinePlayerCountOutsideLegacyRange { count } => write!(
+                formatter,
+                "online-list содержит {count} записей вне 32-битного диапазона оригинала"
+            ),
+            Self::MissingPlayerOwner { player_id } => write!(
+                formatter,
+                "online player {player_id} отсутствует в owning m_mPlayer"
+            ),
+        }
+    }
+}
+
+impl Error for WorldCdkeySnapshotError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldRegionChangeTeamUpdate {
+    SessionMissingOrNotTeam,
+    PlugMissing,
+    Updated,
+}
+
+/// Семантическая замена старого 36-байтового `tagPingGameServerInfo`.
+///
+/// Ветка `0x5FA0A` подтверждает `std::string strIP` и два signed `long`:
+/// map ID из metadata сообщения и число игроков из payload. Rust-layout не
+/// выдаётся за Windows ABI; owned bytes и `Vec` заменяют только STL-владение.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldPingGameServerInfo {
+    pub ip: Vec<u8>,
+    pub map_id: i32,
+    pub player_count: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldInitialRegionSnapshotKind {
+    Assigned { region_type: i32 },
+    Proxy,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldInitialRegionSnapshot {
+    pub map_key: i32,
+    pub region_id: i32,
+    pub kind: WorldInitialRegionSnapshotKind,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldInitialRegionSnapshotSource {
+    MissingRegionOwner,
+    UninitializedRegionType,
+    Full(WorldRegionOwnerSerializationBlock),
+    Proxy(RegionSerializationBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldInitialRegionSnapshotBlock {
+    pub map_key: i32,
+    pub source: WorldInitialRegionSnapshotSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldRegionParamDecodeOutcome {
+    RegionNotFound,
+    NullRegionPointer,
+    Decoded(Result<bool, WorldRegionParamDecodeError>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldReceivedPlayerDataUpdate {
+    GameServerNotFound,
+    Uninitialized,
+    Updated {
+        previous: Option<i32>,
+        current: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldReceivedPlayerDataRead {
+    GameServerNotFound { legacy_value: i32 },
+    Uninitialized,
+    Value(i32),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WorldGlobeVariables {
+    pub world_cap_team_1: i32,
+    pub world_cap_team_2: i32,
+    pub world_cap_team_3: i32,
+    pub world_cap_team_4: i32,
+}
+
+impl WorldGlobeVariables {
+    pub fn values(self) -> [i32; 4] {
+        [
+            self.world_cap_team_1,
+            self.world_cap_team_2,
+            self.world_cap_team_3,
+            self.world_cap_team_4,
+        ]
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldGlobeVariablesDelivery {
+    pub socket_id: i32,
+    pub variables: WorldGlobeVariables,
+    pub delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldGenerateDbDataBlock {
+    PlayerCodec(PlayerCodecError),
+    Organizing(OrganizingSaveDataBlock),
+}
+
+impl From<PlayerCodecError> for WorldGenerateDbDataBlock {
+    fn from(error: PlayerCodecError) -> Self {
+        Self::PlayerCodec(error)
+    }
+}
+
+impl From<OrganizingSaveDataBlock> for WorldGenerateDbDataBlock {
+    fn from(error: OrganizingSaveDataBlock) -> Self {
+        Self::Organizing(error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldGenerateDbDataReport {
+    pub organizing: OrganizingSaveDataReport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldSaveThreadHandleState {
+    Empty,
+    Open,
+}
+
+/// Одноразовая обязанность действующего `__beginthreadex(SaveThreadFunc)`.
+///
+/// Сам request не угадывает handle: process save-owner возвращает наблюдаемое
+/// `Open/Empty` состояние после фактической попытки запуска.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldSaveThreadLaunchRequest {
+    pub previous_handle_closed: bool,
+    pub security_attributes_is_null: bool,
+    pub stack_size: u32,
+    pub argument_is_null: bool,
+    pub creation_flags: u32,
+    pub thread_id_output_requested: bool,
+}
+
+pub fn prepare_save_thread_launch(
+    handle: &mut WorldSaveThreadHandleState,
+) -> WorldSaveThreadLaunchRequest {
+    let previous_handle_closed = matches!(*handle, WorldSaveThreadHandleState::Open);
+    *handle = WorldSaveThreadHandleState::Empty;
+    WorldSaveThreadLaunchRequest {
+        previous_handle_closed,
+        security_attributes_is_null: true,
+        stack_size: 0,
+        argument_is_null: true,
+        creation_flags: 0,
+        thread_id_output_requested: true,
+    }
 }

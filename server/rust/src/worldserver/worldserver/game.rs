@@ -371,8 +371,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
     OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
     OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
-    FactionUnionMembershipLookupBlock, FreeFactionLookup, FreePlayerLookup,
-    PlayerEnterGameOutcome, PlayerExitGameOutcome, PlayerInviteFactionBlock,
+    FactionUnionMembershipLookupBlock, FreeFactionLookup, FreePlayerLookup, PlayerInviteFactionBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
     COrganizingParam, OrganizingParamLoadError, OrganizingParamLoadReport,
@@ -411,7 +410,7 @@ use crate::worldserver::appworld::worldcityregion::CWorldCityRegion;
 use crate::worldserver::appworld::worldcountrywarregion::WorldCountryWarRegion;
 use crate::worldserver::appworld::worldregion::{
     CWorldRegion, WorldRegionLoadedCounts, WorldRegionOwnerRelationBlock,
-    WorldRegionOwnerRelationReport, WorldRegionParamDecodeError, WorldRegionSetupSerializationBlock,
+    WorldRegionOwnerRelationReport, WorldRegionSetupSerializationBlock,
 };
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
 use crate::worldserver::worldserver::honorranks::{
@@ -474,23 +473,7 @@ pub(crate) struct WorldServerSetupLoadReport {
     pub(crate) read_end_notice: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameServerLookupError {
-    PortUnavailable { index: u32 },
-}
-
-impl fmt::Display for WorldGameServerLookupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PortUnavailable { index } => write!(
-                formatter,
-                "у GameServer {index} не назначен port для точного сравнения"
-            ),
-        }
-    }
-}
-
-impl Error for WorldGameServerLookupError {}
+pub(crate) use nebokrai_realm::app::worldserver::WorldGameServerLookupError;
 
 #[derive(Clone, Copy)]
 struct WorldNetworkConfig {
@@ -1394,48 +1377,10 @@ pub(crate) struct WorldLoginReconnectThreadRestart {
     pub(crate) started: WorldLoginReconnectThreadStart,
 }
 
-#[derive(Debug)]
-pub(crate) struct WorldCdkeySnapshot {
-    pub(crate) declared_online_players: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldOnlinePlayerAppendOutcome {
-    pub(crate) inserted: bool,
-    pub(crate) organizing: PlayerEnterGameOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReconnectedPlayerOwner {
-    Existing,
-    Created {
-        replaced_existing_decoded_id: bool,
-        offline_inserted: bool,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldReconnectedPlayerDecode {
-    pub(crate) requested_player_id: u32,
-    pub(crate) decoded_player_id: i32,
-    pub(crate) owner: WorldReconnectedPlayerOwner,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldServerSnapshotPlayerOwner {
-    Existing,
-    Created {
-        replaced_existing_decoded_id: bool,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldServerSnapshotPlayerDecode {
-    pub(crate) requested_player_id: u32,
-    pub(crate) decoded_player_id: i32,
-    pub(crate) owner: WorldServerSnapshotPlayerOwner,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldCdkeySnapshot, WorldOnlinePlayerAppendOutcome, WorldReconnectedPlayerDecode,
+    WorldReconnectedPlayerOwner, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner,
+};
 
 // Типы decode/снимков ветвей player_return и player_detail перевезены в
 // Realm world_game_view вместе с ветвями; организационный исход online-
@@ -1445,20 +1390,9 @@ pub(crate) use nebokrai_realm::app::world_game_view::{
     WorldReturnedPlayerDecode, WorldReturnedPlayerDecodeOwner, WorldReturnedPlayerSnapshot,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerSaveResponseProgress {
-    pub(crate) previous_responses: i32,
-    pub(crate) completion_counted: bool,
-    pub(crate) responses_before_reset: i32,
-    pub(crate) connected_game_servers: i32,
-    pub(crate) save_triggered: bool,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldOnlinePlayerRemoveOutcome {
-    pub(crate) removed_occurrences: usize,
-    pub(crate) organizing: PlayerExitGameOutcome,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldOnlinePlayerRemoveOutcome, WorldPlayerSaveResponseProgress,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldLostGameServerPlayer {
@@ -1479,49 +1413,9 @@ pub(crate) struct WorldGameServerLostReport {
     pub(crate) login_notice_delivery: Result<i32, SendMessageError>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionChangePlayerTransition {
-    pub(crate) requested_player_id: u32,
-    pub(crate) decoded_player_id: u32,
-    pub(crate) target_region_id: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) direction: i32,
-    pub(crate) direction_applied: bool,
-    pub(crate) team_id: i32,
-    pub(crate) owner_type: i32,
-    pub(crate) owner_id: i32,
-    pub(crate) offline_removal_completed: bool,
-    pub(crate) online_removal: WorldOnlinePlayerRemoveOutcome,
-    pub(crate) login_time_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCdkeySnapshotError {
-    MissingWorldNumber,
-    OnlinePlayerCountOutsideLegacyRange { count: usize },
-    MissingPlayerOwner { player_id: u32 },
-}
-
-impl fmt::Display for WorldCdkeySnapshotError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingWorldNumber => {
-                formatter.write_str("World setup не назначил поле dwNumber")
-            }
-            Self::OnlinePlayerCountOutsideLegacyRange { count } => write!(
-                formatter,
-                "online-list содержит {count} записей вне 32-битного диапазона оригинала"
-            ),
-            Self::MissingPlayerOwner { player_id } => write!(
-                formatter,
-                "online player {player_id} отсутствует в owning m_mPlayer"
-            ),
-        }
-    }
-}
-
-impl Error for WorldCdkeySnapshotError {}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldCdkeySnapshotError, WorldRegionChangePlayerTransition,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldMessageSource {
@@ -3335,12 +3229,7 @@ pub(crate) struct WorldMainLoopBaiTanJjcStageReport {
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginTimeoutTeamExit;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionChangeTeamUpdate {
-    SessionMissingOrNotTeam,
-    PlugMissing,
-    Updated,
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldRegionChangeTeamUpdate;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLoginTimeoutFriendOutcome {
@@ -5141,17 +5030,7 @@ fn resolve_world_runtime_file(
     Ok(requested_path)
 }
 
-/// Семантическая замена старого 36-байтового `tagPingGameServerInfo`.
-///
-/// Ветка `0x5FA0A` подтверждает `std::string strIP` и два signed `long`:
-/// map ID из metadata сообщения и число игроков из payload. Rust-layout не
-/// выдаётся за Windows ABI; owned bytes и `Vec` заменяют только STL-владение.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPingGameServerInfo {
-    pub(crate) ip: Vec<u8>,
-    pub(crate) map_id: i32,
-    pub(crate) player_count: i32,
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldPingGameServerInfo;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldBaiTanRegistration {
@@ -5249,33 +5128,10 @@ impl WorldRegionOwner {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldInitialRegionSnapshotKind {
-    Assigned { region_type: i32 },
-    Proxy,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldInitialRegionSnapshot {
-    pub(crate) map_key: i32,
-    pub(crate) region_id: i32,
-    pub(crate) kind: WorldInitialRegionSnapshotKind,
-    pub(crate) payload: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldInitialRegionSnapshotSource {
-    MissingRegionOwner,
-    UninitializedRegionType,
-    Full(WorldRegionOwnerSerializationBlock),
-    Proxy(RegionSerializationBlock),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldInitialRegionSnapshotBlock {
-    pub(crate) map_key: i32,
-    pub(crate) source: WorldInitialRegionSnapshotSource,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
+    WorldInitialRegionSnapshotSource,
+};
 
 pub(crate) use nebokrai_realm::app::worldserver::{
     WorldRegionListBlock, WorldRegionOwnerLoadBlock, WorldRegionOwnerSerializationBlock,
@@ -5455,12 +5311,7 @@ pub(crate) enum WorldOwnedCityRefreshOutcome {
     Refreshed(WorldOwnedCityRefreshReport),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionParamDecodeOutcome {
-    RegionNotFound,
-    NullRegionPointer,
-    Decoded(Result<bool, WorldRegionParamDecodeError>),
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldRegionParamDecodeOutcome;
 
 /// Минимальная действующая часть исходного `CGame::tagGameServer`.
 ///
@@ -5475,22 +5326,9 @@ pub(crate) struct WorldGameServerEntry {
     pub(crate) received_player_data: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReceivedPlayerDataUpdate {
-    GameServerNotFound,
-    Uninitialized,
-    Updated {
-        previous: Option<i32>,
-        current: i32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReceivedPlayerDataRead {
-    GameServerNotFound { legacy_value: i32 },
-    Uninitialized,
-    Value(i32),
-}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerConnectionState {
@@ -5498,31 +5336,7 @@ pub(crate) struct WorldGameServerConnectionState {
     pub(crate) previous_connected: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldGlobeVariables {
-    pub(crate) world_cap_team_1: i32,
-    pub(crate) world_cap_team_2: i32,
-    pub(crate) world_cap_team_3: i32,
-    pub(crate) world_cap_team_4: i32,
-}
-
-impl WorldGlobeVariables {
-    fn values(self) -> [i32; 4] {
-        [
-            self.world_cap_team_1,
-            self.world_cap_team_2,
-            self.world_cap_team_3,
-            self.world_cap_team_4,
-        ]
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGlobeVariablesDelivery {
-    pub(crate) socket_id: i32,
-    pub(crate) variables: WorldGlobeVariables,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{WorldGlobeVariables, WorldGlobeVariablesDelivery};
 
 /// Наблюдаемый результат свободного owner-а `SendErrLog`.
 ///
@@ -5597,28 +5411,7 @@ pub(crate) struct DeletionPlayerSnapshot {
     pub(crate) deletion_time: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldGenerateDbDataBlock {
-    PlayerCodec(PlayerCodecError),
-    Organizing(OrganizingSaveDataBlock),
-}
-
-impl From<PlayerCodecError> for WorldGenerateDbDataBlock {
-    fn from(error: PlayerCodecError) -> Self {
-        Self::PlayerCodec(error)
-    }
-}
-
-impl From<OrganizingSaveDataBlock> for WorldGenerateDbDataBlock {
-    fn from(error: OrganizingSaveDataBlock) -> Self {
-        Self::Organizing(error)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldGenerateDbDataReport {
-    pub(crate) organizing: OrganizingSaveDataReport,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{WorldGenerateDbDataBlock, WorldGenerateDbDataReport};
 
 /// Действующая часть исходного `CGame::tagDBData`.
 ///
@@ -21420,11 +21213,9 @@ pub(crate) enum WorldSaveThreadReport<'save> {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldSaveThreadHandleState {
-    Empty,
-    Open,
-}
+pub(crate) use nebokrai_realm::app::worldserver::{
+    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
+};
 
 pub(crate) trait WorldSaveRuntimeContext {
     fn try_enter_trigger(&mut self) -> bool;
@@ -21434,20 +21225,6 @@ pub(crate) trait WorldSaveRuntimeContext {
         request: &WorldSaveThreadLaunchRequest,
         job: WorldSaveThreadJob,
     ) -> WorldSaveThreadHandleState;
-}
-
-/// Одноразовая обязанность действующего `__beginthreadex(SaveThreadFunc)`.
-///
-/// Сам request не угадывает handle: process save-owner возвращает наблюдаемое
-/// `Open/Empty` состояние после фактической попытки запуска.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldSaveThreadLaunchRequest {
-    pub(crate) previous_handle_closed: bool,
-    pub(crate) security_attributes_is_null: bool,
-    pub(crate) stack_size: u32,
-    pub(crate) argument_is_null: bool,
-    pub(crate) creation_flags: u32,
-    pub(crate) thread_id_output_requested: bool,
 }
 
 #[derive(Debug)]
@@ -21552,21 +21329,6 @@ pub(crate) enum WorldRunSaveTriggerReport<'game> {
         block: WorldGenerateDbDataBlock,
     },
     Complete(WorldRunSaveTriggerDisposition),
-}
-
-pub(crate) fn prepare_save_thread_launch(
-    handle: &mut WorldSaveThreadHandleState,
-) -> WorldSaveThreadLaunchRequest {
-    let previous_handle_closed = matches!(*handle, WorldSaveThreadHandleState::Open);
-    *handle = WorldSaveThreadHandleState::Empty;
-    WorldSaveThreadLaunchRequest {
-        previous_handle_closed,
-        security_attributes_is_null: true,
-        stack_size: 0,
-        argument_is_null: true,
-        creation_flags: 0,
-        thread_id_output_requested: true,
-    }
 }
 
 fn save_data_lifecycle_completed(report: &DoSaveDataLifecycleReport) -> bool {

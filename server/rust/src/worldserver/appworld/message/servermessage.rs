@@ -25,12 +25,16 @@
 //! меняет только тип на `0x7F80A` и передаёт неизменный payload целевому
 //! GameServer; там существующий concrete handler создаёт NPC/monster owner-а.
 //!
-//! Наблюдаемые outcome/report-типы ветвей без связей с владельцем игры
-//! вынесены в `nebokrai_realm::app::servermessage`; ниже их реэкспорт для
-//! переходных потребителей старого пакета.
+//! Наблюдаемые outcome/report-типы ветвей вынесены в
+//! `nebokrai_realm::app::servermessage`, включая типы, чьи поля цитируют
+//! data-контракты бывшего game hub из `nebokrai_realm::app::worldserver`;
+//! ниже их реэкспорт для переходных потребителей старого пакета.
+//! У старого владельца временно остаются `WorldLoginServerClosed`,
+//! `WorldServerMessageOutcome` и `WorldServerMessageDispatch`: их
+//! transitive-контракты живут у reconnect worker-а (`loginreconnectworker.rs`)
+//! и у network `CMessage`. Пара `WorldCountryHandlerConfiguration*` ждёт
+//! переноса `CountrySerializeError` вместе с country.rs.
 
-use std::error::Error;
-use std::fmt;
 use std::net::Ipv4Addr;
 
 use crate::dbaccess::worlddb::rsgodsbattle::{
@@ -77,19 +81,14 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSy
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
-use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::player::PlayerPropertyCoefficients;
 use crate::worldserver::appworld::script::variablelist::{CVariableList, VariableSetOutcome};
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::appworld::skills::skillfactory::CSkillFactory;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
-    WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
-    WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
-    WorldLoginReconnectThreadRestart, WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo,
-    WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
-    WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate,
-    WorldRegionParamDecodeOutcome, WorldSaveRuntimeContext, WorldSaveThreadHandleState,
-    WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner,
+    CGame, WorldGameServerLookupError, WorldGenerateDbDataBlock, WorldInitialRegionSnapshot,
+    WorldInitialRegionSnapshotKind, WorldLoginReconnectThreadRestart, WorldPingGameServerInfo,
+    WorldSaveRuntimeContext, WorldSaveThreadHandleState, WorldServerSnapshotPlayerOwner,
     prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
@@ -98,21 +97,6 @@ use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 pub use nebokrai_realm::app::servermessage::*;
-
-#[derive(Debug)]
-pub(crate) struct WorldLoginClientReplacement {
-    pub(crate) previous_client_closed: bool,
-    pub(crate) connected_notice: bool,
-    pub(crate) cdkey_snapshot: WorldCdkeySnapshot,
-    pub(crate) registration: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldCompletedSaveResponseLaunchReport {
-    pub(crate) snapshot: WorldGenerateDbDataReport,
-    pub(crate) launch: WorldSaveThreadLaunchRequest,
-    pub(crate) resulting_handle: WorldSaveThreadHandleState,
-}
 
 #[derive(Debug)]
 pub(crate) enum WorldServerMessageOutcome {
@@ -215,174 +199,6 @@ pub(crate) struct WorldLoginServerClosed {
     pub(crate) reconnect: WorldLoginReconnectThreadRestart,
 }
 
-#[derive(Debug)]
-pub(crate) struct WorldRegionChangeMessage {
-    pub(crate) player_id: i32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) target_region_id: i32,
-    pub(crate) target_region_complete: bool,
-    pub(crate) socket_id: i32,
-    pub(crate) disposition: WorldRegionChangeDisposition,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldRegionChangeDisposition {
-    TargetUnavailable {
-        target_region_found: bool,
-        delivery: Result<i32, SendMessageError>,
-    },
-    OnlinePlayerMissing {
-        delivery: Result<i32, SendMessageError>,
-        operator_notice: bool,
-    },
-    DecodeBlocked {
-        prefix: WorldRegionChangePrefix,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        error: PlayerCodecError,
-    },
-    OnlinePlayerDisappeared {
-        prefix: WorldRegionChangePrefix,
-    },
-    TargetPortUnavailable {
-        prefix: WorldRegionChangePrefix,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        transition: WorldRegionChangePlayerTransition,
-        target_game_server_index: u32,
-    },
-    Changed {
-        prefix: WorldRegionChangePrefix,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        transition: WorldRegionChangePlayerTransition,
-        target_game_server_index: u32,
-        target_ip: Vec<u8>,
-        target_port: u32,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-        team_session_id: i32,
-        team_update: WorldRegionChangeTeamUpdate,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldPlayerSavePacket {
-    Ignored {
-        index: i32,
-        packet_type: i32,
-        packet_type_complete: bool,
-    },
-    Player {
-        index: i32,
-        requested_player_id: i32,
-        player_id_complete: bool,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        decode: WorldServerSnapshotPlayerDecode,
-        missing_player_notice: Option<Vec<u8>>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldPlayerSaveMaterialization {
-    NotTriggered,
-    Launched(WorldCompletedSaveResponseLaunchReport),
-    Blocked(WorldGenerateDbDataBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldPlayerSaveBatchDisposition {
-    DecodeBlocked {
-        packets: Vec<WorldPlayerSavePacket>,
-        index: i32,
-        requested_player_id: i32,
-        player_id_complete: bool,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        error: PlayerCodecError,
-    },
-    Processed {
-        packets: Vec<WorldPlayerSavePacket>,
-        exhausted_noop_entries: i32,
-        completion: Option<WorldPlayerSaveCompletion>,
-        progress: WorldPlayerSaveResponseProgress,
-        materialization: WorldPlayerSaveMaterialization,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldPlayerSaveBatchMessage {
-    pub(crate) marker: i8,
-    pub(crate) marker_complete: bool,
-    pub(crate) advertised_player_count: i32,
-    pub(crate) player_count_complete: bool,
-    pub(crate) disposition: WorldPlayerSaveBatchDisposition,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionParameterUpdate {
-    pub(crate) region_id: i32,
-    pub(crate) region_complete: bool,
-    pub(crate) cursor_before_decode: usize,
-    pub(crate) cursor_after_decode: usize,
-    pub(crate) outcome: WorldRegionParamDecodeOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerDataSync {
-    pub(crate) subtype: i8,
-    pub(crate) subtype_complete: bool,
-    pub(crate) game_server_index: i32,
-    pub(crate) disposition: WorldPlayerDataSyncDisposition,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerDataSyncDisposition {
-    Started {
-        declared_online_players: i32,
-        payload_complete: bool,
-        counter: WorldReceivedPlayerDataUpdate,
-        operator_notice: bool,
-    },
-    Player {
-        counter: WorldReceivedPlayerDataUpdate,
-        requested_player_id: i32,
-        player_id_complete: bool,
-        cursor_before_decode: usize,
-        cursor_after_decode: usize,
-        decoded: Result<WorldServerSnapshotPlayerDecode, PlayerCodecError>,
-        missing_player_notice: bool,
-    },
-    Finished {
-        declared_sent_players: i32,
-        payload_complete: bool,
-        received_players: WorldReceivedPlayerDataRead,
-        operator_notice: bool,
-    },
-    Ignored,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldGameServerConnectionReport {
-    pub(crate) sync_flag: i8,
-    pub(crate) sync_flag_complete: bool,
-    pub(crate) port: u32,
-    pub(crate) port_complete: bool,
-    pub(crate) ip: Vec<u8>,
-    pub(crate) socket_id: i32,
-    pub(crate) game_server_index: Option<u32>,
-    pub(crate) previous_connected: Option<bool>,
-    pub(crate) route_assignment: Option<i32>,
-    pub(crate) connected_notice: bool,
-    pub(crate) auction: Option<WorldGameServerAuctionBroadcast>,
-    pub(crate) globe_variables: Option<WorldGlobeVariablesDelivery>,
-    pub(crate) login_log: Option<WorldGameServerConnectedLog>,
-    pub(crate) reconnect: Option<WorldGameServerReconnectReport>,
-    pub(crate) initial_configuration: Option<WorldInitialConfigurationRunReport>,
-    pub(crate) continuation: WorldGameServerConnectionContinuation,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryHandlerConfigurationCompletion {
     CountryHandler(CountryHandlerSerializeError),
@@ -395,102 +211,9 @@ pub(crate) struct WorldCountryHandlerConfigurationReport {
     pub(crate) completion: WorldCountryHandlerConfigurationCompletion,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionConfigurationDelivery {
-    pub(crate) map_key: i32,
-    pub(crate) region_id: i32,
-    pub(crate) kind: WorldInitialRegionSnapshotKind,
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) delay_after_ms: Option<u32>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionConfigurationCompletion {
-    RegionSnapshot(WorldInitialRegionSnapshotBlock),
-    RegionSetupConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionConfigurationReport {
-    pub(crate) deliveries: Vec<WorldRegionConfigurationDelivery>,
-    pub(crate) completion: WorldRegionConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameServerReconnectRecord {
-    Skipped {
-        packet_type: i32,
-    },
-    Player {
-        packet_type: i32,
-        decoded: WorldReconnectedPlayerDecode,
-        online: WorldOnlinePlayerAppendOutcome,
-        trailing_value: i32,
-        trailing_complete: bool,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldGameServerReconnectCompletion {
-    InvalidElementCount {
-        declared_count: i32,
-        minimum_bytes: usize,
-        available_bytes: usize,
-    },
-    UnexpectedEnd {
-        record_index: usize,
-        field: &'static str,
-    },
-    PlayerCodec {
-        record_index: usize,
-        error: PlayerCodecError,
-    },
-    CdkeySnapshot(Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError>),
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldGameServerReconnectReport {
-    pub(crate) socket_id: i32,
-    pub(crate) declared_count: i32,
-    pub(crate) count_complete: bool,
-    pub(crate) acknowledgement: Result<i32, SendMessageError>,
-    pub(crate) records: Vec<WorldGameServerReconnectRecord>,
-    pub(crate) completion: WorldGameServerReconnectCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerPingResponse {
-    pub(crate) response: WorldPingGameServerInfo,
-    pub(crate) response_count: usize,
-    pub(crate) payload_complete: bool,
-}
-
 pub(crate) enum WorldServerMessageDispatch {
     Handled(WorldServerMessageOutcome),
     Pending(CMessage),
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldServerMessageError {
-    pub(crate) previous_client_closed: bool,
-    pub(crate) connected_notice: bool,
-    source: WorldCdkeySnapshotError,
-}
-
-impl fmt::Display for WorldServerMessageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "LoginServer client заменён, но CD-key snapshot не построен: {}",
-            self.source
-        )
-    }
-}
-
-impl Error for WorldServerMessageError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 pub(crate) fn game_server_connected_log(
