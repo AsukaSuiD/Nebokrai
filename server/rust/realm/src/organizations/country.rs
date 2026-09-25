@@ -4,15 +4,22 @@
 //!
 //! Data king points (`KingPointKind`, `KingPointUpdate`) перенесены из
 //! `appworld/country/king.rs`; сам `CKing`, его методы и free-функции
-//! остаются в старом файле и держат re-export. Сама `CCountry`, её методы и
-//! контекстные трейты остаются в старом `appworld/country/country.rs` до
-//! волны владельца; типы, ссылающиеся на саму `CCountry`, переносятся
-//! вместе с ней.
+//! остаются в старом файле и держат re-export.
+//!
+//! Контекстные трейты `CCountry` (`CountryNewTermContext`,
+//! `CountryVillageTaxContext`, `CountrySetNewDayContext`,
+//! `CountryExileResultContext`, `CountryHasJobContext`,
+//! `CountryPlayersListContext`) перенесены волной governance-ветвей
+//! `countrymessage`: они ссылаются только на data-типы этого файла,
+//! `CMessage` и `SendMessageError` realm — сигнатуры и дефолтные impl
+//! сохранены буквально. Сама `CCountry` и её методы остаются в старом
+//! `appworld/country/country.rs` до волны владельца и видят трейты через
+//! его glob re-export.
 
 use std::error::Error;
 use std::fmt;
 
-use crate::app::world_message::SendMessageError;
+use crate::app::world_message::{CMessage, SendMessageError};
 use crate::content::countryparam::{CountryParameterUnavailable, CountryTechLevelLookup};
 use crate::organizations::dbcountry::CountryMinisterSaveSnapshot;
 
@@ -725,3 +732,167 @@ impl fmt::Display for CountrySerializeError {
 }
 
 impl Error for CountrySerializeError {}
+
+pub trait CountryNewTermContext {
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+}
+
+pub trait CountryVillageTaxContext {
+    fn village_regions(
+        &mut self,
+        country_id: u8,
+    ) -> Result<Vec<CountryVillageTaxRegion>, CountryVillageTaxContextBlock>;
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+pub trait CountrySetNewDayContext:
+    CountryNewTermContext + CountryVillageTaxContext + CountryExileResultContext
+{
+}
+
+impl<Context> CountrySetNewDayContext for Context where
+    Context: CountryNewTermContext + CountryVillageTaxContext + CountryExileResultContext + ?Sized
+{
+}
+
+pub trait CountryExileResultContext {
+    fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>>;
+    fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget>;
+    fn reset_online_player_murder_counters(
+        &mut self,
+        player_id: i32,
+    ) -> Option<CountryAbsolveCounterReset>;
+    fn faction_id_by_master_player(
+        &mut self,
+        _player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::FactionMasterLookup)
+    }
+    fn faction_id_by_player(
+        &mut self,
+        _player_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::PlayerFactionLookup)
+    }
+    fn faction_snapshot(&mut self, _faction_id: i32) -> Option<CountryFactionSnapshot> {
+        None
+    }
+    fn union_id_for_faction(
+        &mut self,
+        _faction_id: i32,
+    ) -> Result<i32, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::UnionLookup)
+    }
+    fn clear_faction_owned_cities(
+        &mut self,
+        _faction_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+    fn add_faction_owned_city(
+        &mut self,
+        _faction_id: i32,
+        _city_id: i32,
+    ) -> Result<(), CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::OwnedCityMutation)
+    }
+    fn refresh_owned_city(
+        &mut self,
+        _city_id: i32,
+        _faction_id: i32,
+        _union_id: i32,
+        _country_id: Option<u8>,
+    ) {
+    }
+    fn demise_faction(
+        &mut self,
+        _faction_id: i32,
+        _old_master_id: i32,
+        _new_master_id: i32,
+        _country_id: u8,
+        _king_id: i32,
+        _demise_faction: bool,
+    ) -> Result<bool, CountryGovernanceContextBlock> {
+        Err(CountryGovernanceContextBlock::FactionDemise)
+    }
+    fn current_tick_ms(&mut self) -> u32 {
+        0
+    }
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn country_identity_name(&mut self, identity: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+    fn send_to_connected_game_servers(
+        &mut self,
+        message: &CMessage,
+    ) -> Vec<CountryExileMessageDelivery>;
+    fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+/// Узкая граница единственных трёх эффектов, которые достигает
+/// `CCountry::HasJob`: локализованное имя страны, форматирование `WS0034` и
+/// запись отрицательной проверки короля в исторический файл `king`.
+pub trait CountryHasJobContext {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn put_king_log(&mut self, text: &[u8]);
+}
+
+impl<Context: CountryExileResultContext + ?Sized> CountryHasJobContext for Context {
+    fn country_name(&mut self, country_id: u8) -> Vec<u8> {
+        CountryExileResultContext::country_name(self, country_id)
+    }
+
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8> {
+        CountryExileResultContext::format_world_string(self, string_id, arguments)
+    }
+
+    fn put_king_log(&mut self, text: &[u8]) {
+        CountryExileResultContext::put_king_log(self, text);
+    }
+}
+
+pub trait CountryPlayersListContext {
+    fn online_players(&mut self) -> Vec<CountryOnlinePlayer>;
+    fn player_faction(
+        &mut self,
+        player_id: i32,
+    ) -> Result<(Vec<u8>, bool), CountryPlayersListContextBlock>;
+    fn country_name(&mut self, country_id: u8) -> Vec<u8>;
+    fn format_world_string(
+        &mut self,
+        string_id: &'static [u8],
+        arguments: &[CountryExileTextArgument<'_>],
+    ) -> Vec<u8>;
+    fn game_server_number_by_player_id(&mut self, player_id: i32) -> i32;
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError>;
+    fn put_king_log(&mut self, text: &[u8]);
+}

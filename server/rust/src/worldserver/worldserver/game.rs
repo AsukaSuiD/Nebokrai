@@ -18595,7 +18595,7 @@ where
             };
             dispatch_country_info_message(
                 &mut message,
-                &*country_handler,
+                country_handler,
                 country_parameters,
                 &mut effects,
             )
@@ -18615,7 +18615,7 @@ where
             };
             dispatch_country_players_list_message(
                 &mut message,
-                &*country_handler,
+                country_handler,
                 &mut effects,
             )
         };

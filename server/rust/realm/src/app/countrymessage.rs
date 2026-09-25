@@ -13,8 +13,18 @@
 //! и DB-шов [`WorldExploitDbView`](crate::app::world_game_view::WorldExploitDbView)
 //! по ADR-0013.
 //!
-//! В старом `appworld/message/countrymessage.rs` остаются governance- и
-//! war-обработчики вместе со связкой `WorldCountryWarDeclarationSync`,
+//! Волной governance перенесены ветви `0x60301`, `0x60304`, `0x60306`,
+//! `0x60307`, `0x60308`, `0x60309`, `0x6030A`, `0x6030B`, `0x6030C`,
+//! `0x6030D`, `0x6030E` и `0x60313` с исходными цепочками
+//! `authorize_king → can_* → действие`: доступ к живому `CCountryHandler`
+//! даёт узкий шов [`WorldCountryGovernanceGate`] с адаптером в старом
+//! пакете, смена страны `0x60301` — [`WorldCountryPlayerChangeView`] поверх
+//! [`WorldGameView`] и [`WorldCountryView`]. Старый файл держит
+//! делегирующие обёртки с теми же именами с отображением исходов один к
+//! одному.
+//!
+//! В старом `appworld/message/countrymessage.rs` остаются war-обработчики
+//! вместе со связкой `WorldCountryWarDeclarationSync`,
 //! `WorldCountryWarVictorySync`, `WorldCountryMessageOutcome` и
 //! `WorldCountryMessageDispatch`: их поля и варианты цитируют
 //! `CountryWarDeclarationReport`/`CountryWarVictoryReport` из старого
@@ -31,7 +41,9 @@ use crate::activities::fournationwarsys::{
     FourNationSignUpDisposition, FourNationWarResultContext, FourNationWarResultReport,
     FourNationWarTimeReport,
 };
-use crate::app::world_game_view::{WorldCountryMutGate, WorldExploitDbView, WorldGameView};
+use crate::app::world_game_view::{
+    WorldCountryMutGate, WorldCountryView, WorldExploitDbView, WorldGameView,
+};
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::app::worldserver::AddLogTextDisposition;
 use crate::characters::player::PlayerCountryChangeReport;
@@ -42,10 +54,10 @@ use crate::organizations::country::{
     CountryCanAbsolveDisposition, CountryCanAppointMinisterDisposition, CountryCanDemiseDisposition,
     CountryCanDeposeMinisterDisposition, CountryCanExileDisposition, CountryCanSilenceDisposition,
     CountryDemiseReport, CountryDeposeMinisterReport, CountryExileRequestDisposition,
-    CountryExileTimeLookup, CountryGovernanceContextBlock, CountryInitialKingReport,
-    CountryPlayersListContextBlock, CountryPlayersListReport, CountryQuestSwitchUpdate,
-    CountryScalarUpdate, CountrySetKingReport, CountrySilenceReport, CountrySuccessExiledReport,
-    KingPointUpdate,
+    CountryExileResultContext, CountryExileTimeLookup, CountryGovernanceContextBlock,
+    CountryInitialKingReport, CountryPlayersListContext, CountryPlayersListContextBlock,
+    CountryPlayersListReport, CountryQuestSwitchUpdate, CountryScalarUpdate, CountrySetKingReport,
+    CountrySetNewDayContext, CountrySilenceReport, CountrySuccessExiledReport, KingPointUpdate,
 };
 use crate::organizations::countryhandler::CountryHandlerNewDayReport;
 use crate::persistence::rssetup::WorldTdsClient;
@@ -647,6 +659,964 @@ pub fn on_country_message(
         response_type,
         wire,
         delivery,
+    })
+}
+
+/// Узкий dyn-шов governance-ветвей `OnCountryMessage`
+/// (`0x60304`, `0x60306..0x6030E`, `0x60313`): живые объекты `CCountry` и сама
+/// таблица `CCountryHandler` остаются в старом пакете, а обработчики в Realm
+/// повторяют исходные цепочки `get_country(_mut) → метод CCountry` один вызов
+/// на цепочку, по прецеденту [`WorldCountryMutGate`]. Receiver метода шва
+/// повторяет receiver метода `CCountry`: `&self`-шаги идут через
+/// `get_country`, `&mut self`-шаги через `get_country_mut`. Реализация живёт
+/// в адаптере `CCountryHandler` у dispatcher-а старого пакета.
+///
+/// Каждый метод возвращает несвёрнутый результат соответствующей цепочки:
+/// внешний `Option` — страна отсутствует. Исходная форма ветви разрешала
+/// страну один раз и удерживала её заимствованием до конца ветви, поэтому
+/// первый `None` обработчик отображает на `CountryMissing`, а повторный
+/// `None` внутри ветви структурно недостижим (контексты игры доступа к
+/// таблице стран не имеют) и свёрнут в тот же `CountryMissing`.
+#[allow(clippy::type_complexity, reason = "вложенные формы повторяют исходные цепочки get_country_mut/get_country один к одному")]
+pub trait WorldCountryGovernanceGate {
+    fn authorize_king(
+        &self,
+        country: u8,
+        candidate: i32,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<bool>;
+
+    fn authorize_minister(
+        &self,
+        country: u8,
+        player_id: i32,
+        job: u8,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<bool>;
+
+    fn authorize_king_for_players(
+        &self,
+        country: u8,
+        candidate: i32,
+        context: &mut dyn CountryPlayersListContext,
+    ) -> Option<bool>;
+
+    fn can_exile(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanExileDisposition>;
+
+    fn exile(
+        &self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryExileRequestDisposition>;
+
+    fn can_silence(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanSilenceDisposition>;
+
+    fn silence(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountrySilenceReport>;
+
+    fn can_absolve(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanAbsolveDisposition>;
+
+    fn absolve(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryAbsolveReport>;
+
+    fn can_depose_minister(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanDeposeMinisterDisposition>;
+
+    fn depose_minister(
+        &mut self,
+        country: u8,
+        job: u8,
+        mode: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryDeposeMinisterReport>;
+
+    fn can_appoint_minister(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanAppointMinisterDisposition>;
+
+    fn appoint_minister(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        job: u8,
+        mode: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryAppointMinisterReport>;
+
+    fn can_demise(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryCanDemiseDisposition>;
+
+    fn demise(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryDemiseReport>;
+
+    fn get_info(
+        &self,
+        country: u8,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryBaseInfoDisposition>;
+
+    fn get_players_list(
+        &self,
+        country: u8,
+        page: i32,
+        context: &mut dyn CountryPlayersListContext,
+    ) -> Option<Result<CountryPlayersListReport, CountryPlayersListContextBlock>>;
+
+    /// Цепочка `get_country_mut → set_control_point(&mut country.king, …)`
+    /// free-функции `king.rs` ветви direct-appointment.
+    fn set_control_point(
+        &mut self,
+        country: u8,
+        requested: i32,
+        country_parameters: &CCountryParam,
+    ) -> Option<Result<KingPointUpdate, CountryParameterUnavailable>>;
+
+    fn set_king(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<Result<CountrySetKingReport, CountryGovernanceContextBlock>>;
+
+    fn register_initial_king(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountryInitialKingReport>;
+
+    fn success_exiled(
+        &mut self,
+        country: u8,
+        player_id: i32,
+        success: bool,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Option<CountrySuccessExiledReport>;
+
+    /// Handler-уровень ветви `0x60313`: цепочка без разрешения страны —
+    /// `CCountryHandler::set_new_day` всегда выполняется, поэтому внешнего
+    /// `Option` нет.
+    fn set_new_day(
+        &mut self,
+        requested_day: i32,
+        country_parameters: &CCountryParam,
+        context: &mut dyn CountrySetNewDayContext,
+    ) -> CountryHandlerNewDayReport;
+}
+
+/// Узкий dyn-шов ветви `0x60301` `OnCountryMessage`: единственный вызов
+/// `CGame::change_online_player_country` с предикатом `country_exists`,
+/// который исходный диспетчер строил замыканием
+/// `|requested| country_handler.get_country(requested).is_some()`. Реализация
+/// живёт на `CGame` старого пакета и делегирует одноимённый inherent-метод;
+/// отправка ответа идёт методами [`WorldGameView`] того же владельца.
+pub trait WorldCountryPlayerChangeView: WorldGameView {
+    fn change_online_player_country(
+        &mut self,
+        player_id: u32,
+        requested_country: u8,
+        country_exists: &mut dyn FnMut(u8) -> bool,
+    ) -> Option<PlayerCountryChangeReport>;
+}
+
+/// Ветвь `0x60301`: смена страны игрока и ответ `0x7FF01` на source map.
+/// Предикат `country_exists` сохранён замыканием поверх [`WorldCountryView`]
+/// в исходной позиции — внутри `change_online_player_country`.
+pub fn dispatch_country_player_change_message(
+    message: &mut CMessage,
+    game: &mut dyn WorldCountryPlayerChangeView,
+    countries: &dyn WorldCountryView,
+) -> Option<WorldCountryPlayerChangeSync> {
+    if message.message_type() != 0x60301 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player = message.base_mut().get_long();
+    let player_id = decoded_player.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let mut country_exists = |requested_country: u8| countries.country_exists(requested_country);
+    let disposition = match game.change_online_player_country(
+        player_id as u32,
+        country_id,
+        &mut country_exists,
+    ) {
+        None => WorldCountryPlayerChangeDisposition::PlayerMissing,
+        Some(change) => {
+            let mut response = CMessage::new(0x7ff01);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(change.legacy_result);
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send_to_map_id(
+                game.current_game_server_sender().as_ref(),
+                source_map_id,
+            );
+            WorldCountryPlayerChangeDisposition::Responded {
+                change,
+                wire,
+                delivery,
+            }
+        }
+    };
+    Some(WorldCountryPlayerChangeSync {
+        source_map_id,
+        source_socket_id,
+        player_id,
+        player_complete: decoded_player.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x60313`: смена дня всеми странами. Цепочка
+/// `set_new_day(10, …)` без разрешения страны повторена буквально.
+pub fn dispatch_country_new_day_message(
+    message: &CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountrySetNewDayContext,
+) -> Option<WorldCountryNewDaySync> {
+    if message.message_type() != 0x60313 {
+        return None;
+    }
+    Some(WorldCountryNewDaySync {
+        source_map_id: message.map_id(),
+        source_socket_id: message.socket_id(),
+        report: countries.set_new_day(10, country_parameters, context),
+    })
+}
+
+/// Ветвь `0x60304`: прямое назначение короля (`appoint == 1`) или замена
+/// министра. Исходная цепочка: `set_control_point(100_000) → set_king →
+/// register_initial_king` для короля и `depose_minister(appoint, 7) →
+/// appoint_minister(player, appoint, 6)` для министра; отказы параметров и
+/// контекста — на своих позициях.
+pub fn dispatch_country_direct_appointment_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryDirectAppointmentSync> {
+    if message.message_type() != 0x60304 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let decoded_player = message.base_mut().get_long();
+    let player_id = decoded_player.unwrap_or(0);
+    let decoded_appoint = message.base_mut().get_char();
+    let appoint = decoded_appoint.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        if appoint == 1 {
+            let initial_control_point = match countries.set_control_point(
+                country_id,
+                100_000,
+                country_parameters,
+            ) {
+                None => {
+                    break 'fallback WorldCountryDirectAppointmentDisposition::CountryMissing
+                }
+                Some(Err(block)) => {
+                    break 'fallback WorldCountryDirectAppointmentDisposition::ParameterUnavailable(
+                        block,
+                    )
+                }
+                Some(Ok(update)) => update,
+            };
+            let set = match countries.set_king(country_id, player_id, country_parameters, context) {
+                None => {
+                    break 'fallback WorldCountryDirectAppointmentDisposition::CountryMissing
+                }
+                Some(Err(block)) => {
+                    break 'fallback WorldCountryDirectAppointmentDisposition::ContextBlocked(block)
+                }
+                Some(Ok(report)) => report,
+            };
+            let Some(register) = countries.register_initial_king(
+                country_id,
+                player_id,
+                country_parameters,
+                context,
+            ) else {
+                break 'fallback WorldCountryDirectAppointmentDisposition::CountryMissing;
+            };
+            WorldCountryDirectAppointmentDisposition::King {
+                initial_control_point,
+                set,
+                register,
+            }
+        } else {
+            let Some(depose) = countries.depose_minister(
+                country_id,
+                appoint,
+                7,
+                country_parameters,
+                context,
+            ) else {
+                break 'fallback WorldCountryDirectAppointmentDisposition::CountryMissing;
+            };
+            let Some(appoint_report) = countries.appoint_minister(
+                country_id,
+                player_id,
+                appoint,
+                6,
+                country_parameters,
+                context,
+            ) else {
+                break 'fallback WorldCountryDirectAppointmentDisposition::CountryMissing;
+            };
+            WorldCountryDirectAppointmentDisposition::Minister {
+                depose,
+                appoint: appoint_report,
+            }
+        }
+    };
+    Some(WorldCountryDirectAppointmentSync {
+        source_map_id,
+        source_socket_id,
+        country_id,
+        country_complete: decoded_country.is_some(),
+        player_id,
+        player_complete: decoded_player.is_some(),
+        appoint,
+        appoint_complete: decoded_appoint.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x60306`: base-info страны королю после `authorize_king`.
+pub fn dispatch_country_info_message(
+    message: &mut CMessage,
+    countries: &dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryInfoSync> {
+    if message.message_type() != 0x60306 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match countries.authorize_king(country_id, king_player_id, context) {
+        None => WorldCountryInfoDisposition::CountryMissing,
+        Some(false) => WorldCountryInfoDisposition::KingRejected,
+        Some(true) => match countries.get_info(country_id, country_parameters, context) {
+            Some(report) => WorldCountryInfoDisposition::Sent(report),
+            None => WorldCountryInfoDisposition::CountryMissing,
+        },
+    };
+    Some(WorldCountryInfoSync {
+        source_map_id,
+        source_socket_id,
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x60307`: страница списка игроков страны после
+/// `authorize_king_for_players`.
+pub fn dispatch_country_players_list_message(
+    message: &mut CMessage,
+    countries: &dyn WorldCountryGovernanceGate,
+    context: &mut dyn CountryPlayersListContext,
+) -> Option<WorldCountryPlayersListSync> {
+    if message.message_type() != 0x60307 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_page = message.base_mut().get_long();
+    let page = decoded_page.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = match countries.authorize_king_for_players(country_id, king_player_id, context)
+    {
+        None => WorldCountryPlayersListDisposition::CountryMissing,
+        Some(false) => WorldCountryPlayersListDisposition::KingRejected,
+        Some(true) => match countries.get_players_list(country_id, page, context) {
+            Some(Ok(report)) => WorldCountryPlayersListDisposition::Sent(report),
+            Some(Err(block)) => WorldCountryPlayersListDisposition::ContextBlocked(block),
+            None => WorldCountryPlayersListDisposition::CountryMissing,
+        },
+    };
+    Some(WorldCountryPlayersListSync {
+        source_map_id,
+        source_socket_id,
+        page,
+        page_complete: decoded_page.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x60308`: передача престола. Цепочка
+/// `authorize_king → can_demise → demise` с отказами операции на
+/// исходных позициях.
+pub fn dispatch_country_demise_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryDemiseSync> {
+    if message.message_type() != 0x60308 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountryDemiseDisposition::CountryMissing,
+            Some(false) => WorldCountryDemiseDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) =
+                    countries.can_demise(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountryDemiseDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanDemiseDisposition::Allowed) {
+                    WorldCountryDemiseDisposition::OperationRejected(operation)
+                } else {
+                    let Some(report) =
+                        countries.demise(country_id, target_player_id, country_parameters, context)
+                    else {
+                        break 'fallback WorldCountryDemiseDisposition::CountryMissing;
+                    };
+                    WorldCountryDemiseDisposition::Applied { operation, report }
+                }
+            }
+        }
+    };
+    Some(WorldCountryDemiseSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x60309`: назначение министра. Цепочка
+/// `authorize_king → can_appoint_minister → appoint_minister(target, job, 6)`.
+pub fn dispatch_country_appoint_minister_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryAppointMinisterSync> {
+    if message.message_type() != 0x60309 {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_job = message.base_mut().get_char();
+    let job = decoded_job.unwrap_or(0) as u8;
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountryAppointMinisterDisposition::CountryMissing,
+            Some(false) => WorldCountryAppointMinisterDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) =
+                    countries.can_appoint_minister(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountryAppointMinisterDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanAppointMinisterDisposition::Allowed) {
+                    WorldCountryAppointMinisterDisposition::OperationRejected(operation)
+                } else {
+                    let Some(report) = countries.appoint_minister(
+                        country_id,
+                        target_player_id,
+                        job,
+                        6,
+                        country_parameters,
+                        context,
+                    ) else {
+                        break 'fallback WorldCountryAppointMinisterDisposition::CountryMissing;
+                    };
+                    WorldCountryAppointMinisterDisposition::Applied { operation, report }
+                }
+            }
+        }
+    };
+    Some(WorldCountryAppointMinisterSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        job,
+        job_complete: decoded_job.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x6030A`: смещение министра. Цепочка
+/// `authorize_king → can_depose_minister → authorize_minister →
+/// depose_minister(job, 7)`.
+pub fn dispatch_country_depose_minister_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryDeposeMinisterSync> {
+    if message.message_type() != 0x6030a {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_job = message.base_mut().get_char();
+    let job = decoded_job.unwrap_or(0) as u8;
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountryDeposeMinisterDisposition::CountryMissing,
+            Some(false) => WorldCountryDeposeMinisterDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) =
+                    countries.can_depose_minister(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountryDeposeMinisterDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanDeposeMinisterDisposition::Allowed) {
+                    WorldCountryDeposeMinisterDisposition::OperationRejected(operation)
+                } else {
+                    let Some(is_minister) = countries.authorize_minister(
+                        country_id,
+                        target_player_id,
+                        job,
+                        context,
+                    ) else {
+                        break 'fallback WorldCountryDeposeMinisterDisposition::CountryMissing;
+                    };
+                    if !is_minister {
+                        WorldCountryDeposeMinisterDisposition::MinisterRejected
+                    } else {
+                        let Some(report) = countries.depose_minister(
+                            country_id,
+                            job,
+                            7,
+                            country_parameters,
+                            context,
+                        ) else {
+                            break 'fallback WorldCountryDeposeMinisterDisposition::CountryMissing;
+                        };
+                        WorldCountryDeposeMinisterDisposition::Applied { operation, report }
+                    }
+                }
+            }
+        }
+    };
+    Some(WorldCountryDeposeMinisterSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        job,
+        job_complete: decoded_job.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x6030B`: амнистия PK. Цепочка
+/// `authorize_king → can_absolve → absolve`.
+pub fn dispatch_country_absolve_request_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryAbsolveRequestSync> {
+    if message.message_type() != 0x6030b {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountryAbsolveRequestDisposition::CountryMissing,
+            Some(false) => WorldCountryAbsolveRequestDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) =
+                    countries.can_absolve(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountryAbsolveRequestDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanAbsolveDisposition::Allowed) {
+                    WorldCountryAbsolveRequestDisposition::OperationRejected(operation)
+                } else {
+                    let Some(report) = countries.absolve(
+                        country_id,
+                        target_player_id,
+                        country_parameters,
+                        context,
+                    ) else {
+                        break 'fallback WorldCountryAbsolveRequestDisposition::CountryMissing;
+                    };
+                    WorldCountryAbsolveRequestDisposition::Applied { operation, report }
+                }
+            }
+        }
+    };
+    Some(WorldCountryAbsolveRequestSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x6030C`: молчание игрока. Цепочка
+/// `authorize_king → can_silence → silence`.
+pub fn dispatch_country_silence_request_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountrySilenceRequestSync> {
+    if message.message_type() != 0x6030c {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountrySilenceRequestDisposition::CountryMissing,
+            Some(false) => WorldCountrySilenceRequestDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) =
+                    countries.can_silence(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountrySilenceRequestDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanSilenceDisposition::Allowed) {
+                    WorldCountrySilenceRequestDisposition::OperationRejected(operation)
+                } else {
+                    let Some(report) = countries.silence(
+                        country_id,
+                        target_player_id,
+                        country_parameters,
+                        context,
+                    ) else {
+                        break 'fallback WorldCountrySilenceRequestDisposition::CountryMissing;
+                    };
+                    WorldCountrySilenceRequestDisposition::Applied { operation, report }
+                }
+            }
+        }
+    };
+    Some(WorldCountrySilenceRequestSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x6030D`: запрос exile. Цепочка
+/// `authorize_king → can_exile → exile` с legacy-свёрткой результата в
+/// `target_player_id` при отправке запроса и `0` иначе.
+pub fn dispatch_country_exile_request_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryExileRequestSync> {
+    if message.message_type() != 0x6030d {
+        return None;
+    }
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_target = message.base_mut().get_long();
+    let target_player_id = decoded_target.unwrap_or(0);
+    let decoded_king = message.base_mut().get_long();
+    let king_player_id = decoded_king.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+    let disposition = 'fallback: {
+        match countries.authorize_king(country_id, king_player_id, context) {
+            None => WorldCountryExileRequestDisposition::CountryMissing,
+            Some(false) => WorldCountryExileRequestDisposition::KingRejected,
+            Some(true) => {
+                let Some(operation) = countries.can_exile(country_id, country_parameters, context)
+                else {
+                    break 'fallback WorldCountryExileRequestDisposition::CountryMissing;
+                };
+                if !matches!(operation, CountryCanExileDisposition::Allowed) {
+                    WorldCountryExileRequestDisposition::OperationRejected(operation)
+                } else {
+                    let Some(request) = countries.exile(
+                        country_id,
+                        target_player_id,
+                        country_parameters,
+                        context,
+                    ) else {
+                        break 'fallback WorldCountryExileRequestDisposition::CountryMissing;
+                    };
+                    let legacy_result = if matches!(request, CountryExileRequestDisposition::Sent { .. }) {
+                        target_player_id
+                    } else {
+                        0
+                    };
+                    WorldCountryExileRequestDisposition::Requested {
+                        operation,
+                        legacy_result,
+                        request,
+                    }
+                }
+            }
+        }
+    };
+    Some(WorldCountryExileRequestSync {
+        source_map_id,
+        source_socket_id,
+        target_player_id,
+        target_complete: decoded_target.is_some(),
+        king_player_id,
+        king_complete: decoded_king.is_some(),
+        country_id,
+        country_complete: decoded_country.is_some(),
+        disposition,
+    })
+}
+
+/// Ветвь `0x6030E`: результат exile от GameServer: `success_exiled` до
+/// чтения списка игроков, safe-decode списка (проверка усечения по остатку
+/// байт и guard аллокации до цикла) и ответ `0x7FF15` формы
+/// `[country byte, count long, ids…]` через `send_all` контекста. Порядок и
+/// guard-ы повторяют исходный диспетчер байт-в-байт.
+pub fn dispatch_country_exile_result_message(
+    message: &mut CMessage,
+    countries: &mut dyn WorldCountryGovernanceGate,
+    country_parameters: &CCountryParam,
+    context: &mut dyn CountryExileResultContext,
+) -> Option<WorldCountryExileResultSync> {
+    if message.message_type() != 0x6030e {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_success = message.base_mut().get_char();
+    let raw_success = decoded_success.unwrap_or(0);
+    let decoded_country = message.base_mut().get_char();
+    let country_id = decoded_country.unwrap_or(0) as u8;
+
+    let Some(country_report) = countries.success_exiled(
+        country_id,
+        player_id,
+        raw_success != 0,
+        country_parameters,
+        context,
+    ) else {
+        return Some(WorldCountryExileResultSync {
+            source_map_id,
+            source_socket_id,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            raw_success,
+            success_complete: decoded_success.is_some(),
+            country_id,
+            country_id_complete: decoded_country.is_some(),
+            country_report: None,
+            count_complete: None,
+            disposition: WorldCountryExileResultDisposition::CountryMissing,
+        });
+    };
+
+    let decoded_count = message.base_mut().get_long();
+    let advertised_count = decoded_count.unwrap_or(0);
+
+    let mut player_ids = Vec::new();
+    if advertised_count > 0 {
+        let cursor = message.base_mut().cursor();
+        let remaining_bytes = message.as_wire_bytes().len().saturating_sub(cursor);
+        let advertised_count_usize = advertised_count as usize;
+        let required_bytes = advertised_count_usize.saturating_mul(size_of::<i32>());
+        if required_bytes > remaining_bytes {
+            return Some(WorldCountryExileResultSync {
+                source_map_id,
+                source_socket_id,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                raw_success,
+                success_complete: decoded_success.is_some(),
+                country_id,
+                country_id_complete: decoded_country.is_some(),
+                country_report: Some(country_report),
+                count_complete: Some(decoded_count.is_some()),
+                disposition: WorldCountryExileResultDisposition::PlayerListTruncated {
+                    advertised_count,
+                    available_complete_ids: remaining_bytes / size_of::<i32>(),
+                },
+            });
+        }
+        if player_ids.try_reserve_exact(advertised_count_usize).is_err() {
+            return Some(WorldCountryExileResultSync {
+                source_map_id,
+                source_socket_id,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                raw_success,
+                success_complete: decoded_success.is_some(),
+                country_id,
+                country_id_complete: decoded_country.is_some(),
+                country_report: Some(country_report),
+                count_complete: Some(decoded_count.is_some()),
+                disposition: WorldCountryExileResultDisposition::PlayerListAllocationBlocked {
+                    advertised_count,
+                },
+            });
+        }
+        for _ in 0..advertised_count_usize {
+            player_ids.push(
+                message
+                    .base_mut()
+                    .get_long()
+                    .expect("полнота exile player-list проверена до декодирования"),
+            );
+        }
+    }
+
+    let mut response = CMessage::new(0x0007_FF15);
+    response.base_mut().add_byte(country_id);
+    response.base_mut().add_long(advertised_count);
+    for &exiled_player_id in &player_ids {
+        response.base_mut().add_long(exiled_player_id);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = context.send_all(&response);
+    Some(WorldCountryExileResultSync {
+        source_map_id,
+        source_socket_id,
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        raw_success,
+        success_complete: decoded_success.is_some(),
+        country_id,
+        country_id_complete: decoded_country.is_some(),
+        country_report: Some(country_report),
+        count_complete: Some(decoded_count.is_some()),
+        disposition: WorldCountryExileResultDisposition::Broadcast {
+            advertised_count,
+            player_ids,
+            wire,
+            delivery,
+        },
     })
 }
 
