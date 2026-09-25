@@ -16,7 +16,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) use nebokrai_zone::effects::{
-    WUXING_STATE_BYTES, WuXingCoefficients, WuXingKind, WuXingProperties, WuXingState,
+    WUXING_STATE_BYTES, WuXingCoefficients, WuXingProperties, WuXingState,
     WuXingStateParameters, apply_wuxing_to_properties, kind_for_skill_id,
 };
 
