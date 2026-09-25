@@ -117,6 +117,12 @@ pub trait WorldGameView {
 
     fn game_server_number_by_player_id(&self, player_id: i32) -> i32;
 
+    /// Числовой индекс маршрута региона ветки `player_detail`; `0` при
+    /// отсутствии региона или game server-а. Реализация делегирует
+    /// одноимённому inherent-методу; сравнение с source map остаётся у
+    /// обработчика.
+    fn game_server_number_by_region_id(&self, region_id: i32) -> i32;
+
     fn legacy_tick_ms(&self) -> u32;
 
     fn set_map_player_jjc_identity(&mut self, player_id: u32, level: u8, jjc_level: u32) -> bool;
@@ -189,6 +195,11 @@ pub trait WorldGameView {
         player_id: i32,
     ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock>;
 
+    /// Сброс faction-data флага mapped-игрока ветки `player_detail` после
+    /// перевода в offline: `true` — owner найден в карте, флаг снят внутри
+    /// владельца игры блочным set_c-вызовом.
+    fn reset_map_player_faction_data(&self, map_key: u32) -> bool;
+
     fn online_player_count(&self) -> usize;
 
     /// In-memory списки `restore_players`/`deletion_players` при restore-role
@@ -218,6 +229,11 @@ pub trait WorldGameView {
     fn remove_player_load_data(&self, player_id: i32) -> bool;
 
     fn append_offline_player_id(&mut self, player_id: u32) -> bool;
+
+    /// Снятие offline-записей игрока ветки `player_detail` при повторной
+    /// публикации online: ровно retain всех дубликатов id без возврата,
+    /// как в исходном владельце.
+    fn remove_offline_player(&mut self, player_id: u32);
 
     fn online_player_route_by_account(&self, account: &[u8]) -> Option<WorldOnlineAccountPlayerRoute>;
 
@@ -613,5 +629,109 @@ pub trait WorldPlayerSelectDbView {
         player_id: u32,
         active_transaction: Option<&'a mut WorldTdsClient>,
     ) -> Pin<Box<dyn Future<Output = i32> + 'a>>;
+}
+
+/// Исход владения декодированным возвращающимся игроком subtype-`1` ветки
+/// player_return. Тип перевезён из `game.rs` вместе с ветвью; организационный
+/// исход раннего offline-перехода (`PlayerExitGameOutcome` у владельца
+/// организаций старого пакета) seam сворачивает в число удалённых online-
+/// вхождений — по форме свёртки маршрута select, владелец организаций
+/// ради одной ветки не переносится. Старый пакет реэкспортирует.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldReturnedPlayerDecodeOwner {
+    Existing,
+    Created {
+        replaced_existing_decoded_id: bool,
+        login_removed: bool,
+        online_removed_occurrences: usize,
+        offline_inserted: bool,
+    },
+}
+
+/// Итог subtype-`1` decode ветки player_return. Тип перевезён из `game.rs`
+/// вместе с ветвью; старый пакет реэкспортирует.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldReturnedPlayerDecode {
+    pub requested_player_id: u32,
+    pub decoded_player_id: i32,
+    pub owner: WorldReturnedPlayerDecodeOwner,
+}
+
+/// Снимок возвращающегося игрока для ветки player_return: account и name
+/// хранятся c-string префиксами, friend names собраны в legacy-порядке.
+/// Тип перевезён из `game.rs` вместе с ветвью; старый пакет реэкспортирует.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldReturnedPlayerSnapshot {
+    pub account: Vec<u8>,
+    pub name: Vec<u8>,
+    pub level: u8,
+    pub team_id: i32,
+    pub owner_type: i32,
+    pub owner_id: i32,
+    pub friend_names: Vec<Vec<u8>>,
+}
+
+/// Снимок login-маршрута игрока для ветки player_detail: ключ карты, id
+/// owner-а и регион маршрута. Тип перевезён из `game.rs` вместе с ветвью;
+/// старый пакет реэкспортирует.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldLoginPlayerRouteSnapshot {
+    pub map_key: u32,
+    pub owner_id: i32,
+    pub region_id: i32,
+}
+
+/// Общий шов снятия online-записи ветвей player_return и player_detail:
+/// реализация делегирует inherent `CGame::remove_online_player`, а
+/// организационный исход (`PlayerExitGameOutcome` у владельца организаций
+/// старого пакета) seam сворачивает в число удалённых вхождений — по форме
+/// свёртки маршрута select.
+pub trait WorldOnlinePlayerRemovalView: WorldPlayerBaseGameView {
+    fn remove_online_player(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        player_id: u32,
+    ) -> usize;
+}
+
+/// Шов ветки `player_return` `0x5FB02`: subtype-`1` decode и снимок
+/// возвращающегося игрока остаются одним вызовом у владельца игры без
+/// перестановки; реализация на `CGame` делегирует одноимённым inherent-
+/// методам (pet vector cleanup и ранний offline-переход внутри decode).
+pub trait WorldPlayerReturnGameView: WorldOnlinePlayerRemovalView {
+    #[allow(clippy::too_many_arguments, reason = "точная форма decode-вызова ветки return")]
+    fn decord_returned_player(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReturnedPlayerDecode, PlayerCodecError>;
+
+    fn returned_player_snapshot(&self, player_id: u32) -> Option<WorldReturnedPlayerSnapshot>;
+}
+
+/// Шов ветки `player_detail` `0x5FB01`: снимок login-маршрута, serialize
+/// полного mapped-игрока и повторная публикация online остаются у владельца
+/// игры; исход append свёрнут в флаг вставки (`PlayerEnterGameOutcome`
+/// у владельца организаций старого пакета), как свёртка remove выше.
+pub trait WorldPlayerDetailGameView: WorldOnlinePlayerRemovalView {
+    fn login_player_route_snapshot(&self, player_id: u32) -> Option<WorldLoginPlayerRouteSnapshot>;
+
+    fn encode_map_player_full_snapshot(
+        &mut self,
+        organizing: &Self::OrganizingContext,
+        map_key: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Vec<u8>>, PlayerCodecError>;
+
+    fn append_online_player_id(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        player_id: i32,
+    ) -> bool;
 }
 

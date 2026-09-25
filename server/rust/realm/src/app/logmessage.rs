@@ -6,18 +6,24 @@
 //! wire-ответа LoginServer; форма payload не меняется. Create-role выполняет
 //! limit, sex/occupation, country, filter и name checks до выдачи ID и
 //! equipment. Select сначала проверяет live map, frozen save-map и лишь затем
-//! DB; direct-маршрут клона остаётся одним вызовом у владельца игры. Список
-//! персонажей `0x4FB01` живёт в соседнем `player_base.rs`; остальные пока не
-//! перенесённые ветви остаются у владельца старого пакета.
+//! DB; direct-маршрут клона остаётся одним вызовом у владельца игры.
+//! Player-detail фиксирует промах login-маршрута статусом до мутаций,
+//! несовпадение map переводит игрока в offline, а совпавший маршрут кодирует
+//! полный снимок до повторной публикации online. Player-return декодирует
+//! subtype-`1`, отвечает LoginServer и снимает login/online до уведомления
+//! друзей. Список персонажей `0x4FB01` живёт в соседнем `player_base.rs`;
+//! все ветви диспетчера перенесены сюда, старый пакет вызывает их
+//! dispatcher-адаптером.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 
 use crate::app::world_game_view::{
     WorldCountryView, WorldCreateRoleDbView, WorldCreateRoleLaunchFailure,
     WorldCreateRoleLaunchGate, WorldCreateRoleOrganizingView, WorldDeleteRoleCountryGate,
-    WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit, WorldPlayerLoadRequestBlock,
-    WorldPlayerLoadRequestOutcome, WorldPlayerSelectDbView, WorldPlayerSelectGameView,
-    WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
+    WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit, WorldPlayerDetailGameView,
+    WorldPlayerLoadRequestBlock, WorldPlayerLoadRequestOutcome, WorldPlayerReturnGameView,
+    WorldPlayerSelectDbView, WorldPlayerSelectGameView, WorldPlayerSelectRouteError,
+    WorldPlayerSelectRouteOutcome, WorldReturnedPlayerDecode,
 };
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::characters::player::{
@@ -80,6 +86,10 @@ pub const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 pub const PLAYER_SELECT_REQUEST: i32 = 0x0004_FB05;
 pub const PLAYER_SELECT_RESPONSE: i32 = 0x0001_FF01;
 pub const PLAYER_SELECT_REJECTED_STATUS: i8 = 0x1C;
+pub const PLAYER_DETAIL_REQUEST: i32 = 0x0005_FB01;
+pub const PLAYER_RETURN_REQUEST: i32 = 0x0005_FB02;
+pub const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
+pub const PLAYER_FRIEND_OFFLINE_RESPONSE: i32 = 0x0007_F905;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct WorldRestoreRoleOutcome {
@@ -1085,5 +1095,355 @@ pub async fn on_player_select<G: WorldPlayerSelectGameView>(
             validation_owner,
             source: WorldPlayerSelectBlock::LoadRequest(source),
         },
+    }
+}
+
+/// Единичное offline-оповещение друга ветки player_return: `0x7F905` уходит
+/// на game server друга, найденный по online-маршруту в live-карте.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldReturnedPlayerFriendOutcome {
+    pub friend_player_id: u32,
+    pub game_server_index: i32,
+    pub wire: Vec<u8>,
+    pub delivery: Result<i32, SendMessageError>,
+}
+
+/// Конечный outcome ветки возврата игрока. PlayerOnlyOnWorld повторяет
+/// журнальный путь subtype-`0` без wire; DecodeBlocked изолирует дефект
+/// subtype-`1` decode до любого ответа; PlayerMissing — промах live снимка;
+/// Released фиксирует ответ LoginServer `0x7F903` и исходный порядок снятия
+/// login/online/offline, team exit и friend-уведомлений. Организационный
+/// исход online-снятия свёрнут швом в число удалённых вхождений —
+/// владелец организаций старого пакета ради одной ветки не переносится.
+#[derive(Debug)]
+pub enum WorldPlayerReturnOutcome {
+    PlayerOnlyOnWorld { player_id: u32 },
+    DecodeBlocked { player_id: u32, error: PlayerCodecError },
+    PlayerMissing { player_id: u32, subtype: i32 },
+    Released {
+        player_id: u32,
+        subtype: i32,
+        decode: Option<WorldReturnedPlayerDecode>,
+        login_wire: Vec<u8>,
+        login_delivery: Result<i32, SendMessageError>,
+        login_removed: bool,
+        online_removed_occurrences: usize,
+        offline_inserted: bool,
+        team_exit: Option<WorldLoginTimeoutTeamExit>,
+        friends: Vec<WorldReturnedPlayerFriendOutcome>,
+    },
+}
+
+/// Конечный outcome ветки player detail. Rejected повторяет статус-ответ
+/// `-1`/`0` до любой мутации; WrongGameServer — отказ `-2` с переводом
+/// login/online/offline до сброса faction-data; PromotedOnline кодирует
+/// полный mapped-снимок в тело исходного сообщения и публикует online после
+/// wire-ответа на source socket; Serialization* изолируют дефект encode до
+/// ответа. Организационные исходы снятия/постановки online свёрнуты швом в
+/// число удалённых вхождений и флаг вставки, без переноса владельца
+/// организаций старого пакета.
+#[derive(Debug)]
+pub enum WorldPlayerDetailOutcome {
+    Rejected {
+        player_id: u32,
+        status: i32,
+        source_socket_id: i32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    WrongGameServer {
+        player_id: u32,
+        owner_id: i32,
+        source_map_id: i32,
+        assigned_map_id: i32,
+        source_socket_id: i32,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+        login_removed: bool,
+        online_removed_occurrences: usize,
+        offline_inserted: bool,
+        faction_data_reset: bool,
+    },
+    PromotedOnline {
+        player_id: u32,
+        owner_id: i32,
+        source_map_id: i32,
+        source_socket_id: i32,
+        response_type: i32,
+        encoded_bytes: usize,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+        login_removed: bool,
+        offline_removal_completed: bool,
+        online_inserted: bool,
+    },
+    SerializationBlocked {
+        player_id: u32,
+        error: PlayerCodecError,
+    },
+    SerializationOwnerMissing {
+        player_id: u32,
+    },
+}
+
+/// Ветвь `0x5FB02`: subtype-`1` decode выполняет pet cleanup и ранний
+/// offline-переход у владельца игры до снимка; subtype-`0` пишет строку
+/// журнала без wire. Снятие login/online/offline и team exit идут в исходной
+/// последовательности после ответа LoginServer `0x7F903`, friend-присутствие
+/// `0x7F905` рассылается последним циклом. Порядок вызовов и предикатов
+/// скопирован из исходного обработчика буквально.
+#[allow(clippy::too_many_arguments, reason = "границы один к одному соответствуют owner-ам ветки return")]
+pub fn on_player_return<G: WorldPlayerReturnGameView>(
+    game: &mut G,
+    organizing: &mut G::OrganizingContext,
+    session_factory: &mut CSessionFactory,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    add_log_text: &mut dyn FnMut(&[u8]),
+    mut message: CMessage,
+) -> WorldPlayerReturnOutcome {
+    let player_id = message.base_mut().get_long().unwrap_or(0) as u32;
+    let subtype = message.base_mut().get_long().unwrap_or(0);
+    let decode = if subtype == 1 {
+        let decoded = {
+            let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+            game.decord_returned_player(
+                organizing,
+                player_id,
+                source,
+                cursor,
+                registry,
+                coefficients,
+            )
+        };
+        match decoded {
+            Ok(decoded) => Some(decoded),
+            Err(error) => {
+                return WorldPlayerReturnOutcome::DecodeBlocked { player_id, error };
+            }
+        }
+    } else {
+        if subtype == 0 {
+            let line = format!("Player {} Only On WorldServer!", player_id);
+            add_log_text(line.as_bytes());
+        }
+        None
+    };
+
+    let Some(player) = game.returned_player_snapshot(player_id) else {
+        return if subtype == 0 {
+            WorldPlayerReturnOutcome::PlayerOnlyOnWorld { player_id }
+        } else {
+            WorldPlayerReturnOutcome::PlayerMissing { player_id, subtype }
+        };
+    };
+
+    let mut login = CMessage::new(ACCOUNT_DISCONNECT_LOGIN_RESPONSE);
+    login.base_mut().add(&player.account);
+    login.base_mut().add_char(0);
+    login.base_mut().add(&player.name);
+    login.base_mut().add_char(0);
+    login.base_mut().add_byte(player.level);
+    let login_wire = login.as_wire_bytes().to_vec();
+    let login_delivery = login.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+
+    let owner_id = player.owner_id as u32;
+    let login_removed = game.remove_login_player(owner_id);
+    let online_removed_occurrences = game.remove_online_player(organizing, owner_id);
+    let offline_inserted = game.append_offline_player_id(owner_id);
+    let team_exit = if player.team_id == 0 {
+        None
+    } else {
+        let session_id = game.get_team_session_id(player.team_id as u32);
+        Some(game.exit_team_player(
+            session_factory,
+            session_id,
+            player.owner_type,
+            player.owner_id,
+        ))
+    };
+
+    let mut friends = Vec::new();
+    for friend_name in player.friend_names {
+        let friend_player_id = game.online_player_id_by_name(&friend_name);
+        if friend_player_id == 0 {
+            continue;
+        }
+        let game_server_index = game.game_server_number_by_player_id(friend_player_id as i32);
+        let mut presence = CMessage::new(PLAYER_FRIEND_OFFLINE_RESPONSE);
+        presence.base_mut().add_ulong(friend_player_id);
+        presence.base_mut().add(&player.name);
+        presence.base_mut().add_char(0);
+        let wire = presence.as_wire_bytes().to_vec();
+        let delivery = game.send_msg_to_game_server(game_server_index, &presence);
+        friends.push(WorldReturnedPlayerFriendOutcome {
+            friend_player_id,
+            game_server_index,
+            wire,
+            delivery,
+        });
+    }
+
+    WorldPlayerReturnOutcome::Released {
+        player_id,
+        subtype,
+        decode,
+        login_wire,
+        login_delivery,
+        login_removed,
+        online_removed_occurrences,
+        offline_inserted,
+        team_exit,
+        friends,
+    }
+}
+
+fn send_player_detail_status<G: WorldGameView + ?Sized>(
+    game: &G,
+    socket_id: i32,
+    status: i32,
+    player_id: u32,
+) -> (Vec<u8>, Result<i32, SendMessageError>) {
+    let mut response = CMessage::new(PLAYER_DETAIL_RESPONSE);
+    response.base_mut().add_long(status);
+    response.base_mut().add_ulong(player_id);
+    let wire = response.as_wire_bytes().to_vec();
+    let sender = game.current_game_server_sender();
+    let delivery = response.send_to_socket(sender.as_ref(), socket_id);
+    (wire, delivery)
+}
+
+/// Ветвь `0x5FB01`: промах login-маршрута отвечает статусом `-1`/`0`
+/// (online/offline различение) и строкой журнала до любой мутации;
+/// несовпадение assigned map и source map отвечает `-2`, переводит login/
+/// online в offline и сбрасывает faction-data. Совпавший маршрут меняет тип
+/// исходного сообщения на `0x7F901`, дописывает полный mapped-снимок и лишь
+/// после wire-ответа на source socket снимает login/offline и публикует
+/// online. Порядок вызовов скопирован из исходного обработчика буквально.
+pub fn on_player_detail<G: WorldPlayerDetailGameView>(
+    game: &mut G,
+    organizing: &mut G::OrganizingContext,
+    registry: &GoodsBasePropertiesRegistry,
+    coefficients: &PlayerPropertyCoefficients,
+    add_log_text: &mut dyn FnMut(&[u8]),
+    mut message: CMessage,
+) -> WorldPlayerDetailOutcome {
+    let source_map_id = message.map_id();
+    let source_socket_id = message.socket_id();
+    let player_id = message.base_mut().get_long().unwrap_or(0) as u32;
+    let _ = message.base_mut().get_long();
+    let _ = message.base_mut().get_long();
+
+    let Some(player) = game.login_player_route_snapshot(player_id) else {
+        let (status, error_text) = if game.online_player_by_id(player_id).is_some() {
+            (
+                -1,
+                format!(
+                    "MSG_S2W_LOG_QUEST_PLAYERDATA Invalid Request For Player Detail ID <{}> Charactor Is Online!",
+                    player_id
+                ),
+            )
+        } else {
+            (
+                0,
+                format!(
+                    "MSG_S2W_LOG_QUEST_PLAYERDATA Invalid Request For Player Detail ID <{}> Charactor Is Offline",
+                    player_id
+                ),
+            )
+        };
+        let (wire, delivery) = send_player_detail_status(
+            game,
+            source_socket_id,
+            status,
+            player_id,
+        );
+        add_log_text(error_text.as_bytes());
+        return WorldPlayerDetailOutcome::Rejected {
+            player_id,
+            status,
+            source_socket_id,
+            response_type: PLAYER_DETAIL_RESPONSE,
+            wire,
+            delivery,
+        };
+    };
+
+    let assigned_map_id = game.game_server_number_by_region_id(player.region_id);
+    if assigned_map_id != source_map_id {
+        let (wire, delivery) = send_player_detail_status(
+            game,
+            source_socket_id,
+            -2,
+            player_id,
+        );
+        let owner_id = player.owner_id as u32;
+        let login_removed = game.remove_login_player(owner_id);
+        let online_removed_occurrences = game.remove_online_player(organizing, owner_id);
+        let offline_inserted = game.append_offline_player_id(owner_id);
+        let faction_data_reset = game.reset_map_player_faction_data(player.map_key);
+        let error_text = format!(
+            "MSG_S2W_LOG_QUEST_PLAYERDATA Invalid Request For Player Detail ID <{}> GameServer Invalid",
+            player_id
+        );
+        add_log_text(error_text.as_bytes());
+        return WorldPlayerDetailOutcome::WrongGameServer {
+            player_id,
+            owner_id: player.owner_id,
+            source_map_id,
+            assigned_map_id,
+            source_socket_id,
+            response_type: PLAYER_DETAIL_RESPONSE,
+            wire,
+            delivery,
+            login_removed,
+            online_removed_occurrences,
+            offline_inserted,
+            faction_data_reset,
+        };
+    }
+
+    message.set_message_type(PLAYER_DETAIL_RESPONSE);
+    let encoded = match game.encode_map_player_full_snapshot(
+        organizing,
+        player.map_key,
+        registry,
+        coefficients,
+    ) {
+        Ok(Some(encoded)) => encoded,
+        Ok(None) => {
+            return WorldPlayerDetailOutcome::SerializationOwnerMissing { player_id };
+        }
+        Err(error) => {
+            return WorldPlayerDetailOutcome::SerializationBlocked { player_id, error };
+        }
+    };
+    let encoded_bytes = encoded.len();
+    message.base_mut().add(&encoded);
+    let wire = message.as_wire_bytes().to_vec();
+    let sender = game.current_game_server_sender();
+    let delivery = message.send_to_socket(sender.as_ref(), source_socket_id);
+    let owner_id = player.owner_id as u32;
+    let login_removed = game.remove_login_player(owner_id);
+    game.remove_offline_player(owner_id);
+    let online_inserted = game.append_online_player_id(organizing, player.owner_id);
+
+    WorldPlayerDetailOutcome::PromotedOnline {
+        player_id,
+        owner_id: player.owner_id,
+        source_map_id,
+        source_socket_id,
+        response_type: PLAYER_DETAIL_RESPONSE,
+        encoded_bytes,
+        wire,
+        delivery,
+        login_removed,
+        offline_removal_completed: true,
+        online_inserted,
     }
 }

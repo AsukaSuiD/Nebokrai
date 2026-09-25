@@ -1437,34 +1437,13 @@ pub(crate) struct WorldServerSnapshotPlayerDecode {
     pub(crate) owner: WorldServerSnapshotPlayerOwner,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldReturnedPlayerDecodeOwner {
-    Existing,
-    Created {
-        replaced_existing_decoded_id: bool,
-        login_removed: bool,
-        online_removal: WorldOnlinePlayerRemoveOutcome,
-        offline_inserted: bool,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldReturnedPlayerDecode {
-    pub(crate) requested_player_id: u32,
-    pub(crate) decoded_player_id: i32,
-    pub(crate) owner: WorldReturnedPlayerDecodeOwner,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldReturnedPlayerSnapshot {
-    pub(crate) account: Vec<u8>,
-    pub(crate) name: Vec<u8>,
-    pub(crate) level: u8,
-    pub(crate) team_id: i32,
-    pub(crate) owner_type: i32,
-    pub(crate) owner_id: i32,
-    pub(crate) friend_names: Vec<Vec<u8>>,
-}
+// Типы decode/снимков ветвей player_return и player_detail перевезены в
+// Realm world_game_view вместе с ветвями; организационный исход online-
+// снятия там свёрнут в число удалённых вхождений. Здесь реэкспорт для
+// inherent decode-метода и dispatcher-адаптера.
+pub(crate) use nebokrai_realm::app::world_game_view::{
+    WorldReturnedPlayerDecode, WorldReturnedPlayerDecodeOwner, WorldReturnedPlayerSnapshot,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerSaveResponseProgress {
@@ -5606,12 +5585,9 @@ struct WorldLoginPlayerEntry {
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginAccountPlayer;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLoginPlayerRouteSnapshot {
-    pub(crate) map_key: u32,
-    pub(crate) owner_id: i32,
-    pub(crate) region_id: i32,
-}
+// Снимок login-маршрута ветки player_detail перевезён в Realm
+// world_game_view вместе с ветвью; здесь реэкспорт для inherent snapshot.
+pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginPlayerRouteSnapshot;
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldOnlineAccountPlayerRoute;
 
@@ -15510,7 +15486,7 @@ impl CGame {
             owner: WorldReturnedPlayerDecodeOwner::Created {
                 replaced_existing_decoded_id,
                 login_removed,
-                online_removal,
+                online_removed_occurrences: online_removal.removed_occurrences,
                 offline_inserted,
             },
         })
@@ -16992,6 +16968,18 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
             .map(|entry| entry.index)
     }
 
+    fn game_server_number_by_region_id(&self, region_id: i32) -> i32 {
+        CGame::game_server_number_by_region_id(self, region_id)
+    }
+
+    fn reset_map_player_faction_data(&self, map_key: u32) -> bool {
+        CGame::reset_map_player_faction_data(self, map_key)
+    }
+
+    fn remove_offline_player(&mut self, player_id: u32) {
+        CGame::remove_offline_player(self, player_id)
+    }
+
     fn decode_online_player_lei_ting(
         &mut self,
         player_id: u32,
@@ -17260,6 +17248,59 @@ impl nebokrai_realm::app::world_game_view::WorldPlayerSelectGameView for CGame {
                 },
             }),
         }
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldOnlinePlayerRemovalView for CGame {
+    fn remove_online_player(&mut self, organizing: &mut COrganizingCtrl, player_id: u32) -> usize {
+        CGame::remove_online_player(self, organizing, player_id).removed_occurrences
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldPlayerReturnGameView for CGame {
+    #[allow(clippy::too_many_arguments, reason = "точная форма decode-вызова ветки return")]
+    fn decord_returned_player(
+        &mut self,
+        organizing: &mut COrganizingCtrl,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReturnedPlayerDecode, PlayerCodecError> {
+        CGame::decord_returned_player(
+            self,
+            organizing,
+            requested_player_id,
+            source,
+            cursor,
+            registry,
+            coefficients,
+        )
+    }
+
+    fn returned_player_snapshot(&self, player_id: u32) -> Option<WorldReturnedPlayerSnapshot> {
+        CGame::returned_player_snapshot(self, player_id)
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldPlayerDetailGameView for CGame {
+    fn login_player_route_snapshot(&self, player_id: u32) -> Option<WorldLoginPlayerRouteSnapshot> {
+        CGame::login_player_route_snapshot(self, player_id)
+    }
+
+    fn encode_map_player_full_snapshot(
+        &mut self,
+        organizing: &COrganizingCtrl,
+        map_key: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Vec<u8>>, PlayerCodecError> {
+        CGame::encode_map_player_full_snapshot(self, organizing, map_key, registry, coefficients)
+    }
+
+    fn append_online_player_id(&mut self, organizing: &mut COrganizingCtrl, player_id: i32) -> bool {
+        CGame::append_online_player_id(self, organizing, player_id).inserted
     }
 }
 
