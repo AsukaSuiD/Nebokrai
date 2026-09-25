@@ -2,22 +2,52 @@
 //! GameServer (порция 1) и ядра его membership-операций (порция 3): вход и
 //! выход фигуры и owner-обвязки позиционной регистрации move-shape. Исходный
 //! владелец — `appserver/serverregion.h/.cpp`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. `AddObject`
-//! `0x00083270` и `RemoveObject` `0x0007CE60` имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY` исследовательского корпуса старого файла.
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb` (SHA-256 EXE
+//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS
+//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, совпадение подтверждено
+//! оснасткой `.local/evidence/symbols.py identity`). Машинные статусы порций
+//! (прямой дизассембл тел точной пары):
 //!
-//! Ядра сохраняют исходный порядок частичных эффектов. `AddObject`: gate
-//! area-span, привязка региона, random-fallback вне границ, запись позиции
-//! через dispatch владельца, registry-add, вход в область либо тот же
-//! fallback, что исходный virtual `RemoveObject`. `RemoveObject`: area-remove
-//! и сброс owner-link, стирание блока клетки player/NPC/monster, затем
-//! registry remove; достигнутый player-leave virtual — `ret 4` без
-//! наблюдаемого эффекта и отдельного ядра не имеет. Entry-effects входа
+//! | функция | RVA | статус |
+//! |---|---|---|
+//! | `add_object_with_area_entry` | `0x00083270` | `VERIFIED_DISASSEMBLY` |
+//! | `remove_object` | `0x0007CE60` | `VERIFIED_DISASSEMBLY` |
+//! | `set_move_shape_position` / `set_move_shape_tile_position` | — | glue-обвязка над ядром `CShape::SetTileXY`; сама обвязка сверена с местами вызова membership-тел |
+//!
+//! `add_object_with_area_entry` сверен по всему телу (`0x00483270-0x00483570`,
+//! vtable `+0x38`): RTTI-downcast `0x004832A0`, owner-link `[+0x40]`
+//! `0x004832B4`, чтение tile X (`0x004832B7`) до tile Y (`0x004832C2`),
+//! границы по `[+0x6C]/[+0x70]` (`0x004832D3-0x004832DF`), random-fallback
+//! только при ненулевом cell-array `[+0x84]` (`0x004832E1`) через
+//! `GetRandomPos` `0x000F04D0` (`0x004832F6`), затем virtual `SetTileXY`
+//! `+0x88` (`0x0048330A`), registry-add switch по типам `0x190/0x1F4/0x258/
+//! 0x2BC` (`0x00483313-0x00483413`), индекс области `idiv` глобалями
+//! area-span `15` из `0x69EFC8/0x69EFCC` (`0x00483448/0x00483456`),
+//! `GetArea` `0x0007BB60` (`0x0048345D`), virtual `AddObject` области `+0x38`
+//! (`0x0048346D`), запись `m_pArea` `[+0x60]` (`0x00483477`), player-only
+//! `PlayerEnter` `0x00075580` (`0x00483482`), entry-hook virtual `+0x150`
+//! (`0x004834A6`) либо fallback — тот же virtual `RemoveObject` `+0x34` на
+//! себе (`0x004834B2`).
+//!
+//! `remove_object` сверен по всему телу (`0x0047CE60-0x0047D08C`, vtable
+//! `+0x34`): area-remove virtual `+0x34` области (`0x0047CE9A`) и сброс
+//! owner-link `m_pArea = 0` (`0x0047CE9D`) до стирания блока клетки;
+//! player-ветка вызывает `SetBlock(x, y, 0)` virtual `+0x90` (`0x0047CEEC`)
+//! и достигнутый player-leave virtual `0x00601A70` — точный `ret 4` без
+//! наблюдаемого эффекта (`0x0047CEFC`); NPC/monster-ветка — тот же
+//! `SetBlock(x, y, 0)` (`0x0047CECE`) без stub-вызова; прочие типы блок не
+//! стирают (`0x0047CEB3/0x0047CEB6` → `0x0047CF01`); registry-erase по типам
+//! в конце (`0x0047CF04-0x0047D050`).
+//!
+//! Ядра сохраняют исходный порядок частичных эффектов. Entry-effects входа
 //! (`before entry`-hook и virtual `AfterEnteredArea`) остаются у переходной
 //! обвязки старого пакета, которая по-прежнему получает весь агрегат
 //! `CServerRegion`; ядро возвращает решение typed-outcome. Owner-обвязки
 //! позиционной регистрации дополняют area facts и выбирают достигнутый
-//! dispatch `CShape::SetTileXY`, не дублируя его ядро.
+//! dispatch `CShape::SetTileXY`, не дублируя его ядро. Внутренности
+//! `GetRandomPos` `0x000F04D0` этой волной не дизассемблировались: при
+//! неудаче оригинал молча продолжает с записанными out-координатами, ядро
+//! поднимает typed-границу — отличие зафиксировано.
 
 use super::areagrid::area_index_for_tile;
 use super::geometry::{MONSTER_TYPE, NPC_TYPE, PLAYER_TYPE};

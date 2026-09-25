@@ -1,5 +1,15 @@
 # Аудит готовности серверной реконструкции
 
+## Zone serverregion: машинная досверка membership/transitions/tax — статусы повышены, одно расхождение вынесено на исправление, 26 сентября 2026
+
+Доказательный проход по точной паре `gameserver.exe` (`4F5C98E0…`) + `GameServer.pdb` (RSDS match; capstone по RVA пабов S_PUB32): тела перенесённых ядер сверены построчно, шапки [`zone/regions/serverregion/`](../../server/rust/zone/src/regions/serverregion) дополнены таблицами статусов и машинными якорями.
+
+**VERIFIED_DISASSEMBLY:** `add_tax_money` `0x000826E0` (superior-gate `[+0x228]>0`, signed imul доли, усечение x87 `fmul` константой `0.01f` с fnstcw, clamp `0xEE6B2800` обеими ветками, хвост `UpdateTaxToWorldServer`); `collect_today_tax` `0x0007D9B0` (clamp total, today=0, GS0236, `PutStringToFile("war")`); `UpdateTaxToWorldServer` `0x0007C0C0` (порядок полей `0x6012D` совпадает с клеем); `add_object_with_area_entry` `0x00083270` (весь путь: bounds → random-fallback только при ненулевом cell-array → SetTileXY → registry-switch → area index `idiv` глобалями 15 → GetArea → AddObject → m_pArea → player-only PlayerEnter → entry-hook/fallback); `remove_object` `0x0007CE60` (player-leave виртуал `0x00601A70` = точный `ret 4`); `plan/commit_area_transition` `0x000802A0` (neighbor-таблица `0x69FC38` побайтово = NEIGHBOR_AREAS, self-exclusion, порядок commit). Клей старого пакета — тонкие делегации в исходном порядке.
+
+**Установленное расхождение (вынесено на fix-порцию):** машинный `commit_area_transition` на пути ненайденной целевой области выполняет `RemoveObject` прежней области **до** bounds-check и завершается без AddObject и без сброса `m_pArea` (висячий owner-link) при out-of-grid координатах; перенесённое ядро возвращало отказ без мутации. Поведение частичного эффекта оригинала — значимый контракт, исправляется отдельной порцией в том же участке.
+
+**Оговорки (в шапках):** x87 80-бит против f64 — расхождение лишь на мере нуль; в машинном `AddTaxMoney` рекурсивная сумма superior-а и поле #2 `0x6012E` читают **неинициализированный** стековый DWORD — клей осознанно пересылает вычисленную долю и добавляет visited-guard от циклического superior-графа (замена зафиксирована). PARTIAL остаются: internals `GetRandomPos`, staging-семантика transitions, registry-хранилища, caller `0x7FE26` цикла collect. Гейт — exit 0. Код не менялся (только шапки), тесты не создавались.
+
 ## Realm app: world runtime slices F+G — Init-context DB-слой и post-init контексты (JJC/LeiTing resets), 26 сентября 2026
 
 Продолжение runtime-декомпозиции после slice C (`ab8eb00d8`). В realm перенесены две связные семьи из `worldserver/worldserver/runtime.rs` (−607 строк):

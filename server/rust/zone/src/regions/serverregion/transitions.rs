@@ -1,17 +1,48 @@
 //! Transition-семья смены области `CServerRegion` исторического GameServer:
 //! immutable plan (порция 1), staging-очереди area/region AI и ядро
 //! plan/commit (порция 3). Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! `OnShapeChangeArea` `0x000802A0` имеет статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY` исследовательского корпуса старого файла; точная
-//! пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` (SHA-256
+//! EXE `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
+//! RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, совпадение подтверждено
+//! оснасткой `.local/evidence/symbols.py identity`). Машинные статусы порций
+//! (прямой дизассембл тел точной пары):
+//!
+//! | функция | RVA | статус |
+//! |---|---|---|
+//! | `plan_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
+//! | `commit_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` с зафиксированным расхождением на пути ненайденной цели |
+//! | staging-очереди (`stage_*`, `staged_area_transitions`, `take_staged_region_transitions`) | — | `PARTIAL`: staging-сайт исходного region AI отдельным телом этой волной не дизассемблировался |
+//!
+//! `OnShapeChangeArea` сверен по всему телу (`0x004802A0-0x004808A2`): gate
+//! null-объекта и отсутствующего owner-link `[+0x60]` (`0x004802C4-
+//! 0x004802D7`), gate совпавшей области по `[+0x68]/[+0x6C]` против
+//! `[+0x44]/[+0x48]` (`0x004802DD-0x004802F7`), обход девяти-area окружения
+//! по таблице смещений `0x69FC38`/границей `0x69FC80` в исходном порядке
+//! (center-first row-major, значения совпадают с `NEIGHBOR_AREAS`),
+//! list-разность «новые без старых» через copy-ctor и `list::remove`
+//! (`0x0048046E-0x00480497`), skip пустых областей по `GetNumShapes`
+//! `0x00070B80` (`0x004805A5`), audience только для moving player
+//! (`0x004805C3` по `[+0x4] == 0x190`) с исключением самой фигуры
+//! (`0x00480623`), ordered per-area snapshots до membership mutation, затем
+//! commit-порядок `RemoveObject -> GetArea(next) -> AddObject -> m_pArea`
+//! (`0x0048076E/0x00480771-0x004807B5/0x004807BC/0x004807C6`) и player-only
+//! `PlayerEnter` `0x00075580` (`0x004807D1`).
+//!
+//! Машинно зафиксированное расхождение частичного эффекта: при ненайденной
+//! целевой области оригинал уже выполнил `RemoveObject` текущей области
+//! (`0x0048076E` до bounds-check цели) и завершается без `AddObject` и без
+//! сброса `m_pArea` (`0x004807C6` только на найденном пути; owner-link
+//! остаётся указывать на область, из которой фигура удалена). Ядро
+//! `commit_area_transition` при `target_index == None` возвращает `false`
+//! без мутации membership. Правка этого расхождения — решение отдельной
+//! волны, здесь только фиксация.
 //!
 //! Staging сохраняет pointer-unique append исходного region AI: marker
 //! сбрасывается caller-ом только после добавления, ordered snapshot берётся
 //! без очистки исходного list, cleanup очереди выполняет вызывающая сторона
-//! после применения всех `OnShapeChangeArea`. Commit применяет исходный
-//! порядок `RemoveObject -> AddObject -> m_pArea` (`0x0048076E/0x004807BC/
-//! 0x004807C6`) до этого cleanup. Owned-monster/NPC обвязки plan/commit
-//! остаются у переходного владельца generational hub-ов до своих волн.
+//! после применения всех `OnShapeChangeArea`. Owned-monster/NPC обвязки
+//! plan/commit остаются у переходного владельца generational hub-ов до своих
+//! волн.
 
 use indexmap::IndexSet;
 
