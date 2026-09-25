@@ -9,10 +9,10 @@ use std::error::Error;
 use crate::dbaccess::logindb::rscdkey::RsCdKeyNotice;
 use crate::loginserver::applogin::acclogthread::AccLogThreadNotice;
 use crate::loginserver::applogin::message::LoginComponentMessageOutcome;
-use crate::loginserver::applogin::message::asmessage::AsMessageOutcome;
-use crate::loginserver::applogin::message::gmmessage::GmMessageOutcome;
-use crate::loginserver::applogin::message::logmessage::LogMessageOutcome;
-use crate::loginserver::applogin::message::servermessage::ServerMessageOutcome;
+use nebokrai_realm::access::asmessage::AsMessageOutcome;
+use nebokrai_realm::access::gmmessage::GmMessageOutcome;
+use nebokrai_realm::access::logmessage::LogMessageOutcome;
+use nebokrai_realm::access::servermessage::ServerMessageOutcome;
 use crate::loginserver::loginserver::game::{
     AuthHandlerNotice, LoginGameThreadReport, LoginMainLoopOutcome, LoginRuntimeStep,
     LoginServerInfoTurn, WorldOperatorLogRecord, game_thread_func, load_runtime_area_id,

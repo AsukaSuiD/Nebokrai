@@ -20,12 +20,6 @@ pub(crate) mod netauth;
 
 #[allow(
     dead_code,
-    reason = "Login message-owner подключён до component receive и доменных обработчиков"
-)]
-pub(crate) mod netlogin;
-
-#[allow(
-    dead_code,
     reason = "GameServer message-owner подключён до полного around/session send-path"
 )]
 pub(crate) mod netserver;

@@ -1,5 +1,5 @@
 //! GM-обработчик `applogin/message/gmmessage.cpp`, подтверждённый
-//! `loginserver.exe` и `loginserver.pdb`.
+//! `loginserver.exe` и `loginserver.pdb`, перенесённый в Realm `access/`.
 //!
 //! Код `0x20001` читает имя учётной записи до 256 байт и знаковый Windows
 //! `long`, затем синхронно вызывает `CRsCDKey::CDKeyBan`. Код `0x20002` читает
@@ -13,8 +13,8 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::loginserver::loginserver::game::CGame;
-use crate::nets::netlogin::message::CMessage;
+use super::game::CGame;
+use crate::app::login_message::CMessage;
 
 const CD_KEY_BAN_MESSAGE_TYPE: i32 = 0x0002_0001;
 const ACTIVE_BAN_LIST_REQUEST: i32 = 0x0002_0002;
@@ -22,7 +22,7 @@ const ACTIVE_BAN_LIST_RESPONSE: i32 = 0x0004_fd05;
 const ACCOUNT_LIMIT: usize = 0x100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GmMessageOutcome {
+pub enum GmMessageOutcome {
     BanAttempted {
         succeeded: bool,
     },
@@ -40,7 +40,7 @@ pub(crate) enum GmMessageOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GmMessageError {
+pub enum GmMessageError {
     DatabaseOwnerMissing,
 }
 
@@ -56,16 +56,16 @@ impl fmt::Display for GmMessageError {
 
 impl Error for GmMessageError {}
 
-pub(crate) struct GmMessageHandler<'a> {
+pub struct GmMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> GmMessageHandler<'a> {
-    pub(crate) fn new(game: &'a mut CGame) -> Self {
+    pub fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    pub(crate) fn on_gm_message(
+    pub fn on_gm_message(
         &mut self,
         message: &mut CMessage,
     ) -> Result<GmMessageOutcome, GmMessageError> {

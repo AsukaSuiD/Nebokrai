@@ -1,6 +1,6 @@
 //! World lifecycle, CD-key snapshots, telemetry и server-log обработчики
 //! `applogin/message/servermessage.cpp`, подтверждённые `loginserver.exe` и
-//! `loginserver.pdb`.
+//! `loginserver.pdb`, перенесённые в Realm `access/`.
 //!
 //! Connect назначает socket identity до `AddWorld`, а ack и журнал выполняются
 //! даже после отказа добавления; disconnect всегда завершает `DelWorld`.
@@ -19,11 +19,11 @@ use std::net::Ipv4Addr;
 
 use chrono::Local;
 
-use crate::loginserver::loginserver::game::{
+use super::game::{
     CGame, GameRouteError, OnlineUserUpdateStartError, PingGameServerInfo, PingWorldServerInfo,
     ServerInfoLogDisposition, WorldActivationOutcome, WorldDeactivationOutcome,
 };
-use crate::nets::netlogin::message::CMessage;
+use crate::app::login_message::CMessage;
 
 const WORLD_CONNECTED_MESSAGE_TYPE: i32 = 0x0001_FE01;
 const WORLD_DISCONNECTED_MESSAGE_TYPE: i32 = 0x0000_FF01;
@@ -39,7 +39,7 @@ const GAME_SERVER_IP_LIMIT: usize = 0xFF;
 const SERVER_LOG_TEXT_LIMIT: usize = 0x80;
 
 #[derive(Debug)]
-pub(crate) enum ServerMessageOutcome {
+pub enum ServerMessageOutcome {
     WorldConnected {
         world_id: i32,
         world_name: Vec<u8>,
@@ -81,16 +81,16 @@ pub(crate) enum ServerMessageOutcome {
     },
 }
 
-pub(crate) struct ServerMessageHandler<'a> {
+pub struct ServerMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> ServerMessageHandler<'a> {
-    pub(crate) fn new(game: &'a mut CGame) -> Self {
+    pub fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    pub(crate) fn on_server_message(
+    pub fn on_server_message(
         &mut self,
         message: &mut CMessage,
     ) -> Result<ServerMessageOutcome, GameRouteError> {

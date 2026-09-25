@@ -1,4 +1,5 @@
-//! Embedded `AuthHandler` из `authhandler.cpp`, подтверждённый `loginserver.exe`
+//! Embedded `AuthHandler` из `authhandler.cpp`, перенесённый в Realm `access/`,
+//! подтверждённый `loginserver.exe`
 //! и `loginserver.pdb`. Первый listener-slot остаётся no-op; второй синхронно
 //! передаётся stateless owner-у через адаптер `CGame`.
 //!
@@ -7,19 +8,19 @@
 //! счётчик паролей. При превышении лимита ban вызывается до безусловного удаления
 //! счётчика, независимо от результата DB-owner-а.
 
-use crate::loginserver::loginserver::authmanager::{AuthQuest, AuthResult};
-use crate::loginserver::loginserver::game::{AuthHandlerNotice, CGame, PasswordFailureOutcome};
-use crate::loginserver::loginserver::loginqueue::TagPwdChecked;
-use crate::nets::netlogin::message::CMessage;
+use super::authmanager::{AuthQuest, AuthResult};
+use super::game::{AuthHandlerNotice, CGame, PasswordFailureOutcome};
+use super::loginqueue::TagPwdChecked;
+use crate::app::login_message::CMessage;
 
 const AUTH_FAILED_MESSAGE_TYPE: i32 = 0x000A_F501;
 
-pub(crate) struct AuthHandler;
+pub struct AuthHandler;
 
 impl AuthHandler {
-    pub(crate) fn on_quest(_quest: &AuthQuest) {}
+    pub fn on_quest(_quest: &AuthQuest) {}
 
-    pub(crate) fn on_response(game: &mut CGame, result: &AuthResult) {
+    pub fn on_response(game: &mut CGame, result: &AuthResult) {
         if result.result == 0 {
             let checked = TagPwdChecked::new(
                 result.client_socket_id,

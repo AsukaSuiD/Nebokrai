@@ -1,5 +1,5 @@
 //! AuthServer/GMA-обработчики `asmessage.cpp`, подтверждённые `loginserver.exe`
-//! и `loginserver.pdb`.
+//! и `loginserver.pdb`, перенесённые в Realm `access/`.
 //!
 //! Закрытие Auth-соединения предшествует запуску управляемого reconnect; успешная
 //! замена возвращается в ту же FIFO-позицию. `0xCF302` остаётся только
@@ -12,10 +12,10 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::loginserver::loginserver::authmanager::{AuthManager, AuthResponseOutcome};
-use crate::loginserver::loginserver::game::{AuthLifecycleError, CGame, GameRouteError};
-use crate::nets::basemessage::CBaseMessage;
-use crate::nets::netlogin::message::CMessage;
+use super::authmanager::{AuthManager, AuthResponseOutcome};
+use super::game::{AuthLifecycleError, CGame, GameRouteError};
+use nebokrai_shared::network::CBaseMessage;
+use crate::app::login_message::CMessage;
 
 const GMA_KICK_PLAYER: i32 = 0x000C_F701;
 const GMA_KICK_RESPONSE_TO_AUTH: i32 = 0x000C_F801;
@@ -34,13 +34,13 @@ const GMA_AUTH_RANGE_END: u32 = 0x000C_F8FF;
 const LEGACY_STRING_LIMIT: usize = 0x100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UnknownAsMessageOwner {
+pub enum UnknownAsMessageOwner {
     Auth,
     Gma,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AsMessageOutcome {
+pub enum AsMessageOutcome {
     Handled,
     AuthResponse(AuthResponseOutcome),
     Unknown {
@@ -50,7 +50,7 @@ pub(crate) enum AsMessageOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) enum AsMessageError {
+pub enum AsMessageError {
     Route(GameRouteError),
     Reconnect(AuthLifecycleError),
     LegacyReconnectPointerOnWire,
@@ -89,17 +89,17 @@ impl From<AuthLifecycleError> for AsMessageError {
     }
 }
 
-pub(crate) struct AsMessageHandlers<'a> {
+pub struct AsMessageHandlers<'a> {
     game: &'a mut CGame,
     auth_manager: &'a mut AuthManager,
 }
 
 impl<'a> AsMessageHandlers<'a> {
-    pub(crate) fn new(game: &'a mut CGame, auth_manager: &'a mut AuthManager) -> Self {
+    pub fn new(game: &'a mut CGame, auth_manager: &'a mut AuthManager) -> Self {
         Self { game, auth_manager }
     }
 
-    pub(crate) async fn on_as_message(
+    pub async fn on_as_message(
         &mut self,
         message: &mut CMessage,
     ) -> Result<AsMessageOutcome, AsMessageError> {
@@ -126,7 +126,7 @@ impl<'a> AsMessageHandlers<'a> {
         }
     }
 
-    pub(crate) fn on_gma_message(
+    pub fn on_gma_message(
         &mut self,
         message: &mut CMessage,
     ) -> Result<AsMessageOutcome, AsMessageError> {

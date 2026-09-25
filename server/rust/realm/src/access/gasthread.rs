@@ -1,4 +1,4 @@
-//! `CGasThread`, подтверждённый `loginserver.exe` и `loginserver.pdb`.
+//! `CGasThread`, подтверждённый `loginserver.exe` и `loginserver.pdb`, перенесённый в Realm `access/`.
 //!
 //! Worker сохраняет одну FIFO GAS, 10-миллисекундную idle cadence, один
 //! `CMyWinInet` с исторически повторно используемым receive-буфером и точную
@@ -24,23 +24,23 @@ use chrono::{Datelike, Local, Timelike};
 
 use super::gasoperator::format_ipv4;
 use super::mywininet::{CMyWinInet, MyWinInetError};
-use crate::loginserver::loginserver::game::{CGame, GameRouteError, PrepareEnterOutcome};
-use crate::loginserver::loginserver::loginqueue::{CLoginQueue, QuestCdkey, TagPwdChecked};
-use crate::nets::netlogin::message::CMessage;
-use crate::public::md5::message_digest;
+use super::game::{CGame, GameRouteError, PrepareEnterOutcome};
+use super::loginqueue::{CLoginQueue, QuestCdkey, TagPwdChecked};
+use crate::app::login_message::CMessage;
+use nebokrai_shared::protocol::message_digest;
 
 const LOGIN_RESPONSE_MESSAGE_TYPE: i32 = 0x000A_F501;
 const IDLE_INTERVAL: Duration = Duration::from_millis(10);
 const NICKNAME_MARKER: &[u8] = b"\"nickname\"";
 
 #[derive(Clone, Debug)]
-pub(crate) struct GasVerificationConfig {
-    pub(crate) address: Vec<u8>,
-    pub(crate) signature_uppercase: Option<i32>,
+pub struct GasVerificationConfig {
+    pub address: Vec<u8>,
+    pub signature_uppercase: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GasBlockedReason {
+pub enum GasBlockedReason {
     PasswordDigestTooShort { actual_len: usize },
     SignatureUppercaseMissing,
     VerificationAddressEncodingUnsupported,
@@ -66,13 +66,13 @@ enum GasWorkerWork {
 }
 
 #[derive(Debug)]
-pub(crate) struct GasWorkerEvent {
+pub struct GasWorkerEvent {
     work: GasWorkerWork,
     completion: mpsc::Sender<()>,
 }
 
 #[derive(Debug)]
-pub(crate) enum GasProcessOutcome {
+pub enum GasProcessOutcome {
     DirectFinished,
     DirectEntered(Result<(), GameRouteError>),
     DirectFailed(GameRouteError),
@@ -97,14 +97,14 @@ pub(crate) enum GasProcessOutcome {
     Blocked(GasBlockedReason),
 }
 
-pub(crate) struct CGasThread {
+pub struct CGasThread {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     receiver: mpsc::Receiver<GasWorkerEvent>,
 }
 
 impl CGasThread {
-    pub(crate) fn start(
+    pub fn start(
         queue: Arc<CLoginQueue>,
         config: GasVerificationConfig,
     ) -> Result<Self, io::Error> {
@@ -121,7 +121,7 @@ impl CGasThread {
         })
     }
 
-    pub(crate) fn drain_events(&mut self) -> Vec<GasWorkerEvent> {
+    pub fn drain_events(&mut self) -> Vec<GasWorkerEvent> {
         self.receiver.try_iter().collect()
     }
 
@@ -139,7 +139,7 @@ impl Drop for CGasThread {
     }
 }
 
-pub(crate) fn apply_worker_event(game: &mut CGame, event: GasWorkerEvent) -> GasProcessOutcome {
+pub fn apply_worker_event(game: &mut CGame, event: GasWorkerEvent) -> GasProcessOutcome {
     let outcome = match event.work {
         GasWorkerWork::Direct(quest) => apply_direct(game, &quest),
         GasWorkerWork::Checked { quest, result } => match result {

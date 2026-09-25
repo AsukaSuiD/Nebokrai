@@ -1,5 +1,5 @@
 //! Client/World-обработчики `logmessage.cpp`, подтверждённые `loginserver.exe`
-//! и `loginserver.pdb`. Неизвестные opcode не имеют побочных эффектов.
+//! и `loginserver.pdb`, перенесённые в Realm `access/`. Неизвестные opcode не имеют побочных эффектов.
 //!
 //! Valid-code и matrix ветви сохраняют endpoint-проверки, порядок изменения
 //! `ValidErr` и одноразовое удаление записей. Player list/data запросы используют
@@ -25,14 +25,14 @@ use std::fmt;
 use std::mem::size_of;
 use std::path::Path;
 
-use crate::loginserver::applogin::validcode::{CValidCode, VALID_CODE_BITMAP_LEN, ValidCodeError};
-use crate::loginserver::loginserver::game::{CGame, GameRouteError};
-use crate::loginserver::loginserver::loginqueue::{
+use crate::access::validcode::{CValidCode, VALID_CODE_BITMAP_LEN, ValidCodeError};
+use super::game::{CGame, GameRouteError};
+use super::loginqueue::{
     CheckMessageInfo, ClientLostCleanupReport, MatrixValidationOutcome, PwdCheckedNotice,
     TagPwdChecked, ValidateValidCodeOutcome,
 };
-use crate::nets::basemessage::CBaseMessage;
-use crate::nets::netlogin::message::CMessage;
+use nebokrai_shared::network::CBaseMessage;
+use crate::app::login_message::CMessage;
 
 const LOGIN_RESPONSE_MESSAGE_TYPE: i32 = 0x000A_F501;
 const SYNTHETIC_DISCONNECT_MESSAGE_TYPE: i32 = 0x0001_0001;
@@ -77,7 +77,7 @@ const EXTENDED_LOGIN_WORLD_LIMIT: usize = 0x20;
 const EXTENDED_LOGIN_PASSWORD_LIMIT: usize = 0x104;
 
 #[derive(Debug)]
-pub(crate) enum LogMessageOutcome {
+pub enum LogMessageOutcome {
     Handled {
         notices: Vec<PwdCheckedNotice>,
     },
@@ -129,7 +129,7 @@ pub(crate) enum LogMessageOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) enum LogMessageError {
+pub enum LogMessageError {
     Route(GameRouteError),
     ValidCode(ValidCodeError),
     LoginServerVersionMissing,
@@ -174,16 +174,16 @@ impl From<ValidCodeError> for LogMessageError {
     }
 }
 
-pub(crate) struct LogMessageHandler<'a> {
+pub struct LogMessageHandler<'a> {
     game: &'a mut CGame,
 }
 
 impl<'a> LogMessageHandler<'a> {
-    pub(crate) fn new(game: &'a mut CGame) -> Self {
+    pub fn new(game: &'a mut CGame) -> Self {
         Self { game }
     }
 
-    pub(crate) fn on_log_message(
+    pub fn on_log_message(
         &mut self,
         message: &mut CMessage,
     ) -> Result<LogMessageOutcome, LogMessageError> {

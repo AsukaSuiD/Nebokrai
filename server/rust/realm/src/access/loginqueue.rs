@@ -1,4 +1,5 @@
-//! Очереди `loginqueue.cpp/.h`, подтверждённые `loginserver.exe` и
+//! Очереди `loginqueue.cpp/.h`, перенесённые в Realm `access/`,
+//! подтверждённые `loginserver.exe` и
 //! `loginserver.pdb`. Они связывают CD-key/player/GAS FIFO, проверку пароля,
 //! valid-code и matrix с их wrapping-таймерами.
 //!
@@ -33,16 +34,16 @@ use parking_lot::Mutex;
 use rustix::time::{ClockId, clock_gettime};
 use thiserror::Error as ThisError;
 
-use crate::dbaccess::logindb::rscdkey::MatrixValidation;
-use crate::loginserver::applogin::validcode::{CValidCode, ValidCodeError};
-use crate::loginserver::loginserver::authhandler::AuthHandler;
-use crate::loginserver::loginserver::authmanager::{
+use crate::access::rscdkey::MatrixValidation;
+use crate::access::validcode::{CValidCode, ValidCodeError};
+use super::authhandler::AuthHandler;
+use super::authmanager::{
     AddQuestOutcome, AuthManager, AuthQuest, AuthRunOutcome,
 };
-use crate::loginserver::loginserver::game::{
+use super::game::{
     AuthLifecycleError, CGame, GameRouteError, PrepareEnterOutcome, resolve_legacy_ascii_case,
 };
-use crate::nets::netlogin::message::CMessage;
+use crate::app::login_message::CMessage;
 
 const AUTH_FAILED_MESSAGE_TYPE: i32 = 0x000A_F501;
 const PLAYER_DATA_REJECT_MESSAGE_TYPE: i32 = 0x000A_F503;
@@ -50,7 +51,7 @@ const QUEUE_POSITION_MESSAGE_TYPE: i32 = 0x000A_F507;
 const NO_QUEUE_ACCOUNT_BUFFER_SIZE: usize = 0x100;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TagPwdChecked {
+pub struct TagPwdChecked {
     client_ip: u32,
     socket_id: i32,
     account: Vec<u8>,
@@ -59,7 +60,7 @@ pub(crate) struct TagPwdChecked {
 }
 
 impl TagPwdChecked {
-    pub(crate) fn new(
+    pub fn new(
         socket_id: i32,
         client_ip: u32,
         account: Vec<u8>,
@@ -75,29 +76,29 @@ impl TagPwdChecked {
         }
     }
 
-    pub(crate) fn account(&self) -> &[u8] {
+    pub fn account(&self) -> &[u8] {
         &self.account
     }
 
-    pub(crate) const fn socket_id(&self) -> i32 {
+    pub const fn socket_id(&self) -> i32 {
         self.socket_id
     }
 
-    pub(crate) const fn client_ip(&self) -> u32 {
+    pub const fn client_ip(&self) -> u32 {
         self.client_ip
     }
 
-    pub(crate) fn world_server(&self) -> &[u8] {
+    pub fn world_server(&self) -> &[u8] {
         &self.world_server
     }
 
-    pub(crate) const fn has_matrix(&self) -> bool {
+    pub const fn has_matrix(&self) -> bool {
         self.has_matrix
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QuestCdkey {
+pub struct QuestCdkey {
     socket_id: i32,
     client_ip: u32,
     login_type: i8,
@@ -144,42 +145,42 @@ impl QuestCdkey {
         }
     }
 
-    pub(crate) fn account(&self) -> &[u8] {
+    pub fn account(&self) -> &[u8] {
         &self.account
     }
 
-    pub(crate) const fn socket_id(&self) -> i32 {
+    pub const fn socket_id(&self) -> i32 {
         self.socket_id
     }
 
-    pub(crate) const fn client_ip(&self) -> u32 {
+    pub const fn client_ip(&self) -> u32 {
         self.client_ip
     }
 
-    pub(crate) fn password_digest(&self) -> &[u8] {
+    pub fn password_digest(&self) -> &[u8] {
         &self.password_digest
     }
 
-    pub(crate) fn world_server(&self) -> &[u8] {
+    pub fn world_server(&self) -> &[u8] {
         &self.world_server
     }
 
-    pub(crate) fn nickname(&self) -> &[u8] {
+    pub fn nickname(&self) -> &[u8] {
         &self.nickname
     }
 
-    pub(crate) fn replace_account_with_nickname(&mut self, nickname: Vec<u8>) {
+    pub fn replace_account_with_nickname(&mut self, nickname: Vec<u8>) {
         self.account.clone_from(&nickname);
         self.nickname = nickname;
     }
 
-    pub(crate) const fn send_message_time(&self) -> u32 {
+    pub const fn send_message_time(&self) -> u32 {
         self.send_message_time
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QuestPlayerList {
+pub struct QuestPlayerList {
     socket_id: i32,
     account: Vec<u8>,
     world_server: Vec<u8>,
@@ -203,7 +204,7 @@ impl QuestPlayerList {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QuestPlayerData {
+pub struct QuestPlayerData {
     socket_id: i32,
     account: Vec<u8>,
     player_id: i32,
@@ -230,20 +231,20 @@ impl QuestPlayerData {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum QuestPlayerDataOutcome {
+pub enum QuestPlayerDataOutcome {
     Forwarded { world_found: bool },
     Repeated,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ClientLostCleanupReport {
-    pub(crate) cdkey_removed: bool,
-    pub(crate) player_list_removed: usize,
-    pub(crate) player_data_removed: usize,
+pub struct ClientLostCleanupReport {
+    pub cdkey_removed: bool,
+    pub player_list_removed: usize,
+    pub player_data_removed: usize,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum QuestCdkeyOutcome {
+pub enum QuestCdkeyOutcome {
     DirectWorld,
     DirectWorldFinished,
     QueuedForGas,
@@ -257,7 +258,7 @@ pub(crate) enum QuestCdkeyOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) enum QuestCdkeyError {
+pub enum QuestCdkeyError {
     DatabaseOwnerMissing,
     IpSetupMissing,
     InsideModeMissing,
@@ -333,7 +334,7 @@ struct MatrixEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CheckMessageInfo {
+pub enum CheckMessageInfo {
     Success,
     Missing,
     SocketMismatch,
@@ -341,7 +342,7 @@ pub(crate) enum CheckMessageInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ValidateValidCodeOutcome {
+pub enum ValidateValidCodeOutcome {
     Accepted {
         world_server: Vec<u8>,
         has_matrix: bool,
@@ -350,14 +351,14 @@ pub(crate) enum ValidateValidCodeOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MatrixValidationOutcome {
+pub enum MatrixValidationOutcome {
     Accepted,
     Rejected,
     DatabaseOwnerMissing,
 }
 
 #[derive(Debug)]
-pub(crate) enum PwdCheckedNotice {
+pub enum PwdCheckedNotice {
     ClientResponse {
         socket_id: i32,
         error: GameRouteError,
@@ -381,12 +382,12 @@ pub(crate) enum PwdCheckedNotice {
 }
 
 #[derive(Debug)]
-pub(crate) struct HandlePwdCheckedReport {
-    pub(crate) processed: usize,
-    pub(crate) dropped_invalid_endpoint: usize,
-    pub(crate) rejected_by_valid_errors: usize,
-    pub(crate) generated_valid_codes: usize,
-    pub(crate) notices: Vec<PwdCheckedNotice>,
+pub struct HandlePwdCheckedReport {
+    pub processed: usize,
+    pub dropped_invalid_endpoint: usize,
+    pub rejected_by_valid_errors: usize,
+    pub generated_valid_codes: usize,
+    pub notices: Vec<PwdCheckedNotice>,
 }
 
 impl HandlePwdCheckedReport {
@@ -402,15 +403,15 @@ impl HandlePwdCheckedReport {
 }
 
 #[derive(Debug)]
-pub(crate) struct LoginQueueTimeoutReport {
-    pub(crate) matrices_ran: bool,
-    pub(crate) valid_codes_ran: bool,
-    pub(crate) valid_errors_ran: bool,
-    pub(crate) notices: Vec<PwdCheckedNotice>,
+pub struct LoginQueueTimeoutReport {
+    pub matrices_ran: bool,
+    pub valid_codes_ran: bool,
+    pub valid_errors_ran: bool,
+    pub notices: Vec<PwdCheckedNotice>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LoginQueueRunStage {
+pub enum LoginQueueRunStage {
     GasCdkey,
     NoQueueCdkey,
     NoQueuePlayerList,
@@ -422,7 +423,7 @@ pub(crate) enum LoginQueueRunStage {
 }
 
 #[derive(Debug)]
-pub(crate) enum LoginQueueRunNotice {
+pub enum LoginQueueRunNotice {
     Cdkey {
         stage: LoginQueueRunStage,
         account: Vec<u8>,
@@ -437,21 +438,21 @@ pub(crate) enum LoginQueueRunNotice {
 }
 
 #[derive(Debug)]
-pub(crate) struct LoginQueueRunReport {
-    pub(crate) gas_cdkeys_processed: usize,
-    pub(crate) no_queue_cdkeys_discarded_by_gas_bug: usize,
-    pub(crate) no_queue_cdkeys_processed: usize,
-    pub(crate) no_queue_player_lists_processed: usize,
-    pub(crate) no_queue_player_data_processed: usize,
-    pub(crate) regular_cdkeys_processed: usize,
-    pub(crate) regular_player_lists_processed: usize,
-    pub(crate) regular_player_data_processed: usize,
-    pub(crate) queue_position_messages: usize,
-    pub(crate) login_timeouts_removed: usize,
-    pub(crate) pwd_checked: HandlePwdCheckedReport,
-    pub(crate) auth: Result<AuthRunOutcome, AuthLifecycleError>,
-    pub(crate) timeout_tail: LoginQueueTimeoutReport,
-    pub(crate) notices: Vec<LoginQueueRunNotice>,
+pub struct LoginQueueRunReport {
+    pub gas_cdkeys_processed: usize,
+    pub no_queue_cdkeys_discarded_by_gas_bug: usize,
+    pub no_queue_cdkeys_processed: usize,
+    pub no_queue_player_lists_processed: usize,
+    pub no_queue_player_data_processed: usize,
+    pub regular_cdkeys_processed: usize,
+    pub regular_player_lists_processed: usize,
+    pub regular_player_data_processed: usize,
+    pub queue_position_messages: usize,
+    pub login_timeouts_removed: usize,
+    pub pwd_checked: HandlePwdCheckedReport,
+    pub auth: Result<AuthRunOutcome, AuthLifecycleError>,
+    pub timeout_tail: LoginQueueTimeoutReport,
+    pub notices: Vec<LoginQueueRunNotice>,
 }
 
 #[derive(Debug, Default)]
@@ -472,13 +473,13 @@ struct LoginQueueSetup {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct NoQueueAccountsLoadReport {
-    pub(crate) extracted_accounts: usize,
-    pub(crate) unique_accounts: usize,
+pub struct NoQueueAccountsLoadReport {
+    pub extracted_accounts: usize,
+    pub unique_accounts: usize,
 }
 
 #[derive(Debug, ThisError)]
-pub(crate) enum NoQueueAccountsLoadError {
+pub enum NoQueueAccountsLoadError {
     #[error("не прочитан NoQueueAccounts.conf: {0}")]
     Io(#[from] io::Error),
     #[error(
@@ -491,7 +492,7 @@ pub(crate) enum NoQueueAccountsLoadError {
     },
 }
 
-pub(crate) struct CLoginQueue {
+pub struct CLoginQueue {
     cdkey_quests: Mutex<VecDeque<QuestCdkey>>,
     no_queue_cdkey_quests: Mutex<VecDeque<QuestCdkey>>,
     gas_quests: Mutex<VecDeque<QuestCdkey>>,
@@ -514,7 +515,7 @@ impl CLoginQueue {
     ///
     /// Ошибка файла не отменяет создание owner и возвращается отдельно, не
     /// меняя нефатальное поведение исходного конструктора.
-    pub(crate) fn new(
+    pub fn new(
         runtime_directory: &Path,
     ) -> (
         Self,
@@ -541,7 +542,7 @@ impl CLoginQueue {
         (queue, no_queue_accounts)
     }
 
-    pub(crate) fn on_initial(
+    pub fn on_initial(
         &self,
         interval_ms: u32,
         send_message_interval_ms: u32,
@@ -559,12 +560,12 @@ impl CLoginQueue {
         setup.log_queue_time = (interval_ms / setup.world_count).wrapping_add(now);
     }
 
-    pub(crate) fn set_world_count(&self, world_count: u32) {
+    pub fn set_world_count(&self, world_count: u32) {
         self.setup.lock().world_count = world_count;
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn add_quest_cdkey(
+    pub fn add_quest_cdkey(
         &self,
         socket_id: i32,
         client_ip: u32,
@@ -598,11 +599,11 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn pop_gas_quest(&self) -> Option<QuestCdkey> {
+    pub fn pop_gas_quest(&self) -> Option<QuestCdkey> {
         self.gas_quests.lock().pop_front()
     }
 
-    pub(crate) fn on_quest_cdkey(
+    pub fn on_quest_cdkey(
         &self,
         game: &mut CGame,
         auth_manager: &mut AuthManager,
@@ -747,7 +748,7 @@ impl CLoginQueue {
     /// `false` означает исходный тихий отказ одной из трёх предварительных
     /// проверок: World отсутствует, account ещё не выбрал World либо список
     /// подключённых account этого World ещё не создан.
-    pub(crate) fn add_quest_player_list(
+    pub fn add_quest_player_list(
         &self,
         game: &CGame,
         socket_id: i32,
@@ -781,7 +782,7 @@ impl CLoginQueue {
         true
     }
 
-    pub(crate) fn add_quest_player_data(
+    pub fn add_quest_player_data(
         &self,
         game: &CGame,
         socket_id: i32,
@@ -814,7 +815,7 @@ impl CLoginQueue {
         true
     }
 
-    pub(crate) fn on_client_lost(&self, account: &[u8]) -> ClientLostCleanupReport {
+    pub fn on_client_lost(&self, account: &[u8]) -> ClientLostCleanupReport {
         let end = account
             .iter()
             .position(|byte| *byte == 0)
@@ -866,7 +867,7 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn on_quest_player_data(
+    pub fn on_quest_player_data(
         &self,
         game: &CGame,
         quest: &QuestPlayerData,
@@ -895,7 +896,7 @@ impl CLoginQueue {
         Ok(QuestPlayerDataOutcome::Repeated)
     }
 
-    pub(crate) fn is_valid_quest(&self, player_id: i32, interval_ms: u32) -> bool {
+    pub fn is_valid_quest(&self, player_id: i32, interval_ms: u32) -> bool {
         let mut login_list = self.login_list.lock();
         let Some(added_time) = login_list.get(&player_id).copied() else {
             return true;
@@ -908,7 +909,7 @@ impl CLoginQueue {
         true
     }
 
-    pub(crate) fn push_login_list(&self, player_id: i32) -> bool {
+    pub fn push_login_list(&self, player_id: i32) -> bool {
         let mut login_list = self.login_list.lock();
         if login_list.contains_key(&player_id) {
             return false;
@@ -917,7 +918,7 @@ impl CLoginQueue {
         true
     }
 
-    pub(crate) fn clear_timeout_list(&self, interval_ms: u32) -> usize {
+    pub fn clear_timeout_list(&self, interval_ms: u32) -> usize {
         let mut login_list = self.login_list.lock();
         let previous_len = login_list.len();
         login_list.retain(|_, added_time| {
@@ -931,7 +932,7 @@ impl CLoginQueue {
     ///
     /// Неопределённый исходный race с producers заменён короткими snapshot-
     /// границами: конкурентно добавленные элементы остаются следующему проходу.
-    pub(crate) fn run(
+    pub fn run(
         &self,
         game: &mut CGame,
         auth_manager: &mut AuthManager,
@@ -1240,7 +1241,7 @@ impl CLoginQueue {
     ///
     /// `kick_out` вызывается только при duplicate, до удаления прежней записи
     /// и под queue-lock — ровно в исходной позиции `CGame::KickOut`.
-    pub(crate) fn push_back_pwd_checked(
+    pub fn push_back_pwd_checked(
         &self,
         checked: TagPwdChecked,
         mut kick_out: impl FnMut(&[u8]),
@@ -1256,11 +1257,11 @@ impl CLoginQueue {
         queue.push_back(checked);
     }
 
-    pub(crate) fn pwd_checked_len(&self) -> usize {
+    pub fn pwd_checked_len(&self) -> usize {
         self.pwd_checked.lock().len()
     }
 
-    pub(crate) fn handle_pwd_checked(&self, game: &mut CGame) -> HandlePwdCheckedReport {
+    pub fn handle_pwd_checked(&self, game: &mut CGame) -> HandlePwdCheckedReport {
         let mut report = HandlePwdCheckedReport::new();
         let mut queue = self.pwd_checked.lock();
         if queue.is_empty() {
@@ -1345,7 +1346,7 @@ impl CLoginQueue {
         report
     }
 
-    pub(crate) fn continue_validated_login(
+    pub fn continue_validated_login(
         &self,
         game: &mut CGame,
         checked: &TagPwdChecked,
@@ -1355,7 +1356,7 @@ impl CLoginQueue {
         notices
     }
 
-    pub(crate) fn add_valid_error(&self, account: &[u8], stay_time_ms: u32) {
+    pub fn add_valid_error(&self, account: &[u8], stay_time_ms: u32) {
         let now = legacy_tick_ms();
         let next_login_time = now.wrapping_add(stay_time_ms);
         let mut valid_errors = self.valid_errors.lock();
@@ -1376,7 +1377,7 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn clear_expired_valid_errors(&self, now: u32) {
+    pub fn clear_expired_valid_errors(&self, now: u32) {
         self.valid_errors
             .lock()
             .retain(|_, error| error.next_login_time >= now);
@@ -1386,7 +1387,7 @@ impl CLoginQueue {
     ///
     /// Три вызова boot clock намеренно не объединены: исходник вызывал
     /// `timeGetTime` отдельно перед matrix, valid-code и valid-error проверкой.
-    pub(crate) fn run_timeout_tail(
+    pub fn run_timeout_tail(
         &self,
         game: &CGame,
         matrix_timeout_ms: u32,
@@ -1461,7 +1462,7 @@ impl CLoginQueue {
     /// extraction, поэтому безопасная ошибка позднего token сохраняет уже
     /// выполненное частичное изменение. Ошибка открытия также оставляет set
     /// пустым, как исходный вызов до `ifstream::open`.
-    pub(crate) fn load_no_queue_cdkey_list(
+    pub fn load_no_queue_cdkey_list(
         &self,
         runtime_directory: &Path,
     ) -> Result<NoQueueAccountsLoadReport, NoQueueAccountsLoadError> {
@@ -1501,7 +1502,7 @@ impl CLoginQueue {
         })
     }
 
-    pub(crate) fn check_message_info(&self, account: &[u8], socket_id: i32) -> CheckMessageInfo {
+    pub fn check_message_info(&self, account: &[u8], socket_id: i32) -> CheckMessageInfo {
         let valid_codes = self.valid_codes.lock();
         let Some(entry) = valid_codes.get(account) else {
             return CheckMessageInfo::Missing;
@@ -1516,7 +1517,7 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn change_valid_code(&self, account: &[u8], valid_code: &[u8]) {
+    pub fn change_valid_code(&self, account: &[u8], valid_code: &[u8]) {
         if let Some(entry) = self.valid_codes.lock().get_mut(account) {
             entry.change_time = legacy_tick_ms();
             entry.valid_code.clear();
@@ -1524,7 +1525,7 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn validate_valid_code(
+    pub fn validate_valid_code(
         &self,
         socket_id: i32,
         client_ip: u32,
@@ -1551,11 +1552,11 @@ impl CLoginQueue {
         }
     }
 
-    pub(crate) fn delete_valid_code(&self, account: &[u8]) {
+    pub fn delete_valid_code(&self, account: &[u8]) {
         self.valid_codes.lock().remove(account);
     }
 
-    pub(crate) fn validate_matrix(
+    pub fn validate_matrix(
         &self,
         game: &mut CGame,
         socket_id: i32,
@@ -1594,7 +1595,7 @@ impl CLoginQueue {
     ///
     /// Нулевые socket/IP и существующий account возвращают `false` без
     /// мутации. Safe API исключает исходные nullable account/positions.
-    pub(crate) fn add_matrix(
+    pub fn add_matrix(
         &self,
         socket_id: i32,
         client_ip: u32,
@@ -1621,11 +1622,11 @@ impl CLoginQueue {
         true
     }
 
-    pub(crate) fn is_no_queue_account(&self, account: &[u8]) -> bool {
+    pub fn is_no_queue_account(&self, account: &[u8]) -> bool {
         self.no_queue_accounts.lock().contains(account)
     }
 
-    pub(crate) fn expire_valid_codes(
+    pub fn expire_valid_codes(
         &self,
         game: &CGame,
         overtime_ms: u32,
@@ -1649,7 +1650,7 @@ impl CLoginQueue {
         notices
     }
 
-    pub(crate) fn expire_matrices(&self, game: &CGame, timeout_ms: u32) -> Vec<PwdCheckedNotice> {
+    pub fn expire_matrices(&self, game: &CGame, timeout_ms: u32) -> Vec<PwdCheckedNotice> {
         let mut notices = Vec::new();
         let mut matrices = self.matrices.lock();
         matrices.retain(|_, entry| {

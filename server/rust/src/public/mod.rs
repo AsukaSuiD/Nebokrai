@@ -31,7 +31,6 @@ pub(crate) mod auctionlog;
 #[path = "auctionroom/auctionnode.rs"]
 pub(crate) mod auctionnode;
 
-pub(crate) mod md5;
 #[allow(
     dead_code,
     reason = "CWordsFilter подключён к CGame до reload и initial-config consumers"
