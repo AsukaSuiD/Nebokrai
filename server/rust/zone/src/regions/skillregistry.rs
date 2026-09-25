@@ -7,13 +7,13 @@
 //! Разрез записи навыка: скалярная база `CSkill` (ID (+0x04), level, concrete
 //! owner, item position, reuse timestamp +0x40 и owned visual) живёт здесь
 //! типом `SkillIdentity`, а execution kernel (Player/BattleFairy/Monster) и
-//! retained данные полёта остаются hub-владением полной записи `S`. Реестр
-//! связан с записью только швом `SkillIdentityAccess` (generic-trait сварка по
-//! прецеденту `StateRecordTarget`; impl — у владельца записи в старом пакете).
+//! retained данные полёта — типом `skills/execution::RegisteredSkillRecord`
+//! (порция 5 волны moveshape; hub-monster payload подключён к ней только
+//! generic-сваркой). Реестр связан с записью только швом `SkillIdentityAccess`
+//! (generic-trait сварка по прецеденту `StateRecordTarget`).
 //! Конструирование полной записи при AddSkill/CFightDefense также задаёт
 //! владелец записи своим handler: категория и concrete owner выбираются здесь
-//! по единственному каталогу `CSkillFactory`, execution/retained достраивает
-//! старый пакет.
+//! по единственному каталогу `CSkillFactory`.
 //!
 //! Четыре независимые категории сохраняют экземпляры, их порядок вставки и
 //! повторные ID: native AddSkill (RVA `0x000D1C70`) допускает повторный ID,
@@ -65,7 +65,8 @@ pub const SKILL_BASE_DEFENSE: u32 = 10;
 
 /// Скалярная база зарегистрированного навыка (база `CSkill`): ID, level,
 /// concrete owner, item position, reuse timestamp +0x40 и owned visual.
-/// Execution kernel и retained данные полёта живут в записи владельца вне Zone.
+/// Execution kernel и retained данные полёта живут в той же записи Zone
+/// `skills/execution::RegisteredSkillRecord`.
 #[derive(Debug, Eq, PartialEq)]
 pub struct SkillIdentity {
     id: u32,
@@ -395,7 +396,8 @@ impl<S: SkillIdentityAccess> SkillRegistry<S> {
 
     /// Удаление реестра сохраняет неразрешённый current ID. Полный concrete
     /// End перед удалением вызывает владелец записи отдельно: lifecycle
-    /// execution остаётся hub-владением и этой границей не подменяется.
+    /// execution живёт в записи (Zone `skills/execution`) и этой границей
+    /// не подменяется.
     pub fn clear_skills(&mut self, factory: &CSkillFactory) {
         if self.current_skill(factory).is_some() {
             self.current_skill_id = None;
