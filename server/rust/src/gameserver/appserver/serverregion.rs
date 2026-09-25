@@ -200,8 +200,8 @@ use crate::setup::monsterlist::{
 
 pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
 pub(crate) use nebokrai_zone::regions::serverregion::{
-    areagrid::*, geometry::*, membership::*, queries::*, registry::*, tax::*, transitions::*,
-    weather::*,
+    areagrid::*, blocks::*, geometry::*, membership::*, queries::*, registry::*, tax::*,
+    transitions::*, weather::*,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3725,51 +3725,22 @@ impl CServerRegion {
         Some(result)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/blocks`; alive RTTI-fact
+    /// приходит из resolver-а переходного владельца `CMoveShape`.
     pub(crate) fn refresh_blocks<Resolver: MoveShapeResolver>(
         &mut self,
         resolver: &Resolver,
     ) -> Result<(), RegionMembershipBlock> {
-        let mut x = 0;
-        while x < self.region.width {
-            let mut y = 0;
-            while y < self.region.height {
-                if self
-                    .region
-                    .get_block(x, y)
-                    .map_err(RegionMembershipBlock::RegionCell)?
-                    == 3
-                {
-                    self.region
-                        .set_block(x, y, 0)
-                        .map_err(RegionMembershipBlock::RegionCell)?;
-                }
-                y += 1;
-            }
-            x += 1;
-        }
-
-        let registered = RegisteredShapeResolver {
-            registry: &self.registry,
+        refresh_blocks(
+            &mut self.region,
+            &self.areas,
+            &self.registry,
             resolver,
-        };
-        for area in &self.areas {
-            let mut shapes = Vec::new();
-            area.get_all_shapes(&registered, &mut shapes);
-            for shape in shapes {
-                let Some(is_alive) = resolver.move_shape_is_alive(shape.identity) else {
-                    continue;
-                };
-                if shape.identity.object_type != NPC_TYPE && !is_alive {
-                    continue;
-                }
-                self.region
-                    .set_block(shape.tile_x, shape.tile_y, 3)
-                    .map_err(RegionMembershipBlock::RegionCell)?;
-            }
-        }
-        Ok(())
+            &|identity| resolver.move_shape_is_alive(identity),
+        )
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/blocks`.
     pub(crate) fn refresh_block<Resolver: MoveShapeResolver>(
         &mut self,
         tile_x: i32,
@@ -3778,42 +3749,22 @@ impl CServerRegion {
         area_height: i32,
         resolver: &Resolver,
     ) -> Result<(), RegionMembershipBlock> {
-        if tile_x < 0 || tile_y < 0 || tile_x > self.region.width || tile_y > self.region.height {
-            return Ok(());
-        }
-        if self
-            .region
-            .get_block(tile_x, tile_y)
-            .map_err(RegionMembershipBlock::RegionCell)?
-            == 3
-        {
-            self.region
-                .set_block(tile_x, tile_y, 0)
-                .map_err(RegionMembershipBlock::RegionCell)?;
-        }
-
-        let mut shapes = Vec::new();
-        self.get_shapes(
+        refresh_block(
+            &mut self.region,
+            &self.areas,
+            self.area_x,
+            self.area_y,
+            &self.registry,
             tile_x,
             tile_y,
             area_width,
             area_height,
             resolver,
-            &mut shapes,
-        )?;
-        for shape in shapes {
-            let Some(is_alive) = resolver.move_shape_is_alive(shape.identity) else {
-                continue;
-            };
-            if shape.identity.object_type == NPC_TYPE || is_alive {
-                self.region
-                    .set_block(shape.tile_x, shape.tile_y, 3)
-                    .map_err(RegionMembershipBlock::RegionCell)?;
-            }
-        }
-        Ok(())
+            &|identity| resolver.move_shape_is_alive(identity),
+        )
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/blocks`.
     pub(crate) fn get_shape<Resolver: ShapeResolver>(
         &self,
         tile_x: i32,
@@ -3822,29 +3773,20 @@ impl CServerRegion {
         area_height: i32,
         resolver: &Resolver,
     ) -> Result<Option<ShapeView>, RegionMembershipBlock> {
-        validate_area_span(area_width, area_height)?;
-        let registered = RegisteredShapeResolver {
-            registry: &self.registry,
+        get_shape(
+            &self.areas,
+            self.area_x,
+            self.area_y,
+            &self.registry,
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
             resolver,
-        };
-
-        for (offset_x, offset_y) in NEIGHBOR_AREAS {
-            let area_x = (tile_x / area_width).wrapping_add(offset_x);
-            let area_y = (tile_y / area_height).wrapping_add(offset_y);
-            let Some(area) = self.get_area(area_x, area_y) else {
-                continue;
-            };
-            let mut area_shapes = Vec::new();
-            area.get_all_shapes(&registered, &mut area_shapes);
-            for shape in area_shapes {
-                if shape_covers_tile(shape, tile_x, tile_y) {
-                    return Ok(Some(shape));
-                }
-            }
-        }
-        Ok(None)
+        )
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/blocks`.
     pub(crate) fn get_shapes<Resolver: ShapeResolver>(
         &self,
         tile_x: i32,
@@ -3854,27 +3796,18 @@ impl CServerRegion {
         resolver: &Resolver,
         destination: &mut Vec<ShapeView>,
     ) -> Result<(), RegionMembershipBlock> {
-        validate_area_span(area_width, area_height)?;
-        let registered = RegisteredShapeResolver {
-            registry: &self.registry,
+        get_shapes(
+            &self.areas,
+            self.area_x,
+            self.area_y,
+            &self.registry,
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
             resolver,
-        };
-
-        for (offset_x, offset_y) in NEIGHBOR_AREAS {
-            let area_x = (tile_x / area_width).wrapping_add(offset_x);
-            let area_y = (tile_y / area_height).wrapping_add(offset_y);
-            let Some(area) = self.get_area(area_x, area_y) else {
-                continue;
-            };
-            let mut area_shapes = Vec::new();
-            area.get_all_shapes(&registered, &mut area_shapes);
-            for shape in area_shapes {
-                if shape_covers_tile(shape, tile_x, tile_y) {
-                    destination.push(shape);
-                }
-            }
-        }
-        Ok(())
+            destination,
+        )
     }
 
     /// Порядок девяти-area окружения принадлежит Zone
