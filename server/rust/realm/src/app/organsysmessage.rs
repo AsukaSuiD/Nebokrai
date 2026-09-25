@@ -7,17 +7,23 @@
 //! Здесь же чистые data-контракты диспетчера: opcode-константы и
 //! dispatch/outcome/block/response-семейства, чьи поля цитируют только
 //! Realm/Shared-типы, ветвь `0x6012D` region param update, которую открывает
-//! только [`crate::app::world_game_view::WorldGameView`], и все
+//! только [`crate::app::world_game_view::WorldGameView`], все
 //! membership/governance ветви (`0x60107`—`0x6013E` блоки заявок, выходов,
 //! распусков, dub/purview, leave-word/pronounce, налоговые и городские
-//! операции, списки и goods-war исход). Ветви принимают организационный
-//! владелец как [`WorldOrganizingDispatchView`] (статический, generic context
-//! подписей контроллера); их `CGame`-зависимые effects-адаптеры остаются у
-//! старого пакета и передаются generic-параметрами. Диспетчерные ветви,
-//! открывающие узлы старого пакета напрямую (session-handlers, creation,
-//! declare war, billboard, transfer, city/village war), пока остаются в
-//! старом файле; он реэкспортирует перенесённое и держит тонкую обвязку для
-//! ветвей с адаптерами.
+//! операции, списки и goods-war исход) и war-ветви (`0x60101` player died,
+//! `0x6011F` declare faction war, village/city application+result
+//! `0x60135`—`0x60138`, goods war `0x60139`/`0x6013A` и семейный
+//! `reload_attack_city`). Ветви принимают организационный владелец как
+//! [`WorldOrganizingDispatchView`] (статический, generic context подписей
+//! контроллера); их `CGame`/war-зависимые context-адаптеры остаются у старого
+//! пакета и передаются generic-параметрами, а goods-war member контекст
+//! целиком видовой — поверх `WorldOrganizingDispatchView` и
+//! [`WorldGameView`]. Диспетчерные ветви, открывающие узлы старого пакета
+//! напрямую (session-handlers, creation `0x60103`, upgrade `0x60126`,
+//! billboard, transfer), остаются в старом файле; он реэкспортирует
+//! перенесённое и держит тонкую обвязку для ветвей с адаптерами — включая
+//! двухфазную `0x6011F`, чей decode игрока из wire-хвоста выполняется
+//! старым владельцем игры между realm-разбором и realm-завершением.
 //!
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 
@@ -26,19 +32,23 @@ use std::sync::{Arc, OnceLock};
 
 use nebokrai_shared::network::ServerCommandHandle;
 use nebokrai_shared::resources::{RegionRoutePoint, RegionRouterChangeOutcome};
-use nebokrai_shared::runtime::NetSessionCallbackOutcome;
+use nebokrai_shared::runtime::{CTimer, NetSessionCallbackOutcome, TimerId};
+use nebokrai_shared::values::TagTime;
 use parking_lot::Mutex;
 
 use crate::activities::attackcitysys::{
-    AttackCityApplicationReport, AttackCityWarResultBlock, AttackCityWarResultReport,
-    CAttackCitySys,
+    AttackCityApplicationContext, AttackCityApplicationReport, AttackCityCallbacks,
+    AttackCityReloadBlock, AttackCityReloadReport, AttackCityWarEndContext, AttackCityWarResultBlock,
+    AttackCityWarResultContext, AttackCityWarResultReport, CAttackCitySys,
 };
 use crate::activities::factionwarsys::{
-    CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
-    FactionWarPlayerDiedBlock, FactionWarPlayerDiedOutcome,
+    CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationContext,
+    FactionWarDeclarationOutcome, FactionWarPlayerDiedBlock, FactionWarPlayerDiedContext,
+    FactionWarPlayerDiedOutcome,
 };
 use crate::activities::villagewarsys::{
-    CVillageWarSys, VillageWarApplicationReport, VillageWarResultBlock, VillageWarResultReport,
+    CVillageWarSys, VillageWarApplicationContext, VillageWarApplicationReport, VillageWarCallbacks,
+    VillageWarResultBlock, VillageWarResultContext, VillageWarResultReport,
 };
 use crate::app::world_game_view::{WorldGameView, WorldRegionParamUpdateOutcome};
 use crate::app::world_message::{CMessage, SendMessageError};
@@ -63,7 +73,9 @@ use crate::organizations::faction::{
 };
 use crate::organizations::factionenemyblock::FactionEnemyMutationBlock;
 use crate::organizations::goodswarmember::{
-    GoodsWarFactionWinReport, GoodsWarMutationReport, GoodsWarRefreshReport,
+    CGoodsWarMember, GoodsWarAuditEnvironment, GoodsWarAuditPlayer, GoodsWarDeliveryContext,
+    GoodsWarFactionSnapshot, GoodsWarFactionWinReport, GoodsWarFactionWinSnapshot,
+    GoodsWarMemberBlock, GoodsWarMemberContext, GoodsWarMutationReport, GoodsWarRefreshReport,
 };
 use crate::organizations::organizingctrl::{
     AllFactionInfoClientBlock, ApplyFactionLookup, AttackCityEndBlock, AttackCityEndEffects,
@@ -3336,12 +3348,12 @@ where
     }))
 }
 
-// Ветвь `0x6013A` сознательно не переносится волной организационного view:
-// её goods-war member адаптер владеет `&mut` организационного контроллера,
-// а winner-снимок читает фракцию общим заёмом того же владельца; оба заёма
-// не проходят одну границу вызова без переделки CGame-адаптеров. Ветвь
-// остаётся у старого диспетчера (там же комментарий), её data-контракты
-// (`OrganizingGoodsWar*`) живут здесь и доступны ему через glob re-export.
+// Ветви `0x60139`/`0x6013A` перенесены ниже волной war-ветвей: заёмный
+// блокер волны организационного view закрыт тем, что goods-war member
+// контекст здесь целиком видовой (`WorldGoodsWarMemberDispatchContext`
+// поверх `WorldOrganizingDispatchView`, чей `set_faction_goods_war_count`
+// добавлен той волной, и `WorldGameView` с `login_server_id`), а не держит
+// конкретных заёмов owner-ов старого пакета.
 
 /// Выполняет `0x6013E`: `(player ID, parameter[0x32], value)`,
 /// master-faction lookup и controller `SetFactionParameter`.
@@ -3405,5 +3417,522 @@ where
         parameter,
         value,
         outcome,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// War-ветви диспетчера: faction war (`0x60101`, `0x6011F`), village war
+// (`0x60135`, `0x60136`), city war (`0x60137`, `0x60138` и семейный
+// `reload_attack_city`), goods war (`0x60139`, `0x6013A`).
+//
+// War-системы (`CFactionWarSys`/`CVillageWarSys`/`CAttackCitySys`/
+// `CGoodsWarMember`) уже принадлежат Realm и generic по своим context-ам,
+// поэтому ветви держат только разбор wire-полей, вызов war-системы и сборку
+// исходящих delivery в исходных позициях; context-адаптеры с живыми
+// `CGame`/`COrganizingCtrl`/country-швами старого пакета приходят
+// generic-параметрами от обвязки старого файла. Исключение — goods war: её
+// контекст ниже целиком видовой.
+
+/// Выполняет `0x60101`: два `Long` (побеждённый master-игрок и победитель) и
+/// `CFactionWarSys::OnPlayerDied`.
+pub fn dispatch_faction_war_player_died<Context>(
+    message: &mut CMessage,
+    faction_war: &mut CFactionWarSys,
+    context: &mut Context,
+) -> Option<OrganizingFactionWarPlayerDiedDispatch>
+where
+    Context: FactionWarPlayerDiedContext<Block = OrganizingFactionWarPlayerDiedBlock>,
+{
+    if message.message_type() != FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE {
+        return None;
+    }
+    let defeated_master_player_id = message.base_mut().get_long().unwrap_or(0);
+    let victor_player_id = message.base_mut().get_long().unwrap_or(0);
+    let outcome = faction_war.on_player_died(defeated_master_player_id, victor_player_id, context);
+    Some(OrganizingFactionWarPlayerDiedDispatch {
+        defeated_master_player_id,
+        victor_player_id,
+        outcome,
+    })
+}
+
+/// Разобранная шапка ветви `0x6011F` declare faction war. Вынесена в отдельный
+/// тип, потому что decode игрока из wire-хвоста (`DecordOnLinePlayerByID`)
+/// остаётся у старого владельца игры и выполняется обвязкой между realm-
+/// разбором и realm-завершением: заранее построенный effects-адаптер ветви
+/// держит общий заём той же игры, и два заёма одного owner-а не проходят одну
+/// границу вызова (та же семья блокировки, что волна организационного view
+/// зафиксировала у `0x60126`); разбивка сохраняет исходный порядок «разбор →
+/// decode → declaration/response» буквально.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OrganizingDeclareFactionWarRequest {
+    pub socket_id: i32,
+    pub request_id: i64,
+    pub cookie: i32,
+    pub player_id: i32,
+    pub target_faction_id: i32,
+    pub war_type: i32,
+}
+
+/// Разбирает `0x6011F`: `(socket, request ID, cookie, player ID, target
+/// faction, war type)`. `None` — чужой opcode, wire-курсор не сдвигается.
+pub fn parse_declare_faction_war(
+    message: &mut CMessage,
+) -> Option<OrganizingDeclareFactionWarRequest> {
+    if message.message_type() != DECLARE_FACTION_WAR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let socket_id = message.socket_id();
+    let request_id = message.base_mut().get_long64().unwrap_or(0);
+    let cookie = message.base_mut().get_long().unwrap_or(0);
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let war_type = message.base_mut().get_long().unwrap_or(0);
+    Some(OrganizingDeclareFactionWarRequest {
+        socket_id,
+        request_id,
+        cookie,
+        player_id,
+        target_faction_id,
+        war_type,
+    })
+}
+
+/// Завершает `0x6011F` после decode игрока обвязкой: при online — snapshot
+/// local time и `DigUpTheHatchet` (деньги только проверяются и отражаются в
+/// ответе `0x7FE19`, как в исходной ветви), затем response на socket.
+pub fn finish_declare_faction_war<Context>(
+    request: OrganizingDeclareFactionWarRequest,
+    player_online: bool,
+    faction_wars: &mut CFactionWarSys,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>
+where
+    Context: FactionWarDeclarationContext<Block = OrganizingFactionWarDeclarationBlock>,
+{
+    let (outcome, result_money) = if player_online {
+        let declaration_time = TagTime::local_now();
+        let declaration = match faction_wars.dig_up_the_hatchet(
+            request.player_id,
+            request.target_faction_id,
+            request.war_type,
+            declaration_time,
+            context,
+        ) {
+            Ok(declaration) => declaration,
+            Err(source) => {
+                return Err(OrganizingDeclareFactionWarBlock::Declaration(source));
+            }
+        };
+        let result_money = if declaration.legacy_result() {
+            faction_wars.get_dec_war_money_by_type(request.war_type)
+        } else {
+            0
+        };
+        (
+            OrganizingDeclareFactionWarOutcome::Declaration(declaration),
+            result_money,
+        )
+    } else {
+        (OrganizingDeclareFactionWarOutcome::PlayerOffline, 0)
+    };
+
+    let mut response = CMessage::new(DECLARE_FACTION_WAR_RESPONSE_TYPE);
+    response.base_mut().add_long64(request.request_id);
+    response.base_mut().add_long(request.cookie);
+    response.base_mut().add_long(request.player_id);
+    response.base_mut().add_long(result_money);
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send_to_socket(sender, request.socket_id);
+
+    Ok(OrganizingDeclareFactionWarDispatch {
+        request_id: request.request_id,
+        cookie: request.cookie,
+        player_id: request.player_id,
+        target_faction_id: request.target_faction_id,
+        war_type: request.war_type,
+        outcome,
+        response: OrganizingDeclareFactionWarResponse {
+            socket_id: request.socket_id,
+            result_money,
+            wire,
+            delivery,
+        },
+    })
+}
+
+/// Выполняет `0x60135`: `(player ID, war number, legacy third Long)` и
+/// `CVillageWarSys::ApplyForVillageWar`; принятая заявка отвечает `0x7FE34`
+/// на исходный map.
+pub fn dispatch_village_war_application<Context>(
+    message: &mut CMessage,
+    village_war: &mut CVillageWarSys,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingVillageWarApplicationDispatch, Context::Block>>
+where
+    Context: VillageWarApplicationContext + ?Sized,
+{
+    if message.message_type() != APPLY_FOR_VILLAGE_WAR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let legacy_third_parameter = message.base_mut().get_long().unwrap_or(0);
+    let outcome = village_war.apply_for_village_war(
+        player_id,
+        war_number,
+        legacy_third_parameter,
+        context,
+    );
+    Some(outcome.map(|outcome| {
+        let response = outcome.accepted.then(|| {
+            let mut response = CMessage::new(APPLY_FOR_VILLAGE_WAR_RESPONSE_TYPE);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(legacy_third_parameter);
+            response.send_to_map_id(sender, source_map_id)
+        });
+        OrganizingVillageWarApplicationDispatch {
+            player_id,
+            war_number,
+            legacy_third_parameter,
+            outcome,
+            response,
+        }
+    }))
+}
+
+/// Выполняет `0x60136`: четыре `Long` (war number, region, winner faction,
+/// legacy fourth) и `CVillageWarSys::OnFactionWinVillage` с generic timer.
+pub fn dispatch_village_war_result<Callback, Context>(
+    message: &mut CMessage,
+    village_war: &mut CVillageWarSys,
+    timer: &mut CTimer<Callback>,
+    callbacks: VillageWarCallbacks<Callback>,
+    context: &mut Context,
+) -> Option<OrganizingVillageWarResultDispatch>
+where
+    Callback: Copy,
+    Context: VillageWarResultContext<Block = OrganizingVillageWarResultContextBlock> + ?Sized,
+{
+    if message.message_type() != VILLAGE_WAR_RESULT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let war_region_id = message.base_mut().get_long().unwrap_or(0);
+    let winner_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let legacy_fourth_parameter = message.base_mut().get_long().unwrap_or(0);
+    let outcome = village_war.on_faction_win_village(
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        legacy_fourth_parameter,
+        timer,
+        callbacks,
+        context,
+    );
+    Some(OrganizingVillageWarResultDispatch {
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        legacy_fourth_parameter,
+        outcome,
+    })
+}
+
+/// Выполняет `0x60137`: `(player ID, war number, legacy third Long)` и
+/// `CAttackCitySys::OnPlayerDeclareWar`; принятая заявка отвечает `0x7FE37`
+/// на исходный map.
+pub fn dispatch_city_war_application<Context>(
+    message: &mut CMessage,
+    attack_city: &mut CAttackCitySys,
+    context: &mut Context,
+    sender: Option<&ServerCommandHandle>,
+) -> Option<Result<OrganizingCityWarApplicationDispatch, Context::Block>>
+where
+    Context: AttackCityApplicationContext + ?Sized,
+{
+    if message.message_type() != APPLY_FOR_CITY_WAR_MESSAGE_TYPE {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let legacy_third_parameter = message.base_mut().get_long().unwrap_or(0);
+    let outcome = attack_city.on_player_declare_war(
+        player_id,
+        war_number,
+        legacy_third_parameter,
+        context,
+    );
+    Some(outcome.map(|outcome| {
+        let response = outcome.accepted.then(|| {
+            let mut response = CMessage::new(APPLY_FOR_CITY_WAR_RESPONSE_TYPE);
+            response.base_mut().add_long(player_id);
+            response.base_mut().add_long(legacy_third_parameter);
+            response.send_to_map_id(sender, source_map_id)
+        });
+        OrganizingCityWarApplicationDispatch {
+            player_id,
+            war_number,
+            legacy_third_parameter,
+            outcome,
+            response,
+        }
+    }))
+}
+
+/// Выполняет `0x60138`: четыре `Long` (war number, region, winner faction,
+/// reported union) и `CAttackCitySys::OnFactionWinCity` с generic timer.
+/// Country-мутации (флаг войны и governance-переход короля) идут внутри
+/// context-адаптера через [`crate::app::world_game_view::WorldCountryWarGate`].
+pub fn dispatch_city_war_result<Callback, Context>(
+    message: &mut CMessage,
+    attack_city: &mut CAttackCitySys,
+    timer: &mut CTimer<Callback>,
+    attack_callbacks: AttackCityCallbacks<Callback>,
+    context: &mut Context,
+) -> Option<OrganizingCityWarResultDispatch>
+where
+    Callback: Copy,
+    Context: AttackCityWarResultContext<Block = OrganizingCityWarResultContextBlock> + ?Sized,
+{
+    if message.message_type() != CITY_WAR_RESULT_MESSAGE_TYPE {
+        return None;
+    }
+
+    let war_number = message.base_mut().get_long().unwrap_or(0);
+    let war_region_id = message.base_mut().get_long().unwrap_or(0);
+    let winner_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let reported_union_id = message.base_mut().get_long().unwrap_or(0);
+    let outcome = attack_city.on_faction_win_city(
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        reported_union_id,
+        timer,
+        attack_callbacks,
+        context,
+    );
+    Some(OrganizingCityWarResultDispatch {
+        war_number,
+        war_region_id,
+        winner_faction_id,
+        reported_union_id,
+        outcome,
+    })
+}
+
+/// Семейный `CAttackCitySys::Reload` вне диспетчера: снимает прежние timer
+/// events и завершает активные войны прежде чем `Initialize` читает новые
+/// расписания, а `send_all` сохраняет `0x7FE22` между end и новым Initialize.
+/// Ошибка последующего `Initialize` (`Load`) не откатывает уже выполненные
+/// завершения — тот же договор, что у результата-ingress `0x60138`, поэтому
+/// контекст общий; snapshot sender-а и сборку контекста выполняет обвязка
+/// старого файла.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "source/time/timer/callbacks/tax/context/send сохраняют исходные owners CAttackCitySys::Reload"
+)]
+pub fn reload_attack_city<Callback, Context, SendAll>(
+    attack_city: &mut CAttackCitySys,
+    source: Option<&[u8]>,
+    now: TagTime,
+    timer: &mut CTimer<Callback>,
+    attack_callbacks: AttackCityCallbacks<Callback>,
+    today_tax_event_id: Option<TimerId>,
+    context: &mut Context,
+    send_all: SendAll,
+) -> Result<AttackCityReloadReport, AttackCityReloadBlock<Context::Block>>
+where
+    Callback: Copy,
+    Context: AttackCityWarEndContext + ?Sized,
+    SendAll: FnMut(&CMessage) -> i32,
+{
+    attack_city.reload(
+        source,
+        now,
+        timer,
+        attack_callbacks,
+        today_tax_event_id,
+        context,
+        send_all,
+    )
+}
+
+/// Goods-war member контекст ветвей `0x60139`/`0x6013A`, целиком поверх
+/// видов: организационный доступ — [`WorldOrganizingDispatchView`]
+/// (`faction_by_id` и `set_faction_goods_war_count` волны организационного
+/// view), игровой — [`WorldGameView`] (`current_game_server_sender`,
+/// `configured_world_number`, `login_server_id`, `map_player`). В отличие от
+/// прежнего адаптера старого файла он не держит конкретных заёмов owner-ов,
+/// поэтому winner-снимок ветви `0x6013A` может читаться тем же view до
+/// построения контекста без второго заёма.
+struct WorldGoodsWarMemberDispatchContext<'a, Organizing>
+where
+    Organizing: WorldOrganizingDispatchView + ?Sized,
+{
+    game: &'a (dyn WorldGameView + 'a),
+    organizing: &'a mut Organizing,
+}
+
+impl<Organizing> GoodsWarDeliveryContext for WorldGoodsWarMemberDispatchContext<'_, Organizing>
+where
+    Organizing: WorldOrganizingDispatchView + ?Sized,
+{
+    fn send_all(&mut self, message: &CMessage) -> i32 {
+        message
+            .send_all(self.game.current_game_server_sender().as_ref())
+            .unwrap_or(0)
+    }
+}
+
+impl<Organizing> GoodsWarMemberContext for WorldGoodsWarMemberDispatchContext<'_, Organizing>
+where
+    Organizing: WorldOrganizingDispatchView + ?Sized,
+{
+    type Block = OrganizingGoodsWarContextBlock;
+
+    fn faction_snapshot(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<GoodsWarFactionSnapshot>, Self::Block> {
+        Ok(self.organizing.faction_by_id(faction_id).map(|faction| {
+            GoodsWarFactionSnapshot {
+                name: legacy_c_string_prefix(faction.name()).to_vec(),
+                goods_war_count: faction.goods_war_count(),
+            }
+        }))
+    }
+
+    fn set_faction_goods_war_count(
+        &mut self,
+        faction_id: i32,
+        count: i32,
+    ) -> Result<i32, Self::Block> {
+        self.organizing
+            .set_faction_goods_war_count(faction_id, count)
+            .ok_or(OrganizingGoodsWarContextBlock { faction_id })
+    }
+
+    fn faction_win_audit_environment(&mut self) -> Option<GoodsWarAuditEnvironment> {
+        let world_number = self.game.configured_world_number()?;
+        Some(GoodsWarAuditEnvironment {
+            login_server_id: self.game.login_server_id(),
+            world_number,
+        })
+    }
+
+    fn faction_win_audit_player(&mut self, player_id: i32) -> Option<GoodsWarAuditPlayer> {
+        self.game
+            .map_player(player_id as u32)
+            .map(|player| GoodsWarAuditPlayer {
+                account: player.get_account().to_vec(),
+                player_id: player.get_id(),
+                name: player.get_name().to_vec(),
+                level: player.get_level(),
+            })
+    }
+}
+
+/// Выполняет `0x60139`: `operation Long` и команду `CGoodsWarMember`
+/// (`2` delete member, `4` refresh all, `0x11` insert faction, `0x12` append
+/// faction to count, прочее — игнор) с продолжением чтения operand Long на
+/// исходных позициях.
+pub fn dispatch_goods_war_command(
+    message: &mut CMessage,
+    game: &dyn WorldGameView,
+    organizing: &mut impl WorldOrganizingDispatchView,
+    goods_war: &mut CGoodsWarMember,
+) -> Option<
+    Result<OrganizingGoodsWarCommandDispatch, GoodsWarMemberBlock<OrganizingGoodsWarContextBlock>>,
+> {
+    if message.message_type() != GOODS_WAR_COMMAND_MESSAGE_TYPE {
+        return None;
+    }
+
+    let operation = message.base_mut().get_long().unwrap_or(0);
+    let mut context = WorldGoodsWarMemberDispatchContext { game, organizing };
+    let outcome = match operation {
+        2 => {
+            let player_id = message.base_mut().get_long().unwrap_or(0);
+            OrganizingGoodsWarCommandOutcome::DeleteOneMember {
+                player_id,
+                report: goods_war.delete_one_member(player_id, &mut context),
+            }
+        }
+        4 => OrganizingGoodsWarCommandOutcome::RefreshAll(goods_war.refresh_all(&mut context)),
+        0x11 => {
+            let faction_id = message.base_mut().get_long().unwrap_or(0);
+            let report = match goods_war.insert_one_faction(faction_id, &mut context) {
+                Ok(report) => report,
+                Err(block) => return Some(Err(block)),
+            };
+            OrganizingGoodsWarCommandOutcome::InsertOneFaction { faction_id, report }
+        }
+        0x12 => {
+            let faction_id = message.base_mut().get_long().unwrap_or(0);
+            let report = match goods_war.append_one_faction_to_count(faction_id, &mut context) {
+                Ok(report) => report,
+                Err(block) => return Some(Err(block)),
+            };
+            OrganizingGoodsWarCommandOutcome::AppendOneFactionToCount { faction_id, report }
+        }
+        _ => OrganizingGoodsWarCommandOutcome::Ignored,
+    };
+    Some(Ok(OrganizingGoodsWarCommandDispatch { operation, outcome }))
+}
+
+/// Выполняет `0x6013A`: `faction ID Long`, winner-снимок фракции общим
+/// заёмом организационного view (до построения member-контекста — оба заёма
+/// одного владельца последовательны и не пересекают границу вызова) и
+/// `CGoodsWarMember::FactionWin`.
+pub fn dispatch_goods_war_faction_win(
+    message: &mut CMessage,
+    game: &dyn WorldGameView,
+    organizing: &mut impl WorldOrganizingDispatchView,
+    goods_war: &mut CGoodsWarMember,
+) -> Option<
+    Result<OrganizingGoodsWarFactionWinDispatch, OrganizingGoodsWarFactionWinBlock>,
+> {
+    if message.message_type() != GOODS_WAR_FACTION_WIN_MESSAGE_TYPE {
+        return None;
+    }
+
+    let requested_faction_id = message.base_mut().get_long().unwrap_or(0);
+    let winner = {
+        let Some(faction) = organizing.faction_by_id(requested_faction_id) else {
+            return Some(Ok(OrganizingGoodsWarFactionWinDispatch {
+                requested_faction_id,
+                faction_found: false,
+                report: None,
+            }));
+        };
+        let actual_faction_id = faction.faction_id();
+        let Some(master_id) = faction.master_id() else {
+            return Some(Err(OrganizingGoodsWarFactionWinBlock::MissingMasterId {
+                requested_faction_id,
+                actual_faction_id,
+            }));
+        };
+        GoodsWarFactionWinSnapshot {
+            faction_id: actual_faction_id,
+            name: faction.name().to_vec(),
+            master_id,
+            member_ids: faction.get_members().keys().copied().collect(),
+        }
+    };
+    let mut context = WorldGoodsWarMemberDispatchContext { game, organizing };
+    let report = goods_war.faction_win(&winner, &mut context);
+    Some(Ok(OrganizingGoodsWarFactionWinDispatch {
+        requested_faction_id,
+        faction_found: true,
+        report: Some(report),
     }))
 }

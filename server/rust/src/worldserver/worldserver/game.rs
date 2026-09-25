@@ -40,8 +40,9 @@ use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::app::world_game_view::{
-    WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldPlayerSelectRouteBlock,
-    WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
+    WorldCountryKingGateBlock, WorldCountryWarGate, WorldCreateRoleLaunchFailure,
+    WorldCreateRoleLaunchSuccess, WorldPlayerSelectRouteBlock, WorldPlayerSelectRouteError,
+    WorldPlayerSelectRouteOutcome,
 };
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
@@ -6670,6 +6671,10 @@ impl CGame {
             let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/CityWarSys.ini");
+        let country_gate = &mut CityWarCountryGateBridge {
+            country_handler,
+            country_parameters,
+        };
         match reload_attack_city(
             self,
             attack_city,
@@ -6679,8 +6684,7 @@ impl CGame {
             attack_callbacks,
             organizing_parameters.latest_tax_event_id(),
             organizing,
-            country_handler,
-            country_parameters,
+            country_gate,
             globe_setup,
             effects,
             update_player,
@@ -6734,6 +6738,10 @@ impl CGame {
             let _ = self.load_server_resource_from_context(context);
         }
         let source = context.read_resource(b"setup/CityWarSys.ini");
+        let country_gate = &mut CityWarCountryGateBridge {
+            country_handler,
+            country_parameters,
+        };
         match reload_attack_city(
             self,
             attack_city,
@@ -6743,8 +6751,7 @@ impl CGame {
             attack_callbacks,
             organizing_parameters.latest_tax_event_id(),
             organizing,
-            country_handler,
-            country_parameters,
+            country_gate,
             globe_setup,
             effects,
             update_player,
@@ -17156,6 +17163,51 @@ struct WorldGoodsWarDelivery<'a> {
     game: &'a CGame,
 }
 
+/// Bridge-адаптер [`WorldCountryWarGate`] ветви `0x60138` city war result и
+/// семейного `reload_attack_city`: лёгкие country-контакты делегирует
+/// inherent-вызовам живого `CCountryHandler`, тяжёлый governance-переход
+/// выполняет связно `take_country_owner → SetKing → (success) city_id →
+/// restore_country_owner` в исходном порядке с параметрами страны владельца.
+struct CityWarCountryGateBridge<'a> {
+    country_handler: &'a mut CCountryHandler,
+    country_parameters: &'a CCountryParam,
+}
+
+impl WorldCountryWarGate for CityWarCountryGateBridge<'_> {
+    fn country_exists(&self, country: u8) -> bool {
+        self.country_handler.get_country(country).is_some()
+    }
+
+    fn set_country_warring(&mut self, country: u8, warring: bool) -> bool {
+        let Some(country_state) = self.country_handler.get_country_mut(country) else {
+            return false;
+        };
+        country_state.is_warring = warring;
+        true
+    }
+
+    fn set_country_king_and_city(
+        &mut self,
+        country: u8,
+        master_id: i32,
+        city_region_id: i32,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Result<(), WorldCountryKingGateBlock> {
+        let Some(mut country_state) = self.country_handler.take_country_owner(country) else {
+            return Err(WorldCountryKingGateBlock::MissingCountryOwner);
+        };
+        let set_king = country_state.set_king(master_id, self.country_parameters, context);
+        if set_king.is_ok() {
+            country_state.city_id = city_region_id;
+        }
+        self.country_handler
+            .restore_country_owner(country, country_state);
+        set_king
+            .map(|_| ())
+            .map_err(WorldCountryKingGateBlock::Governance)
+    }
+}
+
 struct WorldFourNationWarResultEffects<'a> {
     game: &'a CGame,
 }
@@ -19742,12 +19794,15 @@ where
                 runtime,
             };
         }
+        let country_gate = &mut CityWarCountryGateBridge {
+            country_handler,
+            country_parameters: &*country_parameters,
+        };
         if let Some(outcome) = dispatch_city_war_result(
             &mut message,
             game,
             organizing,
-            country_handler,
-            country_parameters,
+            country_gate,
             attack_city,
             timer,
             attack_city_callbacks,

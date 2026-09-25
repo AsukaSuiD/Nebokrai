@@ -31,7 +31,8 @@ use crate::content::countryparam::{CCountryParam, CountryParameterUnavailable};
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
 use nebokrai_shared::resources::CPlayerList;
 use crate::organizations::country::{
-    CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate,
+    CountryExileResultContext, CountryExileTimeLookup, CountryGovernanceContextBlock,
+    CountryQuestSwitchUpdate, CountryScalarUpdate,
 };
 use crate::organizations::faction::CFaction;
 use crate::organizations::union::UnionFormatArgument;
@@ -618,6 +619,62 @@ pub trait WorldDeleteRoleCountryGate {
         country: u8,
         player_id: i32,
     ) -> bool;
+}
+
+/// Причина отказа governance-перехода короля и столицы ветви `0x60138`:
+/// slot страны пуст на момент временного изъятия владельца либо сам
+/// `CCountry::SetKing` вернул блочный исход своего context-сеанса.
+/// Различие сохранено отдельными вариантами, потому что диспетчер отражает
+/// их в разные ветви своего context-блока (`MissingCountryOwner` /
+/// `CountryGovernance`).
+#[derive(Debug)]
+pub enum WorldCountryKingGateBlock {
+    MissingCountryOwner,
+    Governance(CountryGovernanceContextBlock),
+}
+
+/// Узкий dyn-шов war-контактов ветви `0x60138` city war result и семейного
+/// `reload_attack_city` с живой страновой таблицей: лёгкие проверка присутствия
+/// и запись флага войны плюс тяжёлый governance-переход назначения короля и
+/// города. Реализация живёт в bridge-адаптере у dispatcher-а старого пакета
+/// (`worldserver/game.rs`) и делегирует inherent-вызовам `CCountryHandler`;
+/// живые `CCountry` и сама таблица не покидают старый пакет.
+///
+/// Лёгкие методы свёрнуты ровно до цепочек, которые выполнял прежний
+/// результат-контекст: `get_country(...).is_some()` и
+/// `get_country_mut → is_warring = value`; lookup региона в страну
+/// (`clear_region_country_warring_if_present`) остаётся у war-системы, а
+/// slot вне таблицы воспринимается как отсутствующая страна — записи не
+/// происходит.
+///
+/// Тяжёлый `set_country_king_and_city` намеренно НЕ разложен на примитивы:
+/// временное изъятие owner-а из таблицы, вызов `CCountry::SetKing` с
+/// governance-контекстом самой ветви, запись `city_id` только при успехе и
+/// возврат owner-а в slot остаются одной связной операцией в исходном
+/// порядке (то же separation of concerns, что у
+/// [`WorldDeleteRoleCountryGate`]). Контекст приходит от вызывающей ветви как
+/// `&mut dyn CountryExileResultContext`: результат-контекст диспетчера сам
+/// реализует этот трейт, и dyn-форма не меняет наблюдаемое поведение
+/// (`?Sized`-граница `CCountry::SetKing` допускает trait object без обхода).
+pub trait WorldCountryWarGate {
+    fn country_exists(&self, country: u8) -> bool;
+
+    /// Записывает `is_warring` стране, если slot занят; возвращает,
+    /// была ли страна найдена (запись применена). Прежний контекст игнорировал
+    /// отсутствующую страну молча — тот же отказ доступен ветви без `?`.
+    fn set_country_warring(&mut self, country: u8, warring: bool) -> bool;
+
+    /// Связный переход «новый король + город-столица» ветви `0x60138`:
+    /// `take_country_owner → SetKing → (success) city_id = city →
+    /// restore_country_owner`, результат `SetKing` (и только он) определяет
+    /// исход, как в исходном результат-контексте.
+    fn set_country_king_and_city(
+        &mut self,
+        country: u8,
+        master_id: i32,
+        city_region_id: i32,
+        context: &mut dyn CountryExileResultContext,
+    ) -> Result<(), WorldCountryKingGateBlock>;
 }
 
 /// Причина отказа player-data маршрута владельца игры. Тип перевезён из
