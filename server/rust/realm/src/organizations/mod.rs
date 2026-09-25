@@ -10,7 +10,7 @@ pub mod goodswarmember; // CGoodsWarMember: участники Goods War.
 pub mod king; // CKing: владелец очков контроля/материалов/войны страны.
 pub mod minister; // CMinister: номинальный minister owner.
 pub mod officer; // COfficer: четыре officer-поля country owner-а.
-pub mod organizingctrl; // COrganizingCtrl: wire-константы, lookup/receipt/session-контракты и отчёты.
+pub mod organizingctrl; // COrganizingCtrl: центральный контроллер организаций (Registry, операции, staging) и его wire-контракты/отчёты.
 pub mod organizingparam; // COrganizingParam: параметры организаций.
 pub mod rsenemyfactions; // CRsEnemyFactions: World DB-владелец enemy-связей.
 pub mod rsfaction; // CRsFaction: World DB-владелец фракций и его трейт.
