@@ -1,4 +1,14 @@
-//! Concrete GameServer-владелец городского war-region `CServerCityRegion`.
+//! GameServer-владелец городского war-region `CServerCityRegion`.
+//!
+//! Скалярный state, данные, context-контракты и скалярные правила перенесены
+//! в Zone `regions/servercityregion` (волна Z-M-X, семья регионов
+//! country+nation+city + гейты); региональное гейтовое тело — opcode
+//! константы, проекция client state, правила операций и общий footprint scan —
+//! перенесено в Zone `regions/citygate`. Здесь hub-обёртка
+//! `CServerCityRegion` поверх `CServerWarRegion` и карты concrete `CCityGate`
+//! с прежними сигнатурами, decode-контексты над owner-ом хранилищ,
+//! wire-stream readers c `RegionDecodeInputBlock`, re-export семейства для
+//! старого пакета и evidence-блок.
 //!
 //! Фазовые callbacks RVA `0x001CF730`, `0x001CFA00..0x001CFD70`,
 //! `0x001D09F0`, ownership `0x001CED70/0x001CEF40`, victory `0x001CF1A0`,
@@ -60,10 +70,16 @@
 //! ownership mutation и до сохранённого `GS0223/GS0224` war-log sink.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+pub(crate) use nebokrai_zone::regions::servercityregion::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::build::{BuildBlockUpdate, BuildClientPublication, BuildClientUpdate};
-use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
+use super::citygate::{
+    CCityGate, CityGateHurtOwnerUpdate, CityGateInit, GATE_OP_CLOSE, GATE_OP_DIED, GATE_OP_OPEN,
+    GATE_OP_REFRESH, GateOperationUpdate, city_gate_operation_update, footprint_is_clear,
+    gate_client_state,
+};
 use super::country::countryparam::CCountryParam;
 use nebokrai_shared::protocol::LegacyReader;
 use super::monster::CMonster;
@@ -77,7 +93,7 @@ use super::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
     ServerRegionMonsterContext, ServerRegionMonsterEffectsContext,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext,
-    ServerRegionNpcSpawnEffectsContext, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionNpcSpawnEffectsContext, ServerReturnPlayer,
 };
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
@@ -86,43 +102,9 @@ use super::serverwarregion::{
     WarRegionClearContext, WarRegionDecodeError, read_region_array,
 };
 
-const OC_OPEN: i32 = 0;
-const OC_CLOSE: i32 = 1;
-const OC_REFRESH: i32 = 2;
-const OC_DIED: i32 = 3;
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CityGateState {
     pub(crate) gate: CCityGate,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CityDefenceReturnState {
-    pub(crate) region_id: i32,
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    pub(crate) does_recall_when_lost: i32,
-    pub(crate) move_monster_when_refeash: i32,
-    pub(crate) use_return: i32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CityGateBuild {
-    pub(crate) logical_id: i32,
-    pub(crate) picture_id: i32,
-    pub(crate) direction: i32,
-    pub(crate) action: u16,
-    pub(crate) max_hp: i32,
-    pub(crate) defence: i32,
-    pub(crate) width_increment: i32,
-    pub(crate) title_x: i32,
-    pub(crate) title_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -204,75 +186,26 @@ impl<Context: ServerRegionDecodeEffectsContext> ServerRegionDecodeEffectsContext
     }
 }
 
-pub(crate) trait CityReturnPointContext {
-    /// Сохраняет первый отброшенный virtual `CShape::GetTileY`.
-    fn read_city_player_tile_y(&mut self, player_id: i32) -> i32;
-
-    /// Сохраняет следующий отброшенный virtual `CShape::GetTileX`.
-    fn read_city_player_tile_x(&mut self, player_id: i32) -> i32;
-}
-
-pub(crate) trait CityEntryContext: CityReturnPointContext + RegionRandomContext {
-    /// Выполняет virtual player slot `+0x88` с `(x, y)`.
-    fn set_city_player_position(&mut self, player_id: i32, x: i32, y: i32);
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CityReturnPointError {
-    Base(ServerReturnSetupBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CityEntryError {
-    ReturnPoint(CityReturnPointError),
-    Cell(RegionCellAccessBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CityVictoryUpdate {
-    pub(crate) war_number: i32,
-    pub(crate) region_id: i32,
-    pub(crate) faction_id: i32,
-    pub(crate) union_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CityWarLogEffect {
-    pub(crate) string_id: &'static str,
-    pub(crate) war_number: i32,
-    pub(crate) region_name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CityWarEndEffect {
-    pub(crate) log: CityWarLogEffect,
-    pub(crate) build_updates: Vec<BuildClientPublication>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CityWarTimeoutEffect {
-    pub(crate) victory: Option<CityVictoryUpdate>,
-    pub(crate) log_string_id: &'static str,
-    pub(crate) war_number: i32,
-    pub(crate) region_name: String,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CityGuardRefreshTargets {
-    pub(crate) monster_ids: Vec<i32>,
-    pub(crate) spawn_indices: Vec<i32>,
-}
-
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CServerCityRegion {
     pub(crate) war: CServerWarRegion,
     pub(crate) city_gates: BTreeMap<i32, CityGateState>,
-    pub(crate) defence_side_return: CityDefenceReturnState,
-    pub(crate) guard_monsters: BTreeSet<i32>,
-    pub(crate) guard_indices: Vec<i32>,
-    pub(crate) last_gate_attacker_type: i32,
-    pub(crate) last_gate_attacker_id: i32,
+    /// Defender faction `+0x2C0` остаётся плоской колонкой aggregate: её
+    /// читает и переписывает runtime `CGame` напрямую, а derived warfare
+    /// манипуляции здесь же; scalar state Zone получает её параметром.
     pub(crate) defence_side_faction_id: i32,
+    inner: ServerCityRegionState,
+}
+
+impl Default for CServerCityRegion {
+    fn default() -> Self {
+        Self {
+            war: CServerWarRegion::default(),
+            city_gates: BTreeMap::new(),
+            defence_side_faction_id: 0,
+            inner: ServerCityRegionState::default(),
+        }
+    }
 }
 
 impl CServerCityRegion {
@@ -289,20 +222,13 @@ impl CServerCityRegion {
         let _ = context.read_city_player_tile_y(player.id);
         let _ = context.read_city_player_tile_x(player.id);
         let first_state = self.war.base.get_city_state();
-        let defender_window = first_state == 3 || self.war.base.get_city_state() == 2;
-        if defender_window
-            && player.faction_id != 0
-            && player.faction_id == self.defence_side_faction_id
-        {
-            let setup = self.defence_side_return;
-            return Ok(RegionReturnPoint {
-                region_id: setup.region_id,
-                left: setup.left,
-                top: setup.top,
-                right: setup.right,
-                bottom: setup.bottom,
-                direction: -1,
-            });
+        if let Some(point) = self.inner.defence_return_point(
+            first_state,
+            self.war.base.get_city_state(),
+            player.faction_id,
+            self.defence_side_faction_id,
+        ) {
+            return Ok(point);
         }
 
         self.war
@@ -358,8 +284,8 @@ impl CServerCityRegion {
     ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError>> {
         let mut guard_context = CityGuardDecodeContext {
             context,
-            guard_monsters: &mut self.guard_monsters,
-            guard_indices: &mut self.guard_indices,
+            guard_monsters: &mut self.inner.guard_monsters,
+            guard_indices: &mut self.inner.guard_indices,
         };
         let _ = self
             .war
@@ -377,7 +303,8 @@ impl CServerCityRegion {
 
         let defence = read_region_array::<0x20>(source, cursor, "m_DefenceSideRS")
             .map_err(CityRegionDecodeError::Input)?;
-        self.defence_side_return = decode_defence_return(defence);
+        self.inner
+            .decode_defence_return_finished(decode_defence_return(defence));
 
         let gate_count = read_city_i32(source, cursor, "m_CityGates count")
             .map_err(CityRegionDecodeError::Input)?;
@@ -441,7 +368,7 @@ impl CServerCityRegion {
     }
 
     pub(crate) fn is_owner(&self, faction_id: i32) -> bool {
-        faction_id != 0 && faction_id == self.war.base.param.owned_faction_id
+        city_is_owner(self.war.base.param.owned_faction_id, faction_id)
     }
 
     pub(crate) fn is_apply_war_faction(
@@ -460,17 +387,12 @@ impl CServerCityRegion {
         if self.war.base.get_city_state() == 2 {
             return Ok(RegionSecurity::SAFE);
         }
-        let Some(cell) = self.war.base.region.get_cell(x, y)? else {
-            return Ok(RegionSecurity::SAFE);
-        };
-        let security = cell.security();
-        if security == RegionSecurity::SAFE {
-            return Ok(RegionSecurity::SAFE);
-        }
-        if self.war.base.get_city_state() == 3 && cell.city_war_marker() == 1 {
-            return Ok(RegionSecurity::CITY_WAR);
-        }
-        Ok(security)
+        let cell = self.war.base.region.get_cell(x, y)?;
+        Ok(city_security_rule(
+            cell.map(|cell| cell.security()),
+            cell.map_or(0, |cell| cell.city_war_marker()),
+            self.war.base.get_city_state(),
+        ))
     }
 
     pub(crate) fn set_owned_city_org(&mut self, faction_id: i32, union_id: i32) {
@@ -523,27 +445,16 @@ impl CServerCityRegion {
             return None;
         }
 
-        let mut faction_symbols = BTreeMap::<i32, i32>::new();
-        for &faction_id in self.war.faction_win_symbol.values() {
-            let count = faction_symbols.entry(faction_id).or_default();
-            *count = count.wrapping_add(1);
-        }
-
-        let winner = faction_symbols
-            .iter()
-            .find(|(_, count)| self.war.win_victory_symbol_num <= **count)
-            .map(|(&faction_id, _)| faction_id);
-        let (faction_id, union_id, log_string_id) = winner
-            .map(|faction_id| (faction_id, 0, "GS0223"))
-            .unwrap_or((
-                self.war.base.param.owned_faction_id,
-                self.war.base.param.owned_union_id,
-                "GS0224",
-            ));
-        let victory = self.apply_faction_victory(faction_id, union_id);
+        let decision = decide_city_war_timeout(
+            &self.war.faction_win_symbol,
+            self.war.win_victory_symbol_num,
+            self.war.base.param.owned_faction_id,
+            self.war.base.param.owned_union_id,
+        );
+        let victory = self.apply_faction_victory(decision.faction_id, decision.union_id);
         Some(CityWarTimeoutEffect {
             victory,
-            log_string_id,
+            log_string_id: decision.log_string_id,
             war_number,
             region_name: self.war.base.name.clone(),
         })
@@ -576,8 +487,8 @@ impl CServerCityRegion {
         let mut updates = Vec::new();
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
-            let _ = self.operator_city_gate(logical_id, OC_REFRESH);
-            let _ = self.operator_city_gate(logical_id, OC_CLOSE);
+            let _ = self.operator_city_gate(logical_id, GATE_OP_REFRESH);
+            let _ = self.operator_city_gate(logical_id, GATE_OP_CLOSE);
             if let Some(update) = self.city_gate_client_publication(logical_id) {
                 updates.push(update);
             }
@@ -586,7 +497,7 @@ impl CServerCityRegion {
     }
 
     pub(crate) fn on_refresh_region(&self, _war_number: i32) -> CityGuardRefreshTargets {
-        self.guard_refresh_targets()
+        self.inner.guard_refresh_targets()
     }
 
     fn apply_faction_victory(
@@ -617,7 +528,7 @@ impl CServerCityRegion {
         let mut updates = Vec::new();
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
-            let _ = self.operator_city_gate(logical_id, OC_REFRESH);
+            let _ = self.operator_city_gate(logical_id, GATE_OP_REFRESH);
             if let Some(update) = self.city_gate_client_publication(logical_id) {
                 updates.push(update);
             }
@@ -631,9 +542,9 @@ impl CServerCityRegion {
         };
 
         let pointer_result = match operation {
-            OC_OPEN => true,
-            OC_CLOSE => city_gate_footprint_is_clear(&self.war.base, &gate_state.gate),
-            OC_REFRESH | OC_DIED => true,
+            GATE_OP_OPEN => true,
+            GATE_OP_CLOSE => city_gate_footprint_is_clear(&self.war.base, &gate_state.gate),
+            GATE_OP_REFRESH | GATE_OP_DIED => true,
             _ => true,
         };
 
@@ -643,16 +554,7 @@ impl CServerCityRegion {
                 .get_mut(&logical_id)
                 .expect("gate найден до неизменяющего map вызова")
                 .gate;
-            let update = match operation {
-                OC_OPEN => apply_gate_action(gate, 7),
-                OC_CLOSE => apply_gate_action(gate, 1),
-                OC_REFRESH => {
-                    gate.refresh_hp();
-                    apply_gate_action(gate, 7)
-                }
-                OC_DIED => apply_gate_action(gate, 6),
-                _ => None,
-            };
+            let update = apply_gate_operation(gate, city_gate_operation_update(operation));
             if let Some(update) = update {
                 let _legacy_void = self.war.base.apply_build_block(update);
             }
@@ -692,12 +594,7 @@ impl CServerCityRegion {
         let Some(gate) = self.city_gates.get(&logical_id).map(|state| &state.gate) else {
             return -1;
         };
-        match gate.action() {
-            7 => 0,
-            0 | 1 => 1,
-            6 => 2,
-            _ => -1,
-        }
+        gate_client_state(gate.action())
     }
 
     /// Возвращает runtime child-ID из `tagCityGate`; отсутствующий logical key
@@ -717,48 +614,40 @@ impl CServerCityRegion {
 
     /// Exact virtual `AddGurdMonster`: повторный ID не меняет набор.
     pub(crate) fn add_gurd_monster(&mut self, monster_id: i32) {
-        self.guard_monsters.insert(monster_id);
+        self.inner.add_gurd_monster(monster_id);
     }
 
     /// Exact virtual `AddGuardIndex`: первый порядок регистрации сохраняется,
     /// повторный refresh index не добавляется второй раз.
     pub(crate) fn add_guard_index(&mut self, refresh_index: i32) {
-        if !self.guard_indices.contains(&refresh_index) {
-            self.guard_indices.push(refresh_index);
-        }
+        self.inner.add_guard_index(refresh_index);
     }
 
-    /// Exact `CServerCityRegion::GuardIsAttackAble`: вне active city-war
-    /// state базовый результат остаётся true. Во время state `3` player своей
-    /// owning faction либо owning union не может быть второй стороной атаки
-    /// городского стража; нулевые owner IDs не создают защитного совпадения.
+    /// Exact `CServerCityRegion::GuardIsAttackAble`: scalar-правило state `3`
+    /// и owning faction/union находится в Zone; базовая атака вне active
+    /// city-war state разрешена.
     pub(crate) fn guard_is_attackable(
         &self,
         target_type: i32,
         target_faction_id: i32,
         target_union_id: i32,
     ) -> bool {
-        if self.war.base.get_city_state() != 3 || target_type != 400 {
-            return true;
-        }
-        let owned_faction_id = self.war.base.owned_city_faction();
-        if owned_faction_id != 0 && target_faction_id == owned_faction_id {
-            return false;
-        }
-        let owned_union_id = self.war.base.owned_city_union();
-        owned_union_id == 0 || target_union_id != owned_union_id
+        city_guard_is_attackable(
+            self.war.base.get_city_state(),
+            target_type,
+            target_faction_id,
+            target_union_id,
+            self.war.base.owned_city_faction(),
+            self.war.base.owned_city_union(),
+        )
     }
 
     pub(crate) fn apply_gate_hurt_owner_update(
         &mut self,
         update: CityGateHurtOwnerUpdate,
     ) -> bool {
-        if self.war.base.id != update.region_id {
-            return false;
-        }
-        self.last_gate_attacker_type = update.attacker_type;
-        self.last_gate_attacker_id = update.attacker_id;
-        true
+        self.inner
+            .apply_gate_hurt_owner_update(self.war.base.id, update)
     }
 
     /// Находит concrete gate по runtime child-ID, с которым объект
@@ -780,61 +669,27 @@ impl CServerCityRegion {
     }
 
     pub(crate) fn guard_refresh_targets(&self) -> CityGuardRefreshTargets {
-        CityGuardRefreshTargets {
-            monster_ids: self.guard_monsters.iter().copied().collect(),
-            spawn_indices: self.guard_indices.clone(),
-        }
+        self.inner.guard_refresh_targets()
     }
 }
 
 /// Общий PDB-symbol `CServerCityRegion::CityGateIsClose` RVA `0x001CAAA0`:
-/// country-region вызывает именно его, поэтому обе region-цепочки используют
-/// один доказанный x-major footprint scan без объединения самих владельцев.
+/// country-region вызывает именно его; сам x-major scan живёт в Zone
+/// `regions/citygate`, а эта facade связывает owning region и concrete gate.
 pub(crate) fn city_gate_footprint_is_clear(region: &CServerRegion, gate: &CCityGate) -> bool {
-    let footprint = gate.footprint();
-    let width = i32::from(footprint.width_increment);
-    let height = i32::from(footprint.height_increment);
-    // VERIFIED_DISASSEMBLY RVA 0x001CAAA0: x86 `sub/add` и loop increment
-    // работают по DWORD с wrapping; это определяет поведение точнее, чем
-    // потенциальный signed-overflow UB исходного C++. Существенный фрагмент:
-    // `sub ebx,edi; add edi,eax; add edi,1; cmp edi,ebp; jle ...`.
-    let left = footprint.tile_x.wrapping_sub(width);
-    let right = footprint.tile_x.wrapping_add(width);
-    let top = footprint.tile_y.wrapping_sub(height);
-    let bottom = footprint.tile_y.wrapping_add(height);
-
-    let mut tile_x = left;
-    while tile_x <= right {
-        let mut tile_y = top;
-        while tile_y <= bottom {
-            if region
-                .block_at(tile_x, tile_y)
-                .is_some_and(|cell| cell & 7 == 3)
-            {
-                return false;
-            }
-            tile_y = tile_y.wrapping_add(1);
-        }
-        tile_x = tile_x.wrapping_add(1);
-    }
-    true
+    footprint_is_clear(&gate.footprint(), |tile_x, tile_y| {
+        region.block_at(tile_x, tile_y)
+    })
 }
 
-fn apply_gate_action(gate: &mut CCityGate, action: u16) -> Option<BuildBlockUpdate> {
-    gate.set_action(action)
-}
-
-fn decode_defence_return(bytes: [u8; 0x20]) -> CityDefenceReturnState {
-    CityDefenceReturnState {
-        region_id: city_i32_at(&bytes, 0x00),
-        left: city_i32_at(&bytes, 0x04),
-        top: city_i32_at(&bytes, 0x08),
-        right: city_i32_at(&bytes, 0x0C),
-        bottom: city_i32_at(&bytes, 0x10),
-        does_recall_when_lost: city_i32_at(&bytes, 0x14),
-        move_monster_when_refeash: city_i32_at(&bytes, 0x18),
-        use_return: city_i32_at(&bytes, 0x1C),
+fn apply_gate_operation(
+    gate: &mut CCityGate,
+    rule: GateOperationUpdate,
+) -> Option<BuildBlockUpdate> {
+    if rule.refresh_hp {
+        gate.refresh_hp();
     }
+    rule.next_action.and_then(|action| gate.set_action(action))
 }
 
 fn read_city_gate_build(
@@ -844,24 +699,7 @@ fn read_city_gate_build(
     let bytes = read_region_array::<0x2C>(source, cursor, "tagBuild scalar block")?;
     let name = read_city_c_string(source, cursor, "tagBuild.strName")?;
     let script = read_city_c_string(source, cursor, "tagBuild.strScript")?;
-    Ok(CityGateBuild {
-        logical_id: city_i32_at(&bytes, 0x00),
-        picture_id: city_i32_at(&bytes, 0x04),
-        direction: city_i32_at(&bytes, 0x08),
-        // `tagBuild` хранит DWORD, но PDB-virtual `SetAction` принимает `ushort`.
-        action: LegacyReader::at(&bytes, 0x0C)
-            .and_then(|mut reader| reader.read_u16())
-            .expect("фиксированный city block содержит action"),
-        max_hp: city_i32_at(&bytes, 0x10),
-        defence: city_i32_at(&bytes, 0x14),
-        width_increment: city_i32_at(&bytes, 0x18),
-        title_x: city_i32_at(&bytes, 0x1C),
-        title_y: city_i32_at(&bytes, 0x20),
-        height_increment: city_i32_at(&bytes, 0x24),
-        element_resistance: city_i32_at(&bytes, 0x28),
-        name,
-        script,
-    })
+    Ok(city_gate_build_from_block(&bytes, name, script))
 }
 
 fn read_city_i32(
@@ -903,10 +741,4 @@ fn read_city_c_string(
         }
         value.push(byte);
     }
-}
-
-fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
-    LegacyReader::at(bytes, offset)
-        .and_then(|mut reader| reader.read_i32())
-        .expect("фиксированный city block содержит поле")
 }

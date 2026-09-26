@@ -1,5 +1,17 @@
 //! GameServer-владелец общей country-region поверхности `ServerCountryRegion`.
 //!
+//! Скалярный state (symbol ownership, area-maps, guard sets, стороны, фазовые
+//! флаги), данные, context-контракты и скалярные правила перенесены в Zone
+//! `regions/servercountryregion` (волна Z-M-X, семья регионов
+//! country+nation+city + гейты); региональное гейтовое тело — opcode
+//! константы, проекция client state, правила операций и общий footprint scan —
+//! перенесено в Zone `regions/citygate`. Здесь hub-обёртка
+//! `CServerCountryRegion` поверх `CServerRegion`: contender-список и карты
+//! concrete gates/flags остаются здесь (element `ContendState` и gate/flag
+//! типы — hub), scalar-решения делегируются Zone-агрегату `inner`, прежние
+//! сигнатуры не менялись; wire-stream readers c `RegionDecodeInputBlock`,
+//! re-export семейства для старого пакета и evidence-блок остаются здесь.
+//!
 //! Полный subtype decoder RVA `0x001CD3F0`, gate runtime
 //! `0x001CAC80/0x001CADD0/0x001CB1E0..0x001CB310`, `RefreshGates`
 //! `0x001CB750`, `RefreshFlags` `0x001CB880`, `ClearRegion` `0x001CBA50`,
@@ -72,12 +84,17 @@
 //! их наблюдаемые call-site contracts сохранены, доменные constructors,
 //! destructors и оставшиеся callbacks не классифицировались этим sweep.
 
-use std::collections::{BTreeMap, BTreeSet};
+pub(crate) use nebokrai_zone::regions::servercountryregion::*;
+
+use std::collections::BTreeMap;
 
 use super::build::{
     BuildBlockUpdate, BuildClientPublication, BuildClientUpdate, BuildInit, CBuild,
 };
-use super::citygate::{CCityGate, CityGateInit};
+use super::citygate::{
+    CCityGate, CityGateInit, GATE_OP_CLOSE, GATE_OP_REFRESH, GateOperationUpdate,
+    country_gate_operation_update, gate_client_state,
+};
 use super::country::countryparam::CCountryParam;
 use nebokrai_shared::protocol::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
@@ -90,134 +107,10 @@ use super::servercityregion::city_gate_footprint_is_clear;
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError,
     ServerRegionMonsterRectBlock, ServerReturnPlayer,
-    ServerReturnSetupBlock,
 };
 use super::serverwarregion::{
     ContendArithmeticBlock, ContendState, RegionDecodeInputBlock, read_region_array,
 };
-
-const WC_DEFEND: i32 = 0;
-const WC_ATTACK: i32 = 1;
-
-const OC_OPEN: i32 = 0;
-const OC_CLOSE: i32 = 1;
-const OC_REFRESH: i32 = 2;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryGateBuild {
-    pub(crate) picture_id: i32,
-    pub(crate) direction: i32,
-    pub(crate) action: u16,
-    pub(crate) max_hp: i32,
-    pub(crate) defence: i32,
-    pub(crate) width_increment: i32,
-    pub(crate) title_x: i32,
-    pub(crate) title_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryFlagBuild {
-    pub(crate) picture_id: i32,
-    pub(crate) direction: i32,
-    pub(crate) max_hp: i32,
-    pub(crate) defence: i32,
-    pub(crate) width_increment: i32,
-    pub(crate) title_x: i32,
-    pub(crate) title_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryAreaState {
-    pub(crate) id: i32,
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryRegionDecodeError<BaseError> {
-    Base(BaseError),
-    Input(RegionDecodeInputBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountrySecurityError {
-    Cell(RegionCellAccessBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryReturnPointError {
-    Base(ServerReturnSetupBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryEntryError {
-    ReturnPoint(CountryReturnPointError),
-    Cell(RegionCellAccessBlock),
-}
-
-pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {}
-
-impl<Context: ServerRegionDecodeContext + ?Sized> CountryRegionDecodeContext for Context {}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryGuardRefreshTargets {
-    pub(crate) monster_ids: Vec<i32>,
-    pub(crate) spawn_indices: Vec<CountryGuardSpawnTarget>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryGuardSpawnTarget {
-    pub(crate) spawn_index: i32,
-    pub(crate) camp: i32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryClearRefreshEffects {
-    pub(crate) guard_targets: CountryGuardRefreshTargets,
-    pub(crate) build_updates: Vec<BuildClientPublication>,
-}
-
-pub(crate) trait CountryReturnPointContext {
-    /// Вызывает исходный `random(map.size())`; реакция на нулевой count остаётся
-    /// у достигнутого RNG-owner-а, а returned DWORD используется map key.
-    fn random_country_area_key(&mut self, area_count: u32) -> i32;
-}
-
-pub(crate) trait CountryEntryContext:
-    CountryReturnPointContext + RegionRandomContext
-{
-    /// Выполняет virtual player slot `+0x88` с `(x, y)`.
-    fn set_country_player_position(&mut self, player_id: i32, x: i32, y: i32);
-}
-
-pub(crate) trait CountryCampContext {
-    /// Возвращает `CPlayer::m_btCountry` только для существующего player ID.
-    fn country_player_country(&mut self, player_id: i32) -> Option<u8>;
-}
-
-pub(crate) trait CountryContendEntryContext {
-    /// Возвращает младшие 32 бита монотонного миллисекундного счётчика.
-    fn now_millis(&mut self) -> u32;
-
-    /// Шлёт player-у `0xBFF29` с одним signed значением времени.
-    fn send_contend_time(&mut self, player_id: i32, time: i32);
-
-    /// Меняет contend-state у уже известного non-null player pointer.
-    fn set_known_player_contend_state(&mut self, player_id: i32, state: bool);
-
-    /// Шлёт player-localized `GS0228/GS0229` с исходным красным цветом.
-    fn notify_player(&mut self, player_id: i32, string_id: &'static str);
-}
 
 pub(crate) trait CountryContendContext: CountryContendEntryContext {
     /// Выполняет исходный `CServerRegion::AI` до contender-tick.
@@ -248,36 +141,21 @@ pub(crate) trait CountryContendContext: CountryContendEntryContext {
     );
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryRegionDecodeError<BaseError> {
+    Base(BaseError),
+    Input(RegionDecodeInputBlock),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryRegionAiError {
     Base(ServerRegionMonsterRectBlock),
     Arithmetic(ContendArithmeticBlock),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryContendPlayer {
-    pub(crate) player_id: i32,
-    pub(crate) faction_id: i32,
-    pub(crate) country: u8,
-    pub(crate) shape_type: i32,
-    pub(crate) is_dead: bool,
-}
+pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryDamagePlayer {
-    pub(crate) player_id: i32,
-    pub(crate) max_hp: u32,
-}
-
-/// BLOCKED_MISSING_FACT: для NaN/inf/out-of-range x87 `fistp i32` точная
-/// реакция процесса не доказана; safe Rust не назначает ей saturating cast.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryDamageArithmeticBlock {
-    pub(crate) max_time: i32,
-    pub(crate) damage: i32,
-    pub(crate) max_hp: u32,
-    pub(crate) dec_time_param_bits: u32,
-}
+impl<Context: ServerRegionDecodeContext + ?Sized> CountryRegionDecodeContext for Context {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryDamageError {
@@ -285,37 +163,15 @@ pub(crate) enum CountryDamageError {
     Percentage(ContendArithmeticBlock),
 }
 
-/// BLOCKED_MISSING_FACT: RVA `0x001CCAC0` в null-ветке читает absolute
-/// address `0x00000008`, а затем вызывает `CPlayer::SetContendState` с null.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryNullPlayerCancelBlock;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryMoveShape {
-    pub(crate) object_type: i32,
-    pub(crate) id: i32,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CServerCountryRegion {
     pub(crate) base: CServerRegion,
     pub(crate) contenders: Vec<ContendState>,
-    pub(crate) symbol_hold: BTreeMap<i32, i32>,
     pub(crate) defend_gates: BTreeMap<i32, CCityGate>,
     pub(crate) attack_gates: BTreeMap<i32, CCityGate>,
     pub(crate) defend_flags: BTreeMap<i32, CBuild>,
     pub(crate) attack_flags: BTreeMap<i32, CBuild>,
-    pub(crate) defend_areas: BTreeMap<i32, CountryAreaState>,
-    pub(crate) attack_areas: BTreeMap<i32, CountryAreaState>,
-    pub(crate) defend_guards: BTreeSet<i32>,
-    pub(crate) defend_guard_indices: BTreeSet<i32>,
-    pub(crate) attack_guards: BTreeSet<i32>,
-    pub(crate) attack_guard_indices: BTreeSet<i32>,
-    pub(crate) defend_country: i32,
-    pub(crate) attack_country: i32,
-    pub(crate) declare_active: bool,
-    pub(crate) prepare_active: bool,
-    pub(crate) war_active: bool,
+    inner: ServerCountryRegionState,
 }
 
 impl Default for CServerCountryRegion {
@@ -323,25 +179,11 @@ impl Default for CServerCountryRegion {
         Self {
             base: CServerRegion::default(),
             contenders: Vec::new(),
-            symbol_hold: BTreeMap::new(),
             defend_gates: BTreeMap::new(),
             attack_gates: BTreeMap::new(),
             defend_flags: BTreeMap::new(),
             attack_flags: BTreeMap::new(),
-            defend_areas: BTreeMap::new(),
-            attack_areas: BTreeMap::new(),
-            defend_guards: BTreeSet::new(),
-            defend_guard_indices: BTreeSet::new(),
-            attack_guards: BTreeSet::new(),
-            attack_guard_indices: BTreeSet::new(),
-            // Exact ctor не инициализирует эти primitive-поля. Нулевые стороны
-            // и закрытые фазы — безопасное нейтральное состояние до первых
-            // доказанных CountryWarSys writer/callback-ов, без чтения UB.
-            defend_country: 0,
-            attack_country: 0,
-            declare_active: false,
-            prepare_active: false,
-            war_active: false,
+            inner: ServerCountryRegionState::default(),
         }
     }
 }
@@ -372,12 +214,12 @@ impl CServerCountryRegion {
                 context,
             )
             .map_err(CountryRegionDecodeError::Base)?;
-        self.decode_gate_section(source, cursor, WC_DEFEND, area_width, area_height)?;
-        self.decode_gate_section(source, cursor, WC_ATTACK, area_width, area_height)?;
-        self.decode_flag_section(source, cursor, WC_DEFEND, area_width, area_height)?;
-        self.decode_flag_section(source, cursor, WC_ATTACK, area_width, area_height)?;
-        self.decode_area_section(source, cursor, WC_DEFEND)?;
-        self.decode_area_section(source, cursor, WC_ATTACK)?;
+        self.decode_gate_section(source, cursor, COUNTRY_CAMP_DEFEND, area_width, area_height)?;
+        self.decode_gate_section(source, cursor, COUNTRY_CAMP_ATTACK, area_width, area_height)?;
+        self.decode_flag_section(source, cursor, COUNTRY_CAMP_DEFEND, area_width, area_height)?;
+        self.decode_flag_section(source, cursor, COUNTRY_CAMP_ATTACK, area_width, area_height)?;
+        self.decode_area_section(source, cursor, COUNTRY_CAMP_DEFEND)?;
+        self.decode_area_section(source, cursor, COUNTRY_CAMP_ATTACK)?;
         Ok(true)
     }
 
@@ -390,14 +232,14 @@ impl CServerCountryRegion {
         let Some(gate) = self.gates(camp).and_then(|gates| gates.get(&city_gate_id)) else {
             return false;
         };
-        if operation == OC_CLOSE && !city_gate_footprint_is_clear(&self.base, gate) {
+        if operation == GATE_OP_CLOSE && !city_gate_footprint_is_clear(&self.base, gate) {
             return false;
         }
         let gate = self
             .gates_mut(camp)
             .and_then(|gates| gates.get_mut(&city_gate_id))
             .expect("gate найден до неизменяющего map вызова");
-        let update = operate_city_gate(gate, operation);
+        let update = apply_gate_operation(gate, country_gate_operation_update(operation));
         if let Some(update) = update {
             let _legacy_void = self.base.apply_build_block(update);
         }
@@ -408,12 +250,7 @@ impl CServerCountryRegion {
         let Some(gate) = self.gates(camp).and_then(|gates| gates.get(&city_gate_id)) else {
             return -1;
         };
-        match gate.action() {
-            7 => 0,
-            0 | 1 => 1,
-            6 => 2,
-            _ => -1,
-        }
+        gate_client_state(gate.action())
     }
 
     pub(crate) fn refresh_gates(&mut self) -> Vec<BuildClientPublication> {
@@ -421,10 +258,11 @@ impl CServerCountryRegion {
         let mut updates = Vec::new();
         let defend_ids: Vec<_> = self.defend_gates.keys().copied().collect();
         for gate_id in defend_ids {
-            let update = refresh_city_gate_object_state(
+            let update = apply_gate_operation(
                 self.defend_gates
                     .get_mut(&gate_id)
                     .expect("snapshot построен из defend gate map"),
+                country_gate_operation_update(GATE_OP_REFRESH),
             );
             if let Some(update) = update {
                 let _legacy_void = self.base.apply_build_block(update);
@@ -438,10 +276,11 @@ impl CServerCountryRegion {
         }
         let attack_ids: Vec<_> = self.attack_gates.keys().copied().collect();
         for gate_id in attack_ids {
-            let update = refresh_city_gate_object_state(
+            let update = apply_gate_operation(
                 self.attack_gates
                     .get_mut(&gate_id)
                     .expect("snapshot построен из attack gate map"),
+                country_gate_operation_update(GATE_OP_REFRESH),
             );
             if let Some(update) = update {
                 let _legacy_void = self.base.apply_build_block(update);
@@ -463,7 +302,7 @@ impl CServerCountryRegion {
         let mut build_updates = self.refresh_gates();
         build_updates.extend(self.refresh_flags());
         CountryClearRefreshEffects {
-            guard_targets: self.guard_refresh_targets(),
+            guard_targets: self.inner.guard_refresh_targets(),
             build_updates,
         }
     }
@@ -498,28 +337,13 @@ impl CServerCountryRegion {
 
         // Нулевые стороны заданы safe constructor-ом до первого
         // `CountryWarSys::update_apply_war`; exact ctor оставлял здесь UB.
-        let defend_country = self.defend_country;
-        let areas = if i32::from(player.country) == defend_country {
-            &mut self.defend_areas
-        } else {
-            let attack_country = self.attack_country;
-            if i32::from(player.country) != attack_country {
-                return Ok(self.base.region.get_return_point());
-            }
-            &mut self.attack_areas
-        };
-        let area_key = context.random_country_area_key(areas.len() as u32);
-        // Original `std::map::operator[]` вставлял zeroed/default `tagArea`,
-        // если RNG key отсутствовал среди загруженных IDs.
-        let area = areas.entry(area_key).or_default();
-        Ok(RegionReturnPoint {
-            region_id: self.base.id,
-            left: area.left,
-            top: area.top,
-            right: area.right,
-            bottom: area.bottom,
-            direction: -1,
-        })
+        match self
+            .inner
+            .war_return_point(self.base.id, player.country, context)
+        {
+            Some(point) => Ok(point),
+            None => Ok(self.base.region.get_return_point()),
+        }
     }
 
     pub(crate) fn set_enter_pos_xy<Context: CountryEntryContext>(
@@ -562,16 +386,7 @@ impl CServerCountryRegion {
         camp: i32,
         context: &mut Context,
     ) -> Result<Option<RegionRandomPosition>, RegionCellAccessBlock> {
-        let areas = match camp {
-            WC_DEFEND => &self.defend_areas,
-            WC_ATTACK => &self.attack_areas,
-            _ => return Ok(None),
-        };
-        let index = context.random_below(areas.len() as i32);
-        let Some(area) = usize::try_from(index)
-            .ok()
-            .and_then(|index| areas.values().nth(index))
-        else {
+        let Some(area) = self.inner.war_entry_area(camp, context) else {
             return Ok(None);
         };
         self.base
@@ -591,7 +406,7 @@ impl CServerCountryRegion {
         x: i32,
         y: i32,
     ) -> Result<RegionSecurity, CountrySecurityError> {
-        if !self.war_active {
+        if !self.inner.war_active() {
             return Ok(RegionSecurity::SAFE);
         }
         self.base
@@ -668,19 +483,14 @@ impl CServerCountryRegion {
     }
 
     pub(crate) fn is_win_symbol(&self, country: i32, symbol_id: i32) -> bool {
-        self.symbol_hold.get(&symbol_id) == Some(&country)
+        self.inner.is_win_symbol(country, symbol_id)
     }
 
     pub(crate) fn cancel_contend_by_player(
         &mut self,
         player: Option<&CountryContendPlayer>,
     ) -> Result<bool, CountryNullPlayerCancelBlock> {
-        // VERIFIED_DISASSEMBLY RVA 0x001CCAC0: условие оригинала инвертировано;
-        // любой реальный player немедленно получает `false` без side effects.
-        if player.is_some() {
-            return Ok(false);
-        }
-        Err(CountryNullPlayerCancelBlock)
+        decide_cancel_contend_by_player(player.is_some())
     }
 
     pub(crate) fn on_enter_contend<Context: CountryContendEntryContext>(
@@ -797,7 +607,7 @@ impl CServerCountryRegion {
         };
         let country = player.country;
         self.cancel_contend_by_symbol(contender.id, context);
-        self.symbol_hold.insert(contender.id, i32::from(country));
+        self.inner.capture_symbol(contender.id, i32::from(country));
         context.on_country_win_one_symbol(i32::from(country), contender.id);
         context.send_country_symbol_captured_region_notice(country, &contender.name);
         context.send_country_symbol_captured_top_info(country, &self.base.name, &contender.name);
@@ -805,114 +615,68 @@ impl CServerCountryRegion {
 
     /// Writer-side region projection: defend записывается раньше attack.
     pub(crate) fn set_country_sides(&mut self, defend_country: i32, attack_country: i32) {
-        self.defend_country = defend_country;
-        self.attack_country = attack_country;
+        self.inner.set_country_sides(defend_country, attack_country);
     }
 
     /// Country vtable `0x65D464`, slot `+0x104`, указывает на единственный
     /// `ret` по `0x485540`: после записи сторон эта разновидность региона не
     /// фильтрует contender-ов, в отличие от city/village war owners.
-    pub(crate) const fn update_contend_player(&mut self) {}
+    pub(crate) const fn update_contend_player(&mut self) {
+        self.inner.update_contend_player();
+    }
 
     pub(crate) const fn country_side_bytes(&self) -> (u8, u8) {
-        (self.defend_country as u8, self.attack_country as u8)
+        self.inner.country_side_bytes()
     }
 
     pub(crate) fn on_declare_begin(&mut self, region_id: i32) {
-        if self.base.id == region_id {
-            self.declare_active = true;
-        }
+        self.inner.on_declare_begin(region_id, self.base.id);
     }
 
     pub(crate) fn on_declare_end(&mut self, region_id: i32) {
-        if self.base.id == region_id {
-            self.declare_active = false;
-        }
+        self.inner.on_declare_end(region_id, self.base.id);
     }
 
     pub(crate) fn on_prepare_begin(&mut self, region_id: i32) {
-        if self.base.id != region_id {
-            return;
-        }
-        if !self.prepare_active {
-            self.declare_active = true;
-        }
+        self.inner.on_prepare_begin(region_id, self.base.id);
     }
 
     pub(crate) fn on_prepare_end(&mut self, region_id: i32) {
-        if self.base.id != region_id {
-            return;
-        }
-        if self.prepare_active {
-            self.declare_active = false;
-        }
+        self.inner.on_prepare_end(region_id, self.base.id);
     }
 
     pub(crate) fn on_war_start(&mut self, region_id: i32) {
-        if self.base.id == region_id {
-            self.war_active = true;
-        }
+        self.inner.on_war_start(region_id, self.base.id);
     }
 
     pub(crate) fn on_war_timeout(&mut self, region_id: i32) {
-        if self.base.id == region_id {
-            self.war_active = false;
-        }
+        self.inner.on_war_timeout(region_id, self.base.id);
     }
 
     pub(crate) fn on_war_end(&mut self, region_id: i32) {
         // VERIFIED_DISASSEMBLY: vtable `+0x150` совпадает с `OnTimeOut`
         // `+0x14C` и указывает на одно RVA `0x001CAC60`.
-        self.on_war_timeout(region_id);
+        self.inner.on_war_end(region_id, self.base.id);
     }
 
     pub(crate) fn on_flag_destroy(&mut self, region_id: i32, _country: i32) {
-        if self.base.id == region_id {
-            self.war_active = false;
-        }
+        self.inner.on_flag_destroy(region_id, self.base.id);
     }
 
     pub(crate) fn add_gurd_monster(&mut self, monster_id: i32, camp: i32) {
-        if let Some(guards) = self.guards_mut(camp) {
-            guards.insert(monster_id);
-        }
+        self.inner.add_gurd_monster(monster_id, camp);
     }
 
     pub(crate) fn del_gurd_monster(&mut self, monster_id: i32, camp: i32) {
-        if let Some(guards) = self.guards_mut(camp) {
-            guards.remove(&monster_id);
-        }
+        self.inner.del_gurd_monster(monster_id, camp);
     }
 
     pub(crate) fn add_guard_index(&mut self, spawn_index: i32, camp: i32) {
-        if let Some(indices) = self.guard_indices_mut(camp) {
-            indices.insert(spawn_index);
-        }
+        self.inner.add_guard_index(spawn_index, camp);
     }
 
     pub(crate) fn guard_refresh_targets(&self) -> CountryGuardRefreshTargets {
-        CountryGuardRefreshTargets {
-            monster_ids: self
-                .defend_guards
-                .iter()
-                .chain(&self.attack_guards)
-                .copied()
-                .collect(),
-            spawn_indices: self
-                .defend_guard_indices
-                .iter()
-                .map(|&spawn_index| CountryGuardSpawnTarget {
-                    spawn_index,
-                    camp: WC_DEFEND,
-                })
-                .chain(self.attack_guard_indices.iter().map(|&spawn_index| {
-                    CountryGuardSpawnTarget {
-                        spawn_index,
-                        camp: WC_ATTACK,
-                    }
-                }))
-                .collect(),
-        }
+        self.inner.guard_refresh_targets()
     }
 
     pub(crate) fn get_camp<Context: CountryCampContext>(
@@ -920,20 +684,7 @@ impl CServerCountryRegion {
         player_id: i32,
         context: &mut Context,
     ) -> i32 {
-        if player_id == 0 {
-            return -1;
-        }
-        let Some(country) = context.country_player_country(player_id) else {
-            return -1;
-        };
-        if i32::from(country) == self.defend_country {
-            return WC_DEFEND;
-        }
-        if i32::from(country) == self.attack_country {
-            WC_ATTACK
-        } else {
-            -1
-        }
+        self.inner.get_camp(player_id, context)
     }
 
     pub(crate) fn gate_is_attack_able<Context: CountryCampContext>(
@@ -978,43 +729,26 @@ impl CServerCountryRegion {
         }
         // Safe constructor задаёт закрытую фазу до первого OnStart; exact ctor
         // оставлял byte неинициализированным.
-        if !self.war_active {
+        if !self.inner.war_active() {
             return false;
         }
 
         let camp = self.get_camp(attacker.id, context);
         match camp {
-            WC_DEFEND => self.target_collection_contains(WC_ATTACK, kind, target.id),
-            WC_ATTACK => self.target_collection_contains(WC_DEFEND, kind, target.id),
+            COUNTRY_CAMP_DEFEND => self.target_collection_contains(COUNTRY_CAMP_ATTACK, kind, target.id),
+            COUNTRY_CAMP_ATTACK => self.target_collection_contains(COUNTRY_CAMP_DEFEND, kind, target.id),
             _ => false,
         }
     }
 
     fn target_collection_contains(&self, camp: i32, kind: CountryTargetKind, id: i32) -> bool {
         match (camp, kind) {
-            (WC_DEFEND, CountryTargetKind::Gate) => self.defend_gates.contains_key(&id),
-            (WC_ATTACK, CountryTargetKind::Gate) => self.attack_gates.contains_key(&id),
-            (WC_DEFEND, CountryTargetKind::Flag) => self.defend_flags.contains_key(&id),
-            (WC_ATTACK, CountryTargetKind::Flag) => self.attack_flags.contains_key(&id),
-            (WC_DEFEND, CountryTargetKind::Guard) => self.defend_guards.contains(&id),
-            (WC_ATTACK, CountryTargetKind::Guard) => self.attack_guards.contains(&id),
+            (COUNTRY_CAMP_DEFEND, CountryTargetKind::Gate) => self.defend_gates.contains_key(&id),
+            (COUNTRY_CAMP_ATTACK, CountryTargetKind::Gate) => self.attack_gates.contains_key(&id),
+            (COUNTRY_CAMP_DEFEND, CountryTargetKind::Flag) => self.defend_flags.contains_key(&id),
+            (COUNTRY_CAMP_ATTACK, CountryTargetKind::Flag) => self.attack_flags.contains_key(&id),
+            (_, CountryTargetKind::Guard) => self.inner.guard_collection_contains(camp, id),
             _ => false,
-        }
-    }
-
-    fn guards_mut(&mut self, camp: i32) -> Option<&mut BTreeSet<i32>> {
-        match camp {
-            WC_DEFEND => Some(&mut self.defend_guards),
-            WC_ATTACK => Some(&mut self.attack_guards),
-            _ => None,
-        }
-    }
-
-    fn guard_indices_mut(&mut self, camp: i32) -> Option<&mut BTreeSet<i32>> {
-        match camp {
-            WC_DEFEND => Some(&mut self.defend_guard_indices),
-            WC_ATTACK => Some(&mut self.attack_guard_indices),
-            _ => None,
         }
     }
 
@@ -1142,71 +876,34 @@ impl CServerCountryRegion {
         for _ in 0..count.max(0) {
             let area =
                 read_country_area(source, cursor).map_err(CountryRegionDecodeError::Input)?;
-            self.areas_mut(camp)
-                .expect("decoder передаёт только доказанный camp")
-                .insert(area.id, area);
+            self.inner.insert_decoded_area(camp, area);
         }
         Ok(())
     }
 
     fn gates(&self, camp: i32) -> Option<&BTreeMap<i32, CCityGate>> {
         match camp {
-            WC_DEFEND => Some(&self.defend_gates),
-            WC_ATTACK => Some(&self.attack_gates),
+            COUNTRY_CAMP_DEFEND => Some(&self.defend_gates),
+            COUNTRY_CAMP_ATTACK => Some(&self.attack_gates),
             _ => None,
         }
     }
 
     fn gates_mut(&mut self, camp: i32) -> Option<&mut BTreeMap<i32, CCityGate>> {
         match camp {
-            WC_DEFEND => Some(&mut self.defend_gates),
-            WC_ATTACK => Some(&mut self.attack_gates),
+            COUNTRY_CAMP_DEFEND => Some(&mut self.defend_gates),
+            COUNTRY_CAMP_ATTACK => Some(&mut self.attack_gates),
             _ => None,
         }
     }
 
     fn flags_mut(&mut self, camp: i32) -> Option<&mut BTreeMap<i32, CBuild>> {
         match camp {
-            WC_DEFEND => Some(&mut self.defend_flags),
-            WC_ATTACK => Some(&mut self.attack_flags),
+            COUNTRY_CAMP_DEFEND => Some(&mut self.defend_flags),
+            COUNTRY_CAMP_ATTACK => Some(&mut self.attack_flags),
             _ => None,
         }
     }
-
-    fn areas_mut(&mut self, camp: i32) -> Option<&mut BTreeMap<i32, CountryAreaState>> {
-        match camp {
-            WC_DEFEND => Some(&mut self.defend_areas),
-            WC_ATTACK => Some(&mut self.attack_areas),
-            _ => None,
-        }
-    }
-}
-
-fn legacy_country_damage_decrement(
-    max_time: i32,
-    damage: i32,
-    max_hp: u32,
-    dec_time_param: f32,
-) -> Result<i32, CountryDamageArithmeticBlock> {
-    let block = || CountryDamageArithmeticBlock {
-        max_time,
-        damage,
-        max_hp,
-        dec_time_param_bits: dec_time_param.to_bits(),
-    };
-
-    // VERIFIED_DISASSEMBLY RVA 0x001CAFF0: damage и unsigned max HP сначала
-    // становятся f32; отношение с global factor сохраняется как f32, затем
-    // `fild max_time`, умножение и `fistp i32` идут с truncation RC.
-    let damage_as_float = damage as f32;
-    let max_hp_as_float = max_hp as f32;
-    let ratio = ((f64::from(damage_as_float) / f64::from(max_hp_as_float))
-        * f64::from(dec_time_param)) as f32;
-    let scaled = f64::from(max_time) * f64::from(ratio);
-    if !scaled.is_finite() || scaled < f64::from(i32::MIN) || scaled >= 2_147_483_648.0_f64 {
-        return Err(block());
-    }
-    Ok(scaled.trunc() as i32)
 }
 
 fn country_contend_percentage(
@@ -1225,34 +922,14 @@ fn country_contend_percentage(
         })
 }
 
-#[derive(Clone, Copy)]
-enum CountryTargetKind {
-    Gate,
-    Flag,
-    Guard,
-}
-
-fn operate_city_gate(gate: &mut CCityGate, operation: i32) -> Option<BuildBlockUpdate> {
-    match operation {
-        OC_OPEN => apply_gate_action(gate, 7),
-        OC_CLOSE => apply_gate_action(gate, 1),
-        OC_REFRESH => {
-            gate.refresh_hp();
-            apply_gate_action(gate, 7)
-        }
-        // Country pointer-overload, в отличие от city-owner, для `OC_Died`
-        // и неизвестных operation успешно ничего не делает.
-        _ => None,
+fn apply_gate_operation(
+    gate: &mut CCityGate,
+    rule: GateOperationUpdate,
+) -> Option<BuildBlockUpdate> {
+    if rule.refresh_hp {
+        gate.refresh_hp();
     }
-}
-
-fn refresh_city_gate_object_state(gate: &mut CCityGate) -> Option<BuildBlockUpdate> {
-    gate.refresh_hp();
-    apply_gate_action(gate, 7)
-}
-
-fn apply_gate_action(gate: &mut CCityGate, action: u16) -> Option<BuildBlockUpdate> {
-    gate.set_action(action)
+    rule.next_action.and_then(|action| gate.set_action(action))
 }
 
 fn city_gate_publication(region_id: i32, gate: &CCityGate) -> BuildClientPublication {
@@ -1294,26 +971,7 @@ fn read_country_gate_build(
     let bytes = read_region_array::<0x2C>(source, cursor, "tagGate scalar block")?;
     let name = read_country_c_string(source, cursor, "tagGate.strName")?;
     let script = read_country_c_string(source, cursor, "tagGate.strScript")?;
-    // VERIFIED_DISASSEMBLY RVA 0x001CD3F0: country `tagGate` начинается с
-    // picture ID; city `tagBuild` имеет дополнительный logical ID в field_00.
-    // Последний DWORD `field_28` остаётся сознательно прочитанной частью
-    // `bytes`, но исходная функция не переносит его в созданный gate.
-    Ok(CountryGateBuild {
-        picture_id: country_i32_at(&bytes, 0x00),
-        direction: country_i32_at(&bytes, 0x04),
-        action: LegacyReader::at(&bytes, 0x08)
-            .and_then(|mut reader| reader.read_u16())
-            .expect("фиксированный country block содержит action"),
-        max_hp: country_i32_at(&bytes, 0x0C),
-        defence: country_i32_at(&bytes, 0x10),
-        width_increment: country_i32_at(&bytes, 0x14),
-        title_x: country_i32_at(&bytes, 0x18),
-        title_y: country_i32_at(&bytes, 0x1C),
-        height_increment: country_i32_at(&bytes, 0x20),
-        element_resistance: country_i32_at(&bytes, 0x24),
-        name,
-        script,
-    })
+    Ok(country_gate_build_from_block(&bytes, name, script))
 }
 
 fn read_country_flag_build(
@@ -1323,22 +981,7 @@ fn read_country_flag_build(
     let bytes = read_region_array::<0x28>(source, cursor, "tagFlag scalar block")?;
     let name = read_country_c_string(source, cursor, "tagFlag.strName")?;
     let script = read_country_c_string(source, cursor, "tagFlag.strScript")?;
-    // VERIFIED_DISASSEMBLY RVA 0x001CD3F0: field_00 — graphics ID;
-    // field_04 — direction; fields_08..20 — шесть CBuild properties/position.
-    // field_24 входит в wire, но не переносится в factory-объект.
-    Ok(CountryFlagBuild {
-        picture_id: country_i32_at(&bytes, 0x00),
-        direction: country_i32_at(&bytes, 0x04),
-        max_hp: country_i32_at(&bytes, 0x08),
-        defence: country_i32_at(&bytes, 0x0C),
-        width_increment: country_i32_at(&bytes, 0x10),
-        title_x: country_i32_at(&bytes, 0x14),
-        title_y: country_i32_at(&bytes, 0x18),
-        height_increment: country_i32_at(&bytes, 0x1C),
-        element_resistance: country_i32_at(&bytes, 0x20),
-        name,
-        script,
-    })
+    Ok(country_flag_build_from_block(&bytes, name, script))
 }
 
 fn read_country_area(
@@ -1346,13 +989,7 @@ fn read_country_area(
     cursor: &mut usize,
 ) -> Result<CountryAreaState, RegionDecodeInputBlock> {
     let bytes = read_region_array::<0x14>(source, cursor, "tagArea scalar block")?;
-    Ok(CountryAreaState {
-        id: country_i32_at(&bytes, 0x00),
-        left: country_i32_at(&bytes, 0x04),
-        top: country_i32_at(&bytes, 0x08),
-        right: country_i32_at(&bytes, 0x0C),
-        bottom: country_i32_at(&bytes, 0x10),
-    })
+    Ok(country_area_state_from_block(&bytes))
 }
 
 fn read_country_i32(
@@ -1391,36 +1028,6 @@ fn read_country_c_string(
             return Ok(value);
         }
         value.push(byte);
-    }
-}
-
-fn country_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
-    LegacyReader::at(bytes, offset)
-        .and_then(|mut reader| reader.read_i32())
-        .expect("фиксированный country gate block содержит поле")
-}
-
-fn country_gate_count_field(camp: i32) -> &'static str {
-    match camp {
-        WC_DEFEND => "m_DefendGates count",
-        WC_ATTACK => "m_AttackGates count",
-        _ => "invalid country gate camp count",
-    }
-}
-
-fn country_flag_count_field(camp: i32) -> &'static str {
-    match camp {
-        WC_DEFEND => "m_DefendFlags count",
-        WC_ATTACK => "m_AttackFlags count",
-        _ => "invalid country flag camp count",
-    }
-}
-
-fn country_area_count_field(camp: i32) -> &'static str {
-    match camp {
-        WC_DEFEND => "m_DefendArea count",
-        WC_ATTACK => "m_AttackArea count",
-        _ => "invalid country area camp count",
     }
 }
 

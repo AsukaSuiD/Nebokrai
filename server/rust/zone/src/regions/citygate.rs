@@ -29,6 +29,15 @@
 //! death-pipeline. Особенность зафиксирована как поведение оригинала и не
 //! «улучшается»; сам death-контракт ворот остаётся открытым вопросом и
 //! переносится будущей порцией death-pipeline.
+//!
+//! Вторая порция (волна Z-M-X, семья регионов country+nation+city + гейты)
+//! добавляет региональное гейтовое тело: общие opcode константы
+//! `OperatorCityGate`, wire-проекцию client gate state, скалярные правила
+//! gate-операций обоих владельцев (city `0x001CF370..0x001CF640` и country
+//! `0x001CAC80/0x001CADD0/0x001CB1E0..0x001CB310`) и общий x-major footprint
+//! scan (`0x001CAAA0`). Статусы сохранены из шапок старых владельцев без
+//! повышения; сами region-обходы карт и применение block-эффектов остаются у
+//! переходных aggregate-ов старого пакета.
 
 use nebokrai_shared::values::CGuid;
 
@@ -184,4 +193,121 @@ pub const fn hurt_owner_update(
         attacker_type,
         attacker_id,
     }
+}
+
+/// Opcode-константы семьи `OperatorCityGate`; city владелец дополнительно
+/// достигает `OC_Died`, country pointer-overload для него и для неизвестных
+/// операций успешно ничего не делает.
+pub const GATE_OP_OPEN: i32 = 0;
+pub const GATE_OP_CLOSE: i32 = 1;
+pub const GATE_OP_REFRESH: i32 = 2;
+pub const GATE_OP_DIED: i32 = 3;
+
+/// Wire-проекция действующего action ворот в client gate state: `7` —
+/// открытые (`0`), `0 | 1` — закрытые (`1`), `6` — разрушенные (`2`),
+/// остальные действия исходно дают `-1`. Обе region-семьи (city и country)
+/// читают одно и то же отображение.
+pub const fn gate_client_state(action: u16) -> i32 {
+    match action {
+        7 => 0,
+        0 | 1 => 1,
+        6 => 2,
+        _ => -1,
+    }
+}
+
+/// Скалярное решение gate-операции owning региона: выполнить ли предварительный
+/// `RefreshHP` и какой `SetAction` применять затем. Сам эффект карты и
+/// выбор concrete gate остаются у region-владельца.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GateOperationUpdate {
+    pub refresh_hp: bool,
+    pub next_action: Option<u16>,
+}
+
+/// City `OperatorCityGate` (`0x001CF370..0x001CF640`): refresh семьи обновляет
+/// HP до action `7`; `OC_Died` применяет action `6`.
+pub const fn city_gate_operation_update(operation: i32) -> GateOperationUpdate {
+    let empty = GateOperationUpdate {
+        refresh_hp: false,
+        next_action: None,
+    };
+    match operation {
+        GATE_OP_OPEN => GateOperationUpdate {
+            refresh_hp: false,
+            next_action: Some(7),
+        },
+        GATE_OP_CLOSE => GateOperationUpdate {
+            refresh_hp: false,
+            next_action: Some(1),
+        },
+        GATE_OP_REFRESH => GateOperationUpdate {
+            refresh_hp: true,
+            next_action: Some(7),
+        },
+        GATE_OP_DIED => GateOperationUpdate {
+            refresh_hp: false,
+            next_action: Some(6),
+        },
+        _ => empty,
+    }
+}
+
+/// Country pointer-overload (`0x001CAC80/0x001CADD0`): в отличие от
+/// city-владельца, для `OC_Died` и неизвестных operation успешно ничего не
+/// делает.
+pub const fn country_gate_operation_update(operation: i32) -> GateOperationUpdate {
+    let empty = GateOperationUpdate {
+        refresh_hp: false,
+        next_action: None,
+    };
+    match operation {
+        GATE_OP_OPEN => GateOperationUpdate {
+            refresh_hp: false,
+            next_action: Some(7),
+        },
+        GATE_OP_CLOSE => GateOperationUpdate {
+            refresh_hp: false,
+            next_action: Some(1),
+        },
+        GATE_OP_REFRESH => GateOperationUpdate {
+            refresh_hp: true,
+            next_action: Some(7),
+        },
+        _ => empty,
+    }
+}
+
+/// Общий PDB-symbol `CServerCityRegion::CityGateIsClose` RVA `0x001CAAA0`:
+/// country-region вызывает именно его, поэтому обе region-цепочки используют
+/// один доказанный x-major footprint scan без объединения самих владельцев.
+/// Footprint — block-снимок ворот с `block=0`; block-lookup owning региона
+/// передаётся closure-швом и возвращает packed cell block.
+pub fn footprint_is_clear(
+    footprint: &BuildBlockUpdate,
+    mut block_at: impl FnMut(i32, i32) -> Option<u8>,
+) -> bool {
+    let width = i32::from(footprint.width_increment);
+    let height = i32::from(footprint.height_increment);
+    // VERIFIED_DISASSEMBLY RVA 0x001CAAA0: x86 `sub/add` и loop increment
+    // работают по DWORD с wrapping; это определяет поведение точнее, чем
+    // потенциальный signed-overflow UB исходного C++. Существенный фрагмент:
+    // `sub ebx,edi; add edi,eax; add edi,1; cmp edi,ebp; jle ...`.
+    let left = footprint.tile_x.wrapping_sub(width);
+    let right = footprint.tile_x.wrapping_add(width);
+    let top = footprint.tile_y.wrapping_sub(height);
+    let bottom = footprint.tile_y.wrapping_add(height);
+
+    let mut tile_x = left;
+    while tile_x <= right {
+        let mut tile_y = top;
+        while tile_y <= bottom {
+            if block_at(tile_x, tile_y).is_some_and(|cell| cell & 7 == 3) {
+                return false;
+            }
+            tile_y = tile_y.wrapping_add(1);
+        }
+        tile_x = tile_x.wrapping_add(1);
+    }
+    true
 }
