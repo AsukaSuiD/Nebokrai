@@ -4,6 +4,7 @@ pub mod camountlimitgoodscontainer; // CAmountLimitGoodsContainer: storage/query
 pub mod cbank; // CBank: lock-gate поверх однослотового wallet.
 pub mod cbattlefairyproperty; // CBattleFairyProperty: конфигурация и свойства боевой феи.
 pub mod ccontainer; // CContainer: базовый lifecycle контейнера.
+pub mod cdepot; // CDepot: lock/position/expansion core склада с extension-anchor группами.
 pub mod cgoods; // CGoods: object/addon core товара и кодек persistence-wire.
 pub mod cgoodscontainer; // CGoodsContainer: базовый derived lifecycle owner type/id/mode и stack-merge.
 pub mod cjifen; // CJiFen: JiFen-вариант однослотового currency-контейнера.
