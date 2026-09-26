@@ -131,10 +131,10 @@ impl CGame {
         self.leave_word_id = loaded.leave_world_id;
     }
 
- /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
- ///
- /// Успешное открытие остаётся успешной загрузкой даже после stream
- /// fail-state. Метод не запускает сервисы и не публикует значения файла.
+    /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
+    ///
+    /// Успешное открытие остаётся успешной загрузкой даже после stream
+    /// fail-state. Метод не запускает сервисы и не публикует значения файла.
     pub fn load_setup<ClaimSingleInstance>(
         &mut self,
         runtime_directory: &Path,
@@ -184,11 +184,11 @@ impl CGame {
         })
     }
 
- /// Читает `serverSetup.ini`, не очищая прежний GameServer registry.
- ///
- /// Ошибка открытия не меняет map и соответствует старому `false`.
- /// Успешное открытие сохраняет legacy-успех даже после stream fail-state;
- /// безопасная граница останавливает только запись с неизвестным первым ID.
+    /// Читает `serverSetup.ini`, не очищая прежний GameServer registry.
+    ///
+    /// Ошибка открытия не меняет map и соответствует старому `false`.
+    /// Успешное открытие сохраняет legacy-успех даже после stream fail-state;
+    /// безопасная граница останавливает только запись с неизвестным первым ID.
     pub fn load_server_setup(
         &mut self,
         runtime_directory: &Path,
@@ -339,11 +339,11 @@ impl CGame {
         }
     }
 
- /// Применяет одну DB-пару enemy factions через живые organizing owners.
- ///
- /// Контекст форматирования принадлежит текущему `CGame`: process-оболочка
- /// не может корректно держать вторую копию StringTable или захватывать
- /// `CGame` внешней closure на время его же `Init`.
+    /// Применяет одну DB-пару enemy factions через живые organizing owners.
+    ///
+    /// Контекст форматирования принадлежит текущему `CGame`: process-оболочка
+    /// не может корректно держать вторую копию StringTable или захватывать
+    /// `CGame` внешней closure на время его же `Init`.
     pub(crate) fn apply_loaded_enemy_faction_relation(
         &self,
         organizing: &mut COrganizingCtrl,
@@ -390,16 +390,16 @@ impl CGame {
         Ok(())
     }
 
- /// Выполняет `CGame::Init` до запуска write/player-load workers.
- ///
- /// Resources, setup, DB, registries, timers и network owners создаются в
- /// исходном fail-fast порядке; уже выполненные стадии при ошибке не откатываются.
- /// Country initialization идёт после параметров и optional honor ranks, затем
- /// запускается country war. Goods War DB reload выполняется между Country и
- /// DbMisc, но его ошибка не блокирует Init. Increment log загружается после
- /// general variables и также сохраняет свой старый нефатальный результат.
- /// Tiberius, resource callbacks и явные timer/clock owners заменяют globals,
- /// ADO и Windows API без перестановки стадий.
+    /// Выполняет `CGame::Init` до запуска write/player-load workers.
+    ///
+    /// Resources, setup, DB, registries, timers и network owners создаются в
+    /// исходном fail-fast порядке; уже выполненные стадии при ошибке не откатываются.
+    /// Country initialization идёт после параметров и optional honor ranks, затем
+    /// запускается country war. Goods War DB reload выполняется между Country и
+    /// DbMisc, но его ошибка не блокирует Init. Increment log загружается после
+    /// general variables и также сохраняет свой старый нефатальный результат.
+    /// Tiberius, resource callbacks и явные timer/clock owners заменяют globals,
+    /// ADO и Windows API без перестановки стадий.
     #[allow(
         clippy::too_many_arguments,
         reason = "прямые PlayerRanks/country/timer/increment owners заменяют прежние opaque callbacks"
@@ -579,9 +579,10 @@ impl CGame {
         events.push(WorldGameInitEvent::StringTablesCoded);
 
         const DUPLI_REGION_SETUP_PATH: &[u8] = b"setup/DupliRegionsSetup.ini";
-        self.dupli_region_setup = Some(CDupliRegionSetup::default());
+        self.content_catalogs.dupli_region_setup = Some(CDupliRegionSetup::default());
         let dupli_region_source = reload_context.read_resource(DUPLI_REGION_SETUP_PATH);
         let dupli_region_loaded = self
+            .content_catalogs
             .dupli_region_setup
             .as_mut()
             .expect("owner опубликован перед Load")
@@ -836,7 +837,7 @@ impl CGame {
         let char_codes = invalid_strings
             .as_ref()
             .and_then(|_| reload_context.read_resource(CHAR_CODES));
-        let _ = self.words_filter.initial(
+        let _ = self.content_catalogs.words_filter.initial(
             INVALID_STRINGS,
             CHAR_CODES,
             invalid_strings.as_deref(),
@@ -1481,9 +1482,9 @@ impl CGame {
         entries
     }
 
- /// Выполняет полный `CGame::Release` до legacy result `1`.
- /// Concrete Goods War owner освобождается между CityWar и RsRegion, как
- /// pointer-owner, но его Rust collections использует обычный Drop.
+    /// Выполняет полный `CGame::Release` до legacy result `1`.
+    /// Concrete Goods War owner освобождается между CityWar и RsRegion, как
+    /// pointer-owner, но его Rust collections использует обычный Drop.
     pub fn release<Context: WorldGameReleaseContext>(
         &mut self,
         context: &mut Context,
@@ -1574,7 +1575,7 @@ impl CGame {
         // пустых Rust map-node до немедленного `DeleteGame`.
         self.regions.clear();
 
-        let scripts_released = self.script_resources.clear();
+        let scripts_released = self.content_catalogs.script_resources.clear();
         for (owner, released) in [
             (
                 WorldGameReleaseOptionalOwner::FunctionListFileData,
@@ -1599,7 +1600,7 @@ impl CGame {
         let released = context.release_optional_owner(owner);
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
 
-        self.increment_shop_list.release();
+        self.content_catalogs.increment_shop_list.release();
         for owner in [WorldGameReleaseVoidOwner::UninitializeTimeToReturn] {
             context.release_void_owner(owner);
             events.push(WorldGameReleaseEvent::VoidOwner(owner));
@@ -1612,7 +1613,7 @@ impl CGame {
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseCountryHandler,
         ));
-        self.words_filter.clear();
+        self.content_catalogs.words_filter.clear();
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseWordsFilter,
         ));
@@ -1628,7 +1629,7 @@ impl CGame {
         events.push(WorldGameReleaseEvent::OrganizingParametersReleased(
             organizing_parameters,
         ));
-        self.quest_system.clear();
+        self.content_catalogs.quest_system.clear();
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseQuestSystem,
         ));
@@ -1737,7 +1738,7 @@ impl CGame {
         let released = context.release_optional_owner(owner);
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
         let owner = WorldGameReleaseOptionalOwner::DupliRegionSetup;
-        let released = self.dupli_region_setup.take().is_some();
+        let released = self.content_catalogs.dupli_region_setup.take().is_some();
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
 
         context.put_debug_string(b"WorldServer Exited!");
@@ -1750,11 +1751,11 @@ impl CGame {
         })
     }
 
- /// Создаёт и публикует World listener-owner, затем применяет setup.
- ///
- /// Ошибка `Host` оставляет новый owner опубликованным. Отсутствующее позднее
- /// поле возвращается только после успешного listen и hostname-resolution,
- /// то есть уже выполненные исходные побочные эффекты не откатываются.
+    /// Создаёт и публикует World listener-owner, затем применяет setup.
+    ///
+    /// Ошибка `Host` оставляет новый owner опубликованным. Отсутствующее позднее
+    /// поле возвращается только после успешного listen и hostname-resolution,
+    /// то есть уже выполненные исходные побочные эффекты не откатываются.
     pub fn init_net_server(&mut self) -> Result<(), WorldNetworkInitializationError> {
         let server = CMyNetServer::new(legacy_tick_ms());
         let listen_port =
@@ -1793,12 +1794,12 @@ impl CGame {
         Ok(())
     }
 
- /// Пересоздаёт initial World-to-Login client и ставит регистрацию мира.
- ///
- /// Bind, resolution либо connect error выполняют исходный close/delete и
- /// оставляют `net_client = None`. Если безопасная граница `dwNumber`
- /// достигается уже после connect, опубликованный подключённый owner и
- /// включённый control-send не откатываются.
+    /// Пересоздаёт initial World-to-Login client и ставит регистрацию мира.
+    ///
+    /// Bind, resolution либо connect error выполняют исходный close/delete и
+    /// оставляют `net_client = None`. Если безопасная граница `dwNumber`
+    /// достигается уже после connect, опубликованный подключённый owner и
+    /// включённый control-send не откатываются.
     pub async fn init_net_client(
         &mut self,
     ) -> Result<WorldClientInitialization, WorldClientInitializationError> {
@@ -1870,19 +1871,19 @@ impl CGame {
         })
     }
 
- /// Подключает новый LoginServer client и передаёт его World FIFO.
- ///
- /// Текущий `net_client` остаётся неизменным. Новый owner не получает
- /// control-send: его включит только связанный обработка typed handoff в
- /// исходной позиции `0x3FC03` после замены и постановки регистрации.
+    /// Подключает новый LoginServer client и передаёт его World FIFO.
+    ///
+    /// Текущий `net_client` остаётся неизменным. Новый owner не получает
+    /// control-send: его включит только связанный обработка typed handoff в
+    /// исходной позиции `0x3FC03` после замены и постановки регистрации.
     pub async fn reconnect_login_server(
         &self,
     ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
         self.login_reconnect_spec().reconnect_once().await
     }
 
- /// Отделяет ровно те данные, которые свободный reconnect-worker читал из
- /// process-global `g_pGame`: login endpoint и producer World FIFO.
+    /// Отделяет ровно те данные, которые свободный reconnect-worker читал из
+    /// process-global `g_pGame`: login endpoint и producer World FIFO.
     pub(crate) fn login_reconnect_spec(&self) -> WorldLoginReconnectSpec {
         WorldLoginReconnectSpec {
             login_ip: self.setup.login_ip.clone(),
@@ -1891,11 +1892,11 @@ impl CGame {
         }
     }
 
- /// Выполняет stop/wait/start owner вместо Win32 thread handle.
- ///
- /// Если старый worker спит, stop не будит его: `WaitForSingleObject` также
- /// ждал завершения полного `Sleep(8000)`. Ошибка создания не оставляет
- /// выдуманный handle и сообщается caller-у отдельным typed итогом.
+    /// Выполняет stop/wait/start owner вместо Win32 thread handle.
+    ///
+    /// Если старый worker спит, stop не будит его: `WaitForSingleObject` также
+    /// ждал завершения полного `Sleep(8000)`. Ошибка создания не оставляет
+    /// выдуманный handle и сообщается caller-у отдельным typed итогом.
     pub fn create_connect_login_thread(
         &mut self,
         runtime: tokio::runtime::Handle,
@@ -1934,13 +1935,13 @@ impl CGame {
         completion
     }
 
- /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
- ///
- /// После начального stop-check каждая попытка всегда следует за полной
- /// восьмисекундной паузой. Stop, пришедший во время паузы, намеренно не
- /// отменяет следующую попытку: EXE проверял флаг только после её failure.
- /// `ReConnectLoginServer`-ошибки остаются внутренней причиной следующего
- /// retry и не получают нового observable error mapping.
+    /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
+    ///
+    /// После начального stop-check каждая попытка всегда следует за полной
+    /// восьмисекундной паузой. Stop, пришедший во время паузы, намеренно не
+    /// отменяет следующую попытку: EXE проверял флаг только после её failure.
+    /// `ReConnectLoginServer`-ошибки остаются внутренней причиной следующего
+    /// retry и не получают нового observable error mapping.
     pub async fn connect_login_server_func(
         &mut self,
         connect_thread_exit: &AtomicBool,
@@ -1965,12 +1966,12 @@ impl CGame {
         }
     }
 
- /// Ставит LoginServer полный snapshot аккаунтов в порядке online-list.
- ///
- /// `Ok(None)` буквально соответствует nullable `s_pNetClient` и не создаёт
- /// сообщения. Ошибки безопасной границы возникают до единственного send;
- /// уже собранный локальный payload при этом, как и старый stack-owner, не
- /// становится наблюдаемым соседним процессом.
+    /// Ставит LoginServer полный snapshot аккаунтов в порядке online-list.
+    ///
+    /// `Ok(None)` буквально соответствует nullable `s_pNetClient` и не создаёт
+    /// сообщения. Ошибки безопасной границы возникают до единственного send;
+    /// уже собранный локальный payload при этом, как и старый stack-owner, не
+    /// становится наблюдаемым соседним процессом.
     pub fn send_cdkey_to_login_server(
         &self,
     ) -> Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError> {
@@ -2010,10 +2011,10 @@ impl CGame {
         }))
     }
 
- /// Выполняет один точный drain/process batch фонового DB-load worker-а.
- ///
- /// Несколько worker-ов конкурируют только за атомарный drain очереди; один
- /// победитель последовательно обрабатывает весь полученный FIFO-list.
+    /// Выполняет один точный drain/process batch фонового DB-load worker-а.
+    ///
+    /// Несколько worker-ов конкурируют только за атомарный drain очереди; один
+    /// победитель последовательно обрабатывает весь полученный FIFO-list.
     pub async fn process_player_load_batch<Loader, LoadLargess, GetTick>(
         &self,
         worker_index: u32,

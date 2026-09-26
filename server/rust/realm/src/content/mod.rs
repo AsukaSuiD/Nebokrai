@@ -17,6 +17,7 @@ pub mod skill; // wire-описание одного навыка World->Game.
 pub mod skillfactory; // кэш навыков CSkillFactory.
 mod timetoreturn; // календарные таблицы событий TimeToReturn.
 pub mod variablelist; // переменные сценариев CVariableList.
+mod world_catalogs; // первичное состояние мировых контентных каталогов Realm.
 
 pub use clientresource::{
     DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
@@ -32,3 +33,4 @@ pub use scripts::{
     normalize_script_path, ScriptListSource, ScriptLoadContext, ScriptLoadReport,
     ScriptReleaseState, ScriptRequiredFile, ScriptResources,
 }; // пути, контексты и отчёты загрузки ресурсов сценариев.
+pub use world_catalogs::WorldContentCatalogs; // владелец мировых контентных каталогов.

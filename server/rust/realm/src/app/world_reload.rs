@@ -404,12 +404,12 @@ where
 }
 
 impl CGame {
- /// Выполняет полный observable путь `CGame::LoadServerResource`.
- ///
- /// Стандартный `current_dir` заменяет `GetCurrentDirectoryA` без его
- /// внутреннего 260-byte лимита. Если ОС не даёт cwd, пустой `PathBuf`
- /// сохраняет безопасную попытку relative resource owner-а. Независимо от
- /// результата `LoadEx` код пишет success-log и возвращает `true`.
+    /// Выполняет полный observable путь `CGame::LoadServerResource`.
+    ///
+    /// Стандартный `current_dir` заменяет `GetCurrentDirectoryA` без его
+    /// внутреннего 260-byte лимита. Если ОС не даёт cwd, пустой `PathBuf`
+    /// сохраняет безопасную попытку relative resource owner-а. Независимо от
+    /// результата `LoadEx` код пишет success-log и возвращает `true`.
     pub fn load_server_resource<Log>(
         &mut self,
         default_resource: &mut DefaultClientResourceOwner,
@@ -424,10 +424,10 @@ impl CGame {
         report
     }
 
- /// Связывает resource replacement с тем же owner-ом, из которого
- /// `WorldRegionResourceContext::read_resource` обслуживает дальнейшие
- /// загрузки. Отдельная публикация log после освобождения mutable borrow
- /// меняет только Rust-заимствование, но не исходный порядок side effects.
+    /// Связывает resource replacement с тем же owner-ом, из которого
+    /// `WorldRegionResourceContext::read_resource` обслуживает дальнейшие
+    /// загрузки. Отдельная публикация log после освобождения mutable borrow
+    /// меняет только Rust-заимствование, но не исходный порядок side effects.
     pub(crate) fn load_server_resource_from_context<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -441,8 +441,8 @@ impl CGame {
     }
 
     pub fn clear_string_table(&mut self) {
-        self.string_table.table_mut().free();
-        self.string_table_array.clear();
+        self.content_catalogs.string_table.table_mut().free();
+        self.content_catalogs.string_table_array.clear();
     }
 
     pub fn load_string_table_resource(
@@ -452,12 +452,12 @@ impl CGame {
     ) -> WorldStringTableLoadReport {
         let package = legacy_c_string_prefix(package);
         let succeeded = if package.is_empty() {
-            self.string_table
+            self.content_catalogs.string_table
                 .table_mut()
                 .reject_empty_resource_name();
             false
         } else if let Some(source) = source {
-            match self.string_table.table_mut().load_bytes(source) {
+            match self.content_catalogs.string_table.table_mut().load_bytes(source) {
                 Ok(()) => true,
                 Err(error) => {
                     tracing::warn!(
@@ -466,14 +466,14 @@ impl CGame {
                         record_offset = error.record_offset,
                         kind = ?error.kind,
                         id = %String::from_utf8_lossy(&error.id),
-                        retained_entries = self.string_table.table().entries().len(),
+                        retained_entries = self.content_catalogs.string_table.table().entries().len(),
                         "Ошибка разбора таблицы текстов; ранее применённые записи сохранены"
                     );
                     false
                 }
             }
         } else {
-            self.string_table
+            self.content_catalogs.string_table
                 .table_mut()
                 .reject_missing_resource(package);
             false
@@ -485,7 +485,7 @@ impl CGame {
             log_payload.extend_from_slice(b"]...OK!");
         } else {
             log_payload.extend_from_slice(b"]...FAILED! : ");
-            log_payload.extend_from_slice(self.string_table.table().last_error());
+            log_payload.extend_from_slice(self.content_catalogs.string_table.table().last_error());
         }
 
         WorldStringTableLoadReport {
@@ -498,24 +498,24 @@ impl CGame {
     pub fn code_string_table(
         &mut self,
     ) -> Result<(), WorldStringTableEncodingBlock> {
-        self.string_table
-            .to_byte_array(&mut self.string_table_array)
+        self.content_catalogs.string_table
+            .to_byte_array(&mut self.content_catalogs.string_table_array)
             .map_err(|entry_count| WorldStringTableEncodingBlock { entry_count })
     }
 
     pub fn get_string_table_byte_array(&self) -> &[u8] {
-        &self.string_table_array
+        &self.content_catalogs.string_table_array
     }
 
- /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
- /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
- /// превращается в init-block и сохраняет уже сделанные in-place изменения.
+    /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
+    /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
+    /// превращается в init-block и сохраняет уже сделанные in-place изменения.
     pub(crate) fn initialize_quest_system<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
     ) -> QuestSystemLoadReport {
-        let string_table = self.string_table.table();
-        let report = self.quest_system.load(
+        let string_table = self.content_catalogs.string_table.table();
+        let report = self.content_catalogs.quest_system.load(
             |path| context.read_resource(path),
             &mut |string_id| string_table.get_string_by_id(string_id).map(ToOwned::to_owned),
         );
@@ -556,8 +556,8 @@ impl CGame {
         report
     }
 
- /// reload всегда игнорирует переданное имя и перечитывает default и
- /// настроенный packages. Resource I/O остаётся инфраструктурным callback-ом.
+    /// reload всегда игнорирует переданное имя и перечитывает default и
+    /// настроенный packages. Resource I/O остаётся инфраструктурным callback-ом.
     pub fn update_string_table<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -594,7 +594,7 @@ impl CGame {
                 completion: WorldStringTableUpdateCompletion::EncodingBlocked(block),
             };
         }
-        if self.string_table_array.is_empty() {
+        if self.content_catalogs.string_table_array.is_empty() {
             context.add_log_text(
                 b"WARNING : Language packet is NULL, will NOT send to WorldServer.",
             );
@@ -605,14 +605,14 @@ impl CGame {
         }
 
         let mut message = CMessage::new(0x0007_F807);
-        message.base_mut().add(&self.string_table_array);
+        message.base_mut().add(&self.content_catalogs.string_table_array);
         let delivery = message.send_all(self.current_game_server_sender().as_ref());
         context.add_log_text(b"Send the new language packet to all the GameServers.");
         WorldStringTableUpdateReport {
             requested_package: requested_package.to_vec(),
             completion: WorldStringTableUpdateCompletion::Broadcast {
                 message_type: 0x0007_F807,
-                payload_length: self.string_table_array.len(),
+                payload_length: self.content_catalogs.string_table_array.len(),
                 delivery,
             },
         }
@@ -626,7 +626,7 @@ impl CGame {
         let gold_coin_index = context.query_goods_id_by_original_name(&gold_coin_name);
         let gold_coin_limit = context.globe_setup().gold_coin_limit();
         context.publish_player_load_snapshot(
-            &self.thing_setup,
+            &self.content_catalogs.thing_setup,
             gold_coin_index,
             gold_coin_limit,
             self.setup.use_log_system,
@@ -639,7 +639,7 @@ impl CGame {
         context: &mut Context,
         path: &[u8],
     ) -> bool {
-        self.script_resources
+        self.content_catalogs.script_resources
             .load_one(&mut WorldScriptLoadContext(context), path)
     }
 
@@ -651,7 +651,7 @@ impl CGame {
         variable_file: &[u8],
         _general_variable_data_file: &[u8],
     ) -> bool {
-        match self.script_resources.load(
+        match self.content_catalogs.script_resources.load(
             &mut WorldScriptLoadContext(context),
             function_file,
             variable_file,
@@ -831,7 +831,7 @@ impl CGame {
             let game_server_index = tokens.next_ascii().unwrap_or(0);
             let country = tokens.next_ascii::<i32>().unwrap_or(0) as u8;
             let notify = tokens.next_ascii().unwrap_or(0);
-            let name = self
+            let name = self.content_catalogs
                 .string_table
                 .table()
                 .get_string_by_id(&string_id)
@@ -851,7 +851,7 @@ impl CGame {
 
             let (owner, total_monster_count, total_npc_count, loaded) =
                 match Self::materialize_region_owner(context, &spec, &mut |string_id| {
-                    self.string_table
+                    self.content_catalogs.string_table
                         .table()
                         .get_string_by_id(string_id)
                         .map_or_else(Vec::new, ToOwned::to_owned)
@@ -1068,10 +1068,10 @@ impl CGame {
         Ok(legacy_result)
     }
 
- /// Выполняет concrete `TimeToReturn::reload` для main-loop профиля.
- ///
- /// Его bool в старом dispatcher-е не записывался в общий return-slot:
- /// результат определяет только success/failure log.
+    /// Выполняет concrete `TimeToReturn::reload` для main-loop профиля.
+    ///
+    /// Его bool в старом dispatcher-е не записывался в общий return-slot:
+    /// результат определяет только success/failure log.
     pub(crate) fn reload_time_to_return<Context, TimerCallback>(
         &mut self,
         context: &mut Context,
@@ -1133,10 +1133,10 @@ impl CGame {
         Ok(legacy_result)
     }
 
- /// Выполняет concrete `CAttackCitySys::Reload` для main-loop профиля.
- ///
- /// Ложный результат `Initialize` остаётся обычным legacy `0`: прежние
- /// таймеры и активные войны уже обработаны Reload и не откатываются.
+    /// Выполняет concrete `CAttackCitySys::Reload` для main-loop профиля.
+    ///
+    /// Ложный результат `Initialize` остаётся обычным legacy `0`: прежние
+    /// таймеры и активные войны уже обработаны Reload и не откатываются.
     #[allow(
         clippy::too_many_arguments,
         reason = "Reload объединяет доказанные singleton-owner-ы city-war lifecycle"
@@ -1198,13 +1198,13 @@ impl CGame {
         Ok(legacy_result)
     }
 
- /// Выполняет отдельный профиль `CityWarPara` из `CGame::ReLoad`.
- ///
- /// вызывает тот же статический
- /// `CAttackCitySys::Reload`, но намеренно не проверяет его bool: сразу
- /// после вызова сериализует live owner в subcode `0x1B`, рассылает
- /// `0x7F801` и пишет success-log. Это не тот же контракт, что
- /// `AttackCitySys`, где ложный `Reload` прекращает публикацию.
+    /// Выполняет отдельный профиль `CityWarPara` из `CGame::ReLoad`.
+    ///
+    /// вызывает тот же статический
+    /// `CAttackCitySys::Reload`, но намеренно не проверяет его bool: сразу
+    /// после вызова сериализует live owner в subcode `0x1B`, рассылает
+    /// `0x7F801` и пишет success-log. Это не тот же контракт, что
+    /// `AttackCitySys`, где ложный `Reload` прекращает публикацию.
     #[allow(
         clippy::too_many_arguments,
         reason = "CityWarPara сохраняет тот же concrete lifecycle, но отдельный return/log contract"
@@ -1558,7 +1558,7 @@ impl CGame {
                 });
                 let properties = match context.read_resource(UPGRADES_PATH) {
                     Some(source) => {
-                        let string_table = self.string_table.table();
+                        let string_table = self.content_catalogs.string_table.table();
                         context
                             .player_list()
                             .load_properties_upgrades_from_bytes(&source, &mut |key| {
@@ -1588,7 +1588,7 @@ impl CGame {
                     self.send_reload_payload(1, &payload);
                 }
                 let emotion = match context.read_resource(b"data/Emotions.ini") {
-                    Some(source) => self
+                    Some(source) => self.content_catalogs
                         .emotion
                         .load_from_bytes(&source)
                         .map(|_| true)
@@ -1602,7 +1602,7 @@ impl CGame {
                 });
                 if emotion && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.emotion
+                    self.content_catalogs.emotion
                         .serialize(&mut payload)
                         .map_err(WorldReloadBlock::EmotionSerialization)?;
                     legacy_result = payload.len() as u32 as i32;
@@ -1613,7 +1613,7 @@ impl CGame {
             WorldReloadProfile::GoodsList => {
                 let loaded = match context.read_resource(b"data/goodslist.dat") {
                     Some(source) => {
-                        let string_table = self.string_table.table();
+                        let string_table = self.content_catalogs.string_table.table();
                         let (registry, original_name_index, name_index) =
                             context.goods_registries();
                         load_goods_registry(
@@ -1653,7 +1653,7 @@ impl CGame {
             WorldReloadProfile::MonsterList => {
                 let monsters = match context.read_resource(b"data/monsterlist.ini") {
                     Some(source) => {
-                        let string_table = self.string_table.table();
+                        let string_table = self.content_catalogs.string_table.table();
                         let (monsters, _) = context.monster_registries();
                         load_monster_list(monsters, &source, |id| {
                             string_table.get_string_by_id(id).map(ToOwned::to_owned)
@@ -1713,8 +1713,8 @@ impl CGame {
                 const PATH: &[u8] = b"data/tradelist.ini";
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
-                        let string_table = self.string_table.table();
-                        self.trade_list
+                        let string_table = self.content_catalogs.string_table.table();
+                        self.content_catalogs.trade_list
                             .load_from_bytes(
                                 &source,
                                 &mut |id| {
@@ -1730,7 +1730,7 @@ impl CGame {
                             .map_err(WorldReloadBlock::TradeListFormat)?
                     }
                     None => {
-                        self.trade_list.clear();
+                        self.content_catalogs.trade_list.clear();
                         let mut message = b"file '".to_vec();
                         message.extend_from_slice(PATH);
                         message.extend_from_slice(b"' can't found!");
@@ -1745,7 +1745,7 @@ impl CGame {
                 });
                 if loaded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.trade_list
+                    self.content_catalogs.trade_list
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::TradeListSerialization)?;
                     legacy_result = payload.len() as u32 as i32;
@@ -1777,7 +1777,7 @@ impl CGame {
                 const PATH: &[u8] = b"data/NewSkillMonsterList.xml";
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
-                        let string_table = self.string_table.table();
+                        let string_table = self.content_catalogs.string_table.table();
                         match context.new_skill_monster_conf().load_from_bytes(
                             &source,
                             &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
@@ -1842,7 +1842,7 @@ impl CGame {
                                 .globe_setup()
                                 .load_globe_setup(&source)
                                 .map_err(WorldReloadBlock::GlobeSetup)?;
-                            let string_table = self.string_table.table();
+                            let string_table = self.content_catalogs.string_table.table();
                             context
                                 .globe_setup()
                                 .resolve_country_text(|id| {
@@ -2082,13 +2082,13 @@ impl CGame {
             WorldReloadProfile::HitLevelSetup => {
                 const PATH: &[u8] = b"data/hitlevel.ini";
                 let succeeded = match context.read_resource(PATH) {
-                    Some(source) => self
+                    Some(source) => self.content_catalogs
                         .hit_level_setup
                         .load_from_bytes(&source)
                         .map(|_| true)
                         .map_err(WorldReloadBlock::HitLevelFormat)?,
                     None => {
-                        self.hit_level_setup.clear();
+                        self.content_catalogs.hit_level_setup.clear();
                         let mut message = b"file '".to_vec();
                         message.extend_from_slice(PATH);
                         message.extend_from_slice(b"' can't found!");
@@ -2104,7 +2104,7 @@ impl CGame {
                 });
                 if succeeded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.hit_level_setup
+                    self.content_catalogs.hit_level_setup
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::HitLevelSerialization)?;
                     self.send_reload_payload(0x14, &payload);
@@ -2123,13 +2123,13 @@ impl CGame {
                 "reload_profiles направляет profile владельцу с его timer/domain context"
             ),
             WorldReloadProfile::InvalidStrings => {
-                let filter_path = self.words_filter.filter_file_name().to_vec();
-                let char_code_path = self.words_filter.char_code_file_name().to_vec();
+                let filter_path = self.content_catalogs.words_filter.filter_file_name().to_vec();
+                let char_code_path = self.content_catalogs.words_filter.char_code_file_name().to_vec();
                 let filter_source = context.read_resource(&filter_path);
                 let char_code_source = filter_source
                     .as_ref()
                     .and_then(|_| context.read_resource(&char_code_path));
-                if self
+                if self.content_catalogs
                     .words_filter
                     .reload(filter_source.as_deref(), char_code_source.as_deref())
                 {
@@ -2138,8 +2138,8 @@ impl CGame {
             }
             WorldReloadProfile::GeneralVariableList => {}
             WorldReloadProfile::Quest => {
-                let string_table = self.string_table.table();
-                let report = self.quest_system.load(
+                let string_table = self.content_catalogs.string_table.table();
+                let report = self.content_catalogs.quest_system.load(
                     |path| context.read_resource(path),
                     &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
                 );
@@ -2168,7 +2168,7 @@ impl CGame {
                 }
                 context.add_log_text(b"Load QuestData...OK!");
                 let mut payload = Vec::new();
-                self.quest_system
+                self.content_catalogs.quest_system
                     .system()
                     .add_to_byte_array(&mut payload)
                     .map_err(WorldReloadBlock::QuestSerialization)?;
@@ -2179,7 +2179,7 @@ impl CGame {
                 const PATH: &[u8] = b"setup/incrementshoplist.ini";
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
-                        let result = self.increment_shop_list.load_from_bytes(
+                        let result = self.content_catalogs.increment_shop_list.load_from_bytes(
                             &source,
                             &mut |query| match query {
                                 IncrementShopGoodsQuery::OriginalName(name) => {
@@ -2211,7 +2211,7 @@ impl CGame {
                         }
                     }
                     None => {
-                        self.increment_shop_list.release();
+                        self.content_catalogs.increment_shop_list.release();
                         let mut message = b"IncShopList : file '".to_vec();
                         message.extend_from_slice(PATH);
                         message.extend_from_slice(b"' can't found!");
@@ -2227,7 +2227,7 @@ impl CGame {
                 });
                 if loaded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.increment_shop_list
+                    self.content_catalogs.increment_shop_list
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::IncrementShopSerialization)?;
                     self.send_reload_payload(4, &payload);
@@ -2236,13 +2236,13 @@ impl CGame {
             WorldReloadProfile::Contribute => {
                 const PATH: &[u8] = b"data/ContributeSetup.ini";
                 let succeeded = match context.read_resource(PATH) {
-                    Some(source) => self
+                    Some(source) => self.content_catalogs
                         .contribute_setup
                         .load_from_bytes(&source)
                         .map(|_| true)
                         .map_err(WorldReloadBlock::ContributeFormat)?,
                     None => {
-                        self.contribute_setup.clear_items();
+                        self.content_catalogs.contribute_setup.clear_items();
                         let mut message = b"file '".to_vec();
                         message.extend_from_slice(PATH);
                         message.extend_from_slice(b"' can't found!");
@@ -2258,7 +2258,7 @@ impl CGame {
                 });
                 if succeeded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.contribute_setup
+                    self.content_catalogs.contribute_setup
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::ContributeSerialization)?;
                     self.send_reload_payload(5, &payload);
@@ -2267,13 +2267,13 @@ impl CGame {
             WorldReloadProfile::Prison => {
                 const PATH: &[u8] = b"data/PrisonConf.ini";
                 let loaded = match context.read_resource(PATH) {
-                    Some(source) => self
+                    Some(source) => self.content_catalogs
                         .prison_conf
                         .load_from_bytes(&source)
                         .map(|_| true)
                         .map_err(WorldReloadBlock::PrisonFormat)?,
                     None => {
-                        self.prison_conf.clear_prison_params();
+                        self.content_catalogs.prison_conf.clear_prison_params();
                         let mut message = b"file '".to_vec();
                         message.extend_from_slice(PATH);
                         message.extend_from_slice(b"' can't found!");
@@ -2289,7 +2289,7 @@ impl CGame {
                 });
                 if loaded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.prison_conf
+                    self.content_catalogs.prison_conf
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::PrisonSerialization)?;
                     self.send_reload_payload(0x1D, &payload);
@@ -2406,7 +2406,7 @@ impl CGame {
                     {
                         Ok(_) => true,
                         Err(error) => {
-                            let diagnostic = self
+                            let diagnostic = self.content_catalogs
                                 .string_table
                                 .table()
                                 .get_string_by_id(error.string_id())
@@ -2418,7 +2418,7 @@ impl CGame {
                     },
                     None => {
                         context.battle_fairy_exp_config().clear();
-                        let diagnostic = self
+                        let diagnostic = self.content_catalogs
                             .string_table
                             .table()
                             .get_string_by_id(b"ZHGS0029")
@@ -2559,7 +2559,7 @@ impl CGame {
             WorldReloadProfile::EquipmentCompose => {
                 const PATH: &[u8] = b"data/EquipmentCompose.ini";
                 let source = context.read_resource(PATH);
-                let loaded = self.equipment_compose_list.load_list(source.as_deref());
+                let loaded = self.content_catalogs.equipment_compose_list.load_list(source.as_deref());
                 legacy_result = i32::from(loaded);
                 context.add_log_text(if loaded {
                     b"Load EquipmentCompose.ini...ok!"
@@ -2568,7 +2568,7 @@ impl CGame {
                 });
                 if loaded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.equipment_compose_list
+                    self.content_catalogs.equipment_compose_list
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::EquipmentComposeSerialization)?;
                     self.send_reload_payload(0x30, &payload);
@@ -2628,7 +2628,7 @@ impl CGame {
             WorldReloadProfile::TaoZhuang => {
                 const PATH: &[u8] = b"data/taozhuang.ini";
                 let source = context.read_resource(PATH);
-                let succeeded = self
+                let succeeded = self.content_catalogs
                     .tao_zhuang_setup
                     .read_file(source.as_deref(), |payload| context.add_log_text(payload));
                 legacy_result = i32::from(succeeded);
@@ -2639,7 +2639,7 @@ impl CGame {
                 });
                 if succeeded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.tao_zhuang_setup
+                    self.content_catalogs.tao_zhuang_setup
                         .add_byte_to_array(&mut payload)
                         .map_err(WorldReloadBlock::TaoZhuangSerialization)?;
                     self.send_reload_payload(0x34, &payload);
@@ -2648,7 +2648,7 @@ impl CGame {
             WorldReloadProfile::CiQing => {
                 const PATH: &[u8] = b"/data/ciqing.ini";
                 let source = context.read_resource(PATH);
-                let succeeded = self.ci_qing_setup.read_setup_file(
+                let succeeded = self.content_catalogs.ci_qing_setup.read_setup_file(
                     source.as_deref(),
                     |original_name| context.query_goods_id_by_original_name(original_name),
                 );
@@ -2671,7 +2671,7 @@ impl CGame {
                 }
                 if succeeded && send_to_game_servers {
                     let mut payload = Vec::new();
-                    self.ci_qing_setup
+                    self.content_catalogs.ci_qing_setup
                         .add_byte_to_array(&mut payload)
                         .map_err(WorldReloadBlock::CiQingSerialization)?;
                     context
@@ -2695,13 +2695,13 @@ impl CGame {
             WorldReloadProfile::AllThing => {
                 const PATH: &[u8] = b"/data/LeitingAction.ini";
                 let loaded = if let Some(source) = context.read_resource(PATH) {
-                    self.thing_setup
+                    self.content_catalogs.thing_setup
                         .load_all_thing_list(&source, PATH, |payload| {
                             context.add_log_text(payload)
                         })
                         .is_ok()
                 } else {
-                    self.thing_setup.clear_all_things_for_load();
+                    self.content_catalogs.thing_setup.clear_all_things_for_load();
                     let mut message = b"file '".to_vec();
                     message.extend_from_slice(PATH);
                     message.extend_from_slice(b"' can't found!");
@@ -2715,7 +2715,7 @@ impl CGame {
                 });
                 if loaded && send_to_game_servers {
                     let mut bytes = Vec::new();
-                    self.thing_setup
+                    self.content_catalogs.thing_setup
                         .add_to_byte_array(&mut bytes)
                         .map_err(WorldReloadBlock::ThingSetupCodec)?;
                     self.send_reload_payload(0x36, &bytes);
@@ -2723,7 +2723,7 @@ impl CGame {
                 self.publish_player_load_snapshot(context);
             }
             WorldReloadProfile::GodsBattle => {
-                let string_table = self.string_table.table();
+                let string_table = self.content_catalogs.string_table.table();
                 let load = gods_battle.load_from_resources(
                     &mut |section| context.read_resource(section.path()),
                     &mut |string_id| {
@@ -2760,8 +2760,8 @@ impl CGame {
     pub(crate) fn send_script_reload_data(&self) {
         let sender = self.current_game_server_sender();
         for (subcode, data) in [
-            (0x0A, self.script_resources.functions()),
-            (0x0B, self.script_resources.variables()),
+            (0x0A, self.content_catalogs.script_resources.functions()),
+            (0x0B, self.content_catalogs.script_resources.variables()),
         ] {
             let Some(data) = data else { continue };
             let data = legacy_c_string_prefix(data);
@@ -2771,7 +2771,7 @@ impl CGame {
             add_legacy_c_string(message.base_mut(), data);
             let _ = message.send_all(sender.as_ref());
         }
-        for (path, data) in self.script_resources.iter() {
+        for (path, data) in self.content_catalogs.script_resources.iter() {
             let data = legacy_c_string_prefix(data);
             let mut message = CMessage::new(0x0007_F801);
             message.base_mut().add_long(0x0D);
@@ -2839,10 +2839,10 @@ impl CGame {
         Ok(())
     }
 
- /// Перечитывает `setup/sysboardcast.ini` в тот же live список, который
- /// обслуживает AI. Отсутствующий resource сохраняет прежний список;
- /// открытый источник очищает его до разбора и оставляет подтверждённый
- /// prefix при повреждённой записи.
+    /// Перечитывает `setup/sysboardcast.ini` в тот же live список, который
+    /// обслуживает AI. Отсутствующий resource сохраняет прежний список;
+    /// открытый источник очищает его до разбора и оставляет подтверждённый
+    /// prefix при повреждённой записи.
     pub fn reload_system_broadcasts<Random, GetTick>(
         &mut self,
         source: Option<&[u8]>,
@@ -2904,7 +2904,7 @@ impl CGame {
                 odds: odds as u32,
                 text_color: argb(&colors[..4]),
                 back_color: argb(&colors[4..]),
-                message: self
+                message: self.content_catalogs
                     .string_table
                     .table()
                     .get_string_by_id(message_id)
