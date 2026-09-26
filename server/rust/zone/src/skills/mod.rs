@@ -71,6 +71,8 @@ pub mod summoncreatureskill; // семья CSummonSkill (0x19A/0x19B/0x19C/0x1F9
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
 mod thunder; // CThunder (0x21F): семейные Check/AI громовых облаков, круг BF918 (fix №2) и hub-трейт `SummonCloudGame` (порция T1).
 mod thunder2phalanx; // живая область CLeimingPhalanx2: одна активная ячейка, expiry-attack, собственные Replace/AddTo/Decord (порция T2).
+pub mod thunderblow; // CThunderBlow (0x13F) и его живая область CThunderBlowPhalanx: Begin/Check/AI/Summon и формула; FIX порции T3 — MP/поворот до повторной дальности (якорь 0x17A520) (порция T3).
+pub mod thunderblow2; // CThunderBlow2 (0x14D): Check/AI с отбрасыванием/контактом по impactattack-швам и wire-visual 0xBFE01 modes 0/1/3 (порция T3; visual слит из thunderblow2visual — один исходный thunderblow2.cpp).
 mod thunderphalanx; // живая область CThunderPhalanx: 49-ячеечные окна, три часа, wire со счётчиком окон и calc с оружейным швом (порция T2).
 mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже при нулевой цене, точечная BF918, поворот U, свёртка старой области (порция T1).
 mod tianhuophalanx; // живая область CTianhuoPhalanx: скан клетки каждый проход, End→BF504, x87-calc (порция T2).

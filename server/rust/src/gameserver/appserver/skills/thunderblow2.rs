@@ -1,29 +1,19 @@
-//! Направленный громовой удар ThunderBlow2 (0x14D).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/thunderblow2.cpp/.h.
-//!
-//! Зарегистрированный Attack Begin создаёт loop1-visual перед Check; отказ
-//! вызывает End(0) без дополнительного пакета. Check требует отдельную S,
-//! проверяет reuse, длину локального пути и ненулевую цену MP. Движение не
-//! блокируется. AI сохраняет таблицу свойств и исходных U/S на текущий проход;
-//! после списания MP идут OnChangeStates, CAN, направление и visual0.
-//!
-//! Выпуск и попадание отдельно читают абсолютный unsigned срок start+delay.
-//! При выпуске identity-цель превращается в точку, но отбрасывание и удар
-//! используют S, захваченную в начале AI. Визуальный ресурс заново разрешает S.
-//! Отсутствие региона источника отменяет только отбрасывание. Локальные пути
-//! не сохраняются между AI. End сбрасывает фазу и attacking перед Attack-base;
-//! движения он не возвращает. Неиспользуемое исходное поле missile всегда
-//! равно нулю и не материализуется. Формула и raw-контакт без RP принадлежат
-//! impactattack, общий lifecycle и поколенческий ключ — playercast.
+//! Тонкий путь к направленному громовому удару `CThunderBlow2` (`0x14D`) в
+//! Zone. Источник: gameserver.exe/GameServer.pdb, appserver/skills/thunderblow2.cpp.
+//! Тела Check/AI (отдельная S, reuse, длина пути, цена MP; списание MP,
+//! OnChangeStates, CAN, направление, visual0; отбрасывание и raw-контакт по
+//! impactattack-швам) перенесены буквально в `nebokrai_zone::skills::thunderblow2`
+//! (основание и статусы см. там). Здесь — зарегистрированный вход общего
+//! playercast с прежней сигнатурой, объявленные швы переноса (фасадные
+//! реализации трейтов Zone над прежними методами `CGame`/`CPlayer`/`CMoveShape`)
+//! и impactattack-швы формулы/отбрасывания; внешние потребители не меняются.
 
-use super::baseattack::SKILL_USAGE_TARGET_MAX_DISTANCE;
-use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::impactattack::{apply_thunder_blow_2_attack, knock_back_impact_target};
-use super::kernel::{SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::monster::MonsterSkillExecution;
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
     resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
@@ -31,178 +21,185 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    game_tick_milliseconds,
 };
-use crate::public::tools::get_line_direction;
-pub(crate) use nebokrai_zone::skills::execution::{ThunderBlow2Execution};
+use crate::nets::netserver::message::GameMessageDomainOps;
+use nebokrai_zone::skills::SkillLifecycle;
+use nebokrai_zone::skills::execution::RegisteredSkillRecord;
+use nebokrai_zone::skills::thunderblow2::{
+    ThunderBlow2Contact, ThunderBlow2Game, ThunderBlow2MoveShape, ThunderBlow2Outcome,
+    ThunderBlow2Player,
+};
+use nebokrai_zone::skills::thunderblow2 as zone;
 
-pub(crate) const THUNDER_BLOW_2_SKILL_ID: u32 = 0x14d;
-const PLAYER_TYPE: i32 = 400;
-const USER_MP_LOSE: u32 = 2;
-const PILLAR_STATE_ID: u32 = 0x74;
+pub(crate) use nebokrai_zone::skills::execution::ThunderBlow2Execution;
+pub(crate) use nebokrai_zone::skills::thunderblow2::THUNDER_BLOW_2_SKILL_ID;
+
+impl ThunderBlow2Player for CPlayer {
+    fn shape(&self) -> &CShape { self.shape() }
+    fn mana(&self) -> u32 { self.mana() }
+    fn set_mana(&mut self, mana: u32) { self.set_mana(mana) }
+}
+
+impl ThunderBlow2MoveShape for CMoveShape {
+    fn shape(&self) -> &CShape { self.shape() }
+    fn shape_mut(&mut self) -> &mut CShape { self.shape_mut() }
+    fn has_state_by_skill_id(&self, skill_id: u32) -> bool { self.has_state_by_skill_id(skill_id) }
+}
+
+impl ThunderBlow2Game for CGame {
+    type MonsterExecution = MonsterSkillExecution;
+    type SkillAddress = RegisteredSkill;
+    type Player = CPlayer;
+    type MoveShape = CMoveShape;
+
+    fn registered_skill(
+        &self,
+        address: RegisteredSkill,
+    ) -> Option<&RegisteredSkillRecord<MonsterSkillExecution>> {
+        self.registered_skill(address)
+    }
+
+    fn registered_skill_mut(
+        &mut self,
+        address: RegisteredSkill,
+    ) -> Option<&mut RegisteredSkillRecord<MonsterSkillExecution>> {
+        self.registered_skill_mut(address)
+    }
+
+    fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
+        self.update_registered_skill_visual(address, mode)
+    }
+
+    fn skill_base_properties(&self, skill_id: u32, level: i32) -> Option<&CSkillBaseProperties> {
+        self.skill_base_properties(skill_id, level)
+    }
+
+    fn resolve_skill_sufferer(&self, lifecycle: &SkillLifecycle) -> Option<(i32, ShapeIdentity)> {
+        resolve_skill_sufferer(self, lifecycle)
+    }
+
+    fn resolve_state_move_shape(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&CMoveShape> {
+        resolve_state_move_shape(self, region_id, identity)
+    }
+
+    fn resolve_state_move_shape_mut(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&mut CMoveShape> {
+        resolve_state_move_shape_mut(self, region_id, identity)
+    }
+
+    fn find_player(&self, player_id: i32) -> Option<&CPlayer> { self.find_player(player_id) }
+
+    fn find_player_mut(&mut self, player_id: i32) -> Option<&mut CPlayer> { self.find_player_mut(player_id) }
+
+    fn skill_target_path(&self, lifecycle: &SkillLifecycle) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path(lifecycle)
+    }
+
+    fn move_shape_health(&self, region_id: i32, holder: ShapeIdentity) -> Option<u32> {
+        self.move_shape_health(region_id, holder)
+    }
+
+    fn move_shape_level(&self, region_id: i32, target: ShapeIdentity) -> Option<u8> {
+        self.move_shape_level(region_id, target)
+    }
+
+    fn live_skill_target_attackable(
+        &self,
+        region_id: i32,
+        user: ShapeIdentity,
+        target: ShapeIdentity,
+    ) -> bool {
+        self.live_skill_target_attackable(region_id, user, target)
+    }
+
+    fn thunder_blow_2_region_present(&self, region_id: i32) -> bool {
+        self.find_region(region_id).is_some()
+    }
+
+    fn publish_player_states(&self, player_id: i32) {
+        let _ = self.publish_player_states(player_id);
+    }
+
+    fn send_skill_system_info(&self, player_id: i32, text: &[u8]) {
+        self.send_skill_system_info(player_id, text)
+    }
+
+    fn send_skill_system_info_with_unsigned(&self, player_id: i32, text: &[u8], amount: u32) {
+        self.send_skill_system_info_with_unsigned(player_id, text, amount)
+    }
+
+    fn send_thunder_blow_2_visual_to_player(
+        &self,
+        player_id: i32,
+        message: &nebokrai_zone::app::game_message::CMessage,
+    ) {
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn send_thunder_blow_2_visual_around(
+        &self,
+        region_id: i32,
+        origin: &CShape,
+        message: &nebokrai_zone::app::game_message::CMessage,
+    ) {
+        // Гейт существующего региона прежнего caller-а сохранён.
+        if let Some(owner) = self.find_region(region_id) {
+            let _ = self.send_game_shape_around(owner.base(), origin, None, message);
+        }
+    }
+
+    fn knock_back_impact_target(
+        &mut self,
+        source: (i32, ShapeIdentity),
+        target: (i32, ShapeIdentity),
+        region_id: i32,
+        properties: &CSkillBaseProperties,
+    ) {
+        super::impactattack::knock_back_impact_target(self, source, target, region_id, properties);
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> ThunderBlow2Contact<Runtime> for CGame {
+    fn apply_thunder_blow_2_attack(
+        &mut self,
+        address: RegisteredSkill,
+        source: (i32, ShapeIdentity),
+        target: (i32, ShapeIdentity),
+        runtime: &mut Runtime,
+    ) {
+        super::impactattack::apply_thunder_blow_2_attack(self, address, source, target, runtime);
+    }
+}
 
 fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn failure(game: &mut CGame, instance: RegisteredSkill, player_id: i32, code: u32) {
-    game.update_registered_skill_visual(instance, code);
-    let text: &[u8] = match code {
-        10 => b"GS0286",
-        11 => b"GS0290",
-        13 => b"GS0278",
-        _ => return,
-    };
-    game.send_skill_system_info(player_id, text);
-}
-
-fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player_id: i32, properties: &CSkillBaseProperties) {
-    game.update_registered_skill_visual(instance, 7);
-    let amount = properties.query_property(USER_MP_LOSE);
-    game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount);
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, player_id: i32,
     target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
 ) -> bool {
-    let Some(player) = game.find_player(player_id) else { return false; };
-    let Some(skill) = game.registered_skill(instance) else { return false; };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
-    if target.is_none_or(|(_, target)| target == player.shape().identity()) {
-        failure(game, instance, player_id, 10);
-        return false;
-    }
-    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
-        failure(game, instance, player_id, 13);
-        return false;
-    }
-    let path = game.skill_target_path(skill.lifecycle());
-    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
-        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-        if maximum < path.len() as u32 {
-            failure(game, instance, player_id, 11);
-            return false;
-        }
-    }
-    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
-    let mana = player.mana();
-    let loss = properties.query_property(USER_MP_LOSE);
-    if (mana.wrapping_sub(loss) as i32) < 0 {
-        mana_failure(game, instance, player_id, &properties);
-        return false;
-    }
-    true
+    let _ = runtime;
+    zone::check_cast(game, instance, player_id, target, game_tick_milliseconds)
 }
 
 fn run_ai<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let Some(skill) = game.registered_skill(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
-        return outcome(QueuedSkillExecutionState::Pending);
+    let state = match zone::run_ai(game, instance, runtime, game_tick_milliseconds) {
+        ThunderBlow2Outcome::Pending => QueuedSkillExecutionState::Pending,
+        ThunderBlow2Outcome::Rejected => QueuedSkillExecutionState::Rejected,
+        ThunderBlow2Outcome::Completed => QueuedSkillExecutionState::Completed,
     };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return outcome(QueuedSkillExecutionState::Rejected); };
-    let (region, identity) = skill.lifecycle().user();
-    let source = resolve_state_move_shape(game, region, identity)
-        .map(|source| (source.shape().get_region_id(), source.shape().identity()));
-    let target = resolve_skill_sufferer(game, skill.lifecycle());
-    let (Some(source), Some(target)) = (source, target) else { return outcome(QueuedSkillExecutionState::Rejected); };
-    if stage == SkillStage::Begin {
-        if source.1.object_type == PLAYER_TYPE {
-            let Some(player) = game.find_player(source.1.id) else { return outcome(QueuedSkillExecutionState::Rejected); };
-            let mana = player.mana();
-            let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
-            if (remaining as i32) < 0 {
-                mana_failure(game, instance, source.1.id, &properties);
-                return outcome(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = game.find_player_mut(source.1.id) { player.set_mana(remaining); }
-            game.publish_player_states(source.1.id);
-        }
-        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-        let Some(skill) = game.registered_skill_mut(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-        skill.lifecycle_mut().set_available(can_break != 0);
-        let Some(skill) = game.registered_skill(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-        let destination = resolve_skill_sufferer(game, skill.lifecycle())
-            .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
-            .map_or_else(|| skill.lifecycle().destination(), |target| {
-                (target.shape().get_tile_x().unwrap_or(i32::MIN), target.shape().get_tile_y().unwrap_or(i32::MIN))
-            });
-        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return outcome(QueuedSkillExecutionState::Rejected); };
-        let y = user.shape().get_tile_y().unwrap_or(i32::MIN);
-        let x = user.shape().get_tile_x().unwrap_or(i32::MIN);
-        let direction = get_line_direction(x, y, destination.0, destination.1);
-        if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.shape_mut().set_direction(direction); }
-        game.update_registered_skill_visual(instance, 0);
-        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
-    }
-    let Some(attacking) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<ThunderBlow2Execution>()).map(|state| state.attacking_started)
-    else { return outcome(QueuedSkillExecutionState::Rejected); };
-    if !attacking {
-        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-        let Some(skill) = game.registered_skill(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-        let started = skill.lifecycle().started_at_ms();
-        if runtime.now_milliseconds() < started.wrapping_add(delay) { return outcome(QueuedSkillExecutionState::Pending); }
-        let saved_target = skill.lifecycle().sufferer().1;
-        if saved_target.object_type != 0 && saved_target.id != 0 {
-            let fresh_target = resolve_skill_sufferer(game, skill.lifecycle());
-            let Some((region, identity)) = fresh_target
-                .filter(|(region, identity)| game.move_shape_health(*region, *identity).is_some_and(|hp| hp != 0))
-            else {
-                game.update_registered_skill_visual(instance, 10);
-                return outcome(QueuedSkillExecutionState::Rejected);
-            };
-            let Some(target_shape) = resolve_state_move_shape(game, region, identity) else { return outcome(QueuedSkillExecutionState::Rejected); };
-            let x = target_shape.shape().get_tile_x().unwrap_or(i32::MIN);
-            let y = target_shape.shape().get_tile_y().unwrap_or(i32::MIN);
-            let Some(skill) = game.registered_skill_mut(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-            skill.lifecycle_mut().set_point_target((x, y));
-        }
-        let Some(skill) = game.registered_skill(instance) else { return outcome(QueuedSkillExecutionState::Rejected); };
-        let path = game.skill_target_path(skill.lifecycle());
-        if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
-            let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-            if maximum < path.len() as u32 {
-                if source.1.object_type == PLAYER_TYPE { failure(game, instance, source.1.id, 11); }
-                else { game.update_registered_skill_visual(instance, 11); }
-                return outcome(QueuedSkillExecutionState::Rejected);
-            }
-        }
-        if let Some(region_id) = resolve_state_move_shape(game, source.0, source.1)
-            .filter(|source| source.shape().is_assigned_to_server_region())
-            .map(|source| source.shape().get_region_id())
-            .filter(|region| game.find_region(*region).is_some())
-        {
-            let target_level = game.move_shape_level(target.0, target.1);
-            let source_level = game.move_shape_level(source.0, source.1);
-            if target_level.zip(source_level).is_some_and(|(target, source)| target <= source)
-                && resolve_state_move_shape(game, target.0, target.1)
-                    .is_some_and(|target| !target.has_state_by_skill_id(PILLAR_STATE_ID))
-            {
-                knock_back_impact_target(game, source, target, region_id, &properties);
-            }
-        }
-        game.update_registered_skill_visual(instance, 1);
-        if let Some(state) = game.registered_skill_mut(instance).and_then(|skill| skill.player_state_mut::<ThunderBlow2Execution>()) {
-            state.attacking_started = true;
-        }
-        drop(path);
-    }
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return outcome(QueuedSkillExecutionState::Rejected); };
-    if runtime.now_milliseconds() < started.wrapping_add(delay) { return outcome(QueuedSkillExecutionState::Pending); }
-    if game.move_shape_health(target.0, target.1).is_none_or(|hp| hp == 0)
-        || resolve_state_move_shape(game, target.0, target.1)
-            .map(|target| target.shape().get_region_id())
-            .is_none_or(|region| !game.live_skill_target_attackable(region, source.1, target.1))
-    {
-        game.update_registered_skill_visual(instance, 3);
-        return outcome(QueuedSkillExecutionState::Rejected);
-    }
-    apply_thunder_blow_2_attack(game, instance, source, target, runtime);
-    outcome(QueuedSkillExecutionState::Completed)
+    outcome(state)
 }
 
 pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
