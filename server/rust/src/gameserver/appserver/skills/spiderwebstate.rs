@@ -17,7 +17,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
-pub(crate) use nebokrai_zone::effects::{SPIDER_WEB_STATE_BYTES, SpiderWebState};
+pub(crate) use nebokrai_zone::effects::SpiderWebState; // байт записи с волной Z-M2b нужен только Zone skills::state.
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
 pub(crate) fn send_spider_web_state_visual(

@@ -1,13 +1,16 @@
 //! Состояния Zone: арена экземпляров мобильного носителя (`storage`,
 //! бывший `moveshape/state_storage.rs` переходного Game), читающие проекции
 //! её семейств (`accessors` — бывшие query-методы hub
-//! `appserver/moveshape.rs`), клиентские контракты (`catalog` — проекция
+//! `appserver/moveshape.rs`), мутирующие операции и RAW-слой записей
+//! Serialize-cache (`mutations` — бывшая мутирующая половина того же hub),
+//! клиентские контракты (`catalog` — проекция
 //! живых записей для `CMoveShape::AddToByteArray_ForClient` и runtime-план
 //! visual после Begin) и DB Save/Load (`serialization` — кодек проекции
 //! GameSave, бывшая Save/Load-семья hub `appserver/moveshape.rs`).
 
 mod accessors; // читающие проекции арены состояний владельца.
 mod catalog; // клиентская проекция живых состояний и runtime-план их visual.
+mod mutations; // мутирующие операции арены, RAW-записи Serialize-cache и splice замены.
 mod serialization; // DB Save/Load-кодек состояний GameSave и сброс persisted snapshot.
 mod storage; // арена экземпляров состояний мобильного носителя.
 
@@ -24,6 +27,16 @@ pub use accessors::{
     wangsheng_state, wuxing_states,
 }; // читающие проекции семейств состояний арены `CMoveShape`.
 pub use catalog::{StateClientRecord, registered_runtime_state_visual, state_client_record}; // клиентская запись состояния и runtime-план visual.
+pub use mutations::{
+    append_applied_state_record, append_automatic_hp_mp_states, append_automatic_restore_state,
+    automatic_restore_state_mut, begin_boss_blue_fury_state, extended_state_tick,
+    find_state_position, insert_replacement_state_record, remove_applied_state,
+    remove_applied_state_data, remove_applied_state_record, remove_defense_shield,
+    remove_defense_shield_key, replace_boss_blue_quake_state, replace_spider_web_state,
+    restore_defense_shields, take_boss_blue_fury_state, take_boss_blue_quake_state,
+    take_defense_shields, take_expired_battle_fairy_attribute_state, take_spider_web_state,
+    undead_state_tick,
+}; // мутирующие операции арены состояний, RAW-записи Serialize-cache и splice замены.
 pub use serialization::{
     clear_persisted_runtime_state, read_i16, read_i32, read_u16, read_u32, replace_ex_states,
     serialize_ex_states_for_save, serialized_ex_states, update_known_state_record,

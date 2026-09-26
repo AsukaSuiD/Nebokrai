@@ -4,14 +4,12 @@
 //! `skills/promotionstate.rs` (порция №6a «state-касты пятёрки +
 //! heal-квартет»; основание — Restart-fold `0x005FD450` — см. там);
 //! данные, срок и сохраняемая запись перенесены ранее в Zone
-//! `effects/promotion.rs`. Здесь — делегация с прежней сигнатурой и
-//! реэкспорт прежнего владельца байт записи; потребители (порядок
-//! PreDefense, codec) не меняются.
+//! `effects/promotion.rs`. Здесь — делегация с прежней сигнатурой;
+//! прежний реэкспорт байт записи убран волной Z-M2b: его единственный
+//! потребитель (арена hub moveshape) перенесён в Zone `skills::state`.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
-
-pub(crate) use nebokrai_zone::effects::PROMOTION_STATE_BYTES;
 
 /// Повторный AI вызывает только Restart; новый primary проходит
 /// CState::Begin(U,S) → visual loop0/Update0 → append в общую арену.

@@ -17,7 +17,7 @@
 //! Проекции ChangeBody соответствуют GetCHBYState (0x004CEC40), который не
 //! вызывает callbacks. Мутирующие операции этих же семейств — splice замены,
 //! append/take/remove записей, span-сдвиги и tick с item-часами
-//! undead/extended — остаются у hub moveshape до соседней волны Z-M2b;
+//! undead/extended — перенесены в соседний `mutations` (волна Z-M2b);
 //! у семейств spiderweb и boss blue quake читающей половины в hub нет.
 
 use crate::effects::{

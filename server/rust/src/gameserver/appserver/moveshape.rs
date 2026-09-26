@@ -263,12 +263,13 @@
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
 // Арена состояний, её enum-каталог, codec/интервалы, читающие проекции
-// семейств (`accessors`) и DB Save/Load-кодек (`serialization`) перенесены
+// семейств (`accessors`), мутирующие операции и RAW-записи (`mutations`)
+// и DB Save/Load-кодек (`serialization`) перенесены
 // в Zone `skills::state`; путь `super::moveshape` сохраняет прежние имена.
 pub(crate) use nebokrai_zone::skills::state::{
     AppliedState, StateBatch, StateData, StateKey,
 };
-use nebokrai_zone::skills::state::{CanonicalStateStorage, read_u32, write_u32};
+use nebokrai_zone::skills::state::{CanonicalStateStorage, read_u32};
 
 use std::ops::{Deref, DerefMut};
 
@@ -294,27 +295,17 @@ use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState,
 };
-use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
-use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
-use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
-use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::{
     PillarState,
 };
-use crate::gameserver::appserver::skills::spiderwebstate::{
-    SPIDER_WEB_STATE_BYTES, SpiderWebState,
-};
+use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
-use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
-use crate::gameserver::appserver::skills::bossbluefurystate::{
-    BossBlueFuryState, BOSS_BLUE_FURY_STATE_BYTES,
-};
-use crate::gameserver::appserver::skills::bossbluequakestate::{
-    BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
+use crate::gameserver::appserver::skills::bossbluefurystate::BossBlueFuryState;
+use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState;
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory};
-use crate::gameserver::appserver::skills::statefactory::{known_state_record_offsets, known_state_record_spans};
+use crate::gameserver::appserver::skills::statefactory::known_state_record_offsets;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
@@ -324,9 +315,7 @@ use crate::gameserver::appserver::skills::wangshengstate::{
     WangshengState,
 };
 use crate::gameserver::appserver::skills::wuxingstate::WuXingState;
-use crate::gameserver::appserver::states::automaticrestore::{
-    AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
-};
+use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::nets::netserver::message::GameMessageDomainOps;
 use nebokrai_zone::regions::moveshape::{
@@ -834,20 +823,20 @@ impl CMoveShape {
         &mut self,
         properties: super::player::PlayerCombatProperties,
     ) {
-        for state in AutomaticRestoreState::restored(properties.into()) {
-            self.append_automatic_restore_state(state);
-        }
+        nebokrai_zone::skills::state::append_automatic_hp_mp_states(
+            &mut self.state_storage,
+            properties,
+            self.shape.get_region_id(),
+        );
     }
 
     /// Общий NULL-user Begin свежего restore: без clock и пакета, visual loop=1.
     pub(crate) fn append_automatic_restore_state(&mut self, state: AutomaticRestoreState) -> StateKey {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        let offset = self.ex_states.len() - AUTOMATIC_RESTORE_STATE_BYTES;
-        let key = self.state_entries.append(state);
-        self.state_entries.set_serialized_span(key, (offset, AUTOMATIC_RESTORE_STATE_BYTES));
-        self.mark_applied_state_begun(key);
-        self.state_entries.begin_visual(key, 1);
-        key
+        nebokrai_zone::skills::state::append_automatic_restore_state(
+            &mut self.state_storage,
+            state,
+            self.shape.get_region_id(),
+        )
     }
 
 
@@ -891,7 +880,7 @@ impl CMoveShape {
         &mut self,
         key: StateKey,
     ) -> Option<&mut AutomaticRestoreState> {
-        self.applied_state_mut::<AutomaticRestoreState>(key)
+        nebokrai_zone::skills::state::automatic_restore_state_mut(&mut self.state_storage, key)
     }
 
     /// Точный `GetStateNumByStateID`: считает все живые экземпляры с данным
@@ -943,14 +932,11 @@ impl CMoveShape {
 
 
     pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {
-        let state = self.state_entries.take_first::<BossBlueFuryState>()?;
-        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_FURY_STATE_BYTES);
-        Some(state)
+        nebokrai_zone::skills::state::take_boss_blue_fury_state(&mut self.state_storage)
     }
 
     pub(crate) fn begin_boss_blue_fury_state(&mut self, state: BossBlueFuryState) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
+        nebokrai_zone::skills::state::begin_boss_blue_fury_state(&mut self.state_storage, state);
     }
 
     pub(crate) fn boss_blue_fury_state(&self) -> Option<BossBlueFuryState> {
@@ -965,13 +951,7 @@ impl CMoveShape {
         &mut self,
         state: BossBlueQuakeState,
     ) -> Option<BossBlueQuakeState> {
-        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        {
-            let previous = self.state_entries.take_first::<BossBlueQuakeState>();
-            self.state_entries.append(state);
-            previous
-        }
+        nebokrai_zone::skills::state::replace_boss_blue_quake_state(&mut self.state_storage, state)
     }
 
 
@@ -979,9 +959,7 @@ impl CMoveShape {
 
 
     pub(crate) fn take_boss_blue_quake_state(&mut self) -> Option<BossBlueQuakeState> {
-        let state = self.state_entries.take_first::<BossBlueQuakeState>()?;
-        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
-        Some(state)
+        nebokrai_zone::skills::state::take_boss_blue_quake_state(&mut self.state_storage)
     }
 
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
@@ -1006,44 +984,14 @@ impl CMoveShape {
     }
 
     pub(crate) fn remove_defense_shield(&mut self, skill_id: u32) -> Option<DefenseShieldState> {
-        self.remove_defense_shield_key(self.defense_shield_key(skill_id)?)
+        nebokrai_zone::skills::state::remove_defense_shield(&mut self.state_storage, skill_id)
     }
 
     pub(crate) fn remove_defense_shield_key(&mut self, key: StateKey) -> Option<DefenseShieldState> {
-        let state_id = self.defense_shield(key)?.skill_id();
-        let occurrence = self.defense_shield_keys().into_iter()
-            .filter(|candidate| {
-                self.defense_shield(*candidate).is_some_and(|state| state.skill_id() == state_id)
-            })
-            .position(|candidate| candidate == key)?;
-        let offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
-            .nth(occurrence);
-        let state = self.state_entries.take::<DefenseShieldState>(key)?;
-        let bytes = match state {
-            DefenseShieldState::Mana(_) => MANA_SHIELD_STATE_BYTES,
-            DefenseShieldState::Machine(_) => MACHINE_SHIELD_STATE_BYTES,
-            DefenseShieldState::Life(_) => LIFE_SHIELD_STATE_BYTES,
-            DefenseShieldState::Promotion(_) => PROMOTION_STATE_BYTES,
-        };
-        if let Some(offset) = offset {
-            self.remove_serialized_state_record_at(offset, bytes);
-        }
-        Some(state)
+        nebokrai_zone::skills::state::remove_defense_shield_key(&mut self.state_storage, key)
     }
 
 
-
-    fn append_serialized_state_record(&mut self, record: &[u8]) {
-        if self.ex_states.len() < 4 {
-            self.ex_states.clear();
-            LegacyWriter::new(&mut self.ex_states).write_u32(0);
-        }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        self.ex_states.extend_from_slice(record);
-    }
 
     /// Общий push_back уже успешно начатого concrete state. DB-cache здесь
     /// технический: record подготовлен owner-ом без вызова игрового Serialize
@@ -1052,60 +1000,24 @@ impl CMoveShape {
     pub(crate) fn append_applied_state_record<T: AppliedState>(
         &mut self, state: T, record: &[u8],
     ) -> StateKey {
-        self.append_serialized_state_record(record);
-        let span = (self.ex_states.len() - record.len(), record.len());
-        let key = self.state_entries.append(state);
-        self.state_entries.set_serialized_span(key, span);
-        key
+        nebokrai_zone::skills::state::append_applied_state_record(&mut self.state_storage, state, record)
     }
 
     /// Первый живой слот исходного m_vStates. Предикат задаёт игровой выбор
     /// caller-а; метод не копирует payload, не уплотняет и не вызывает End.
     /// После callback caller перечитывает эту позицию, если это требует EXE.
     pub(crate) fn find_state_position(
-        &self, mut matches: impl FnMut(&StateData) -> bool,
+        &self, matches: impl FnMut(&StateData) -> bool,
     ) -> Option<(usize, StateKey)> {
-        (0..self.state_slot_count()).find_map(|index| {
-            let (key, state) = self.state_at(index)?;
-            matches(state).then_some((index, key))
-        })
-    }
-
-    fn remove_serialized_state_record(&mut self, state_id: u32, amount: usize) -> bool {
-        let Some(offset) = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
-        else {
-            return false;
-        };
-        self.remove_serialized_state_record_at(offset, amount)
-    }
-
-    fn remove_serialized_state_record_at(&mut self, offset: usize, amount: usize) -> bool {
-        let Some(end) = offset.checked_add(amount).filter(|end| *end <= self.ex_states.len()) else {
-            return false;
-        };
-        self.ex_states.drain(offset..end);
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
-        self.shift_serialized_state_offsets_after(offset, amount);
-        true
-    }
-
-    fn shift_serialized_state_offsets_after(&mut self, offset: usize, amount: usize) {
-        self.state_entries.shift_serialized_spans_after_remove(offset, amount);
-        self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<RideState>(|state| state.shift_serialized_offset_after(offset, amount));
+        nebokrai_zone::skills::state::find_state_position(&self.state_storage, matches)
     }
 
     pub(crate) fn take_defense_shields(&mut self) -> StateBatch<DefenseShieldState> {
-        self.state_entries.take_batch::<DefenseShieldState>()
+        nebokrai_zone::skills::state::take_defense_shields(&mut self.state_storage)
     }
 
     pub(crate) fn restore_defense_shields(&mut self, states: StateBatch<DefenseShieldState>) {
-        self.state_entries.restore_batch(states);
+        nebokrai_zone::skills::state::restore_defense_shields(&mut self.state_storage, states);
     }
 
     /// Позиция замены и техническое место DB-записи. Caller сохраняет их
@@ -1130,23 +1042,12 @@ impl CMoveShape {
     pub(crate) fn insert_replacement_state_record<T: AppliedState>(
         &mut self, state: T, record: &[u8], location: (usize, usize),
     ) -> Option<StateKey> {
-        let (position, offset) = location;
-        if position >= self.state_entries.len() || offset < 4 || offset > self.ex_states.len() {
-            return None;
-        }
-        let amount = record.len();
-        self.ex_states.splice(offset..offset, record.iter().copied());
-        self.state_entries.shift_serialized_spans_for_insert(offset, amount);
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        let _ = self.state_entries.replace_at(position, state);
-        let key = self.state_entries.address(position)?;
-        self.state_entries.set_serialized_span(key, (offset, amount));
-        Some(key)
+        nebokrai_zone::skills::state::insert_replacement_state_record(
+            &mut self.state_storage,
+            state,
+            record,
+            location,
+        )
     }
 
 
@@ -1265,8 +1166,11 @@ impl CMoveShape {
         key: StateKey,
         amount: usize,
     ) -> Option<T> {
-        T::as_data_ref(self.state_entries.get(key)?)?;
-        self.remove_applied_state_data(key, amount).and_then(T::from_data)
+        nebokrai_zone::skills::state::remove_applied_state_record(
+            &mut self.state_storage,
+            key,
+            amount,
+        )
     }
 
     /// Только удаление точного payload и его wire-записи; игровой End с
@@ -1276,61 +1180,13 @@ impl CMoveShape {
         key: StateKey,
         amount: usize,
     ) -> Option<StateData> {
-        self.remove_applied_state_data_inner(key, Some(amount))
+        nebokrai_zone::skills::state::remove_applied_state_data(&mut self.state_storage, key, amount)
     }
 
     /// Destructor-only хвост ClearAllStates: wire-размер берётся из того же
     /// decoder-а, а не из второго каталога типов или выдуманного базового размера.
     pub(crate) fn remove_applied_state(&mut self, key: StateKey) -> Option<StateData> {
-        self.remove_applied_state_data_inner(key, None)
-    }
-
-    fn remove_applied_state_data_inner(
-        &mut self,
-        key: StateKey,
-        _amount: Option<usize>,
-    ) -> Option<StateData> {
-        let state_id = self.state_entries.get(key)?.state_id();
-        let occurrence = self.state_entries.entries()
-            .filter(|(_, state)| state.state_id() == state_id)
-            .position(|(candidate, _)| candidate == key)?;
-        let records: Vec<_> = known_state_record_spans(&self.ex_states).into_iter()
-            .filter(|(offset, _)| read_u32(&self.ex_states, *offset) == Some(state_id))
-            .collect();
-        let runtime_count = self.state_entries.entries()
-            .filter(|(_, state)| state.state_id() == state_id).count();
-        // Известная длина ещё не гарантирует успешную материализацию записи.
-        // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
-        let record = (runtime_count == records.len()).then(|| records[occurrence]);
-        let span = self.state_entries.serialized_span(key).or_else(|| match self.state_entries.get(key)? {
-            StateData::Swordship(state) => {
-                // Как в save: Replace оставляет runtime-позицию, но переносит
-                // DB-запись в хвост. Ordinal повторного ID уже не задаёт экземпляр.
-                let encoded = state.encoded();
-                known_state_record_spans(&self.ex_states).into_iter().find(|(offset, size)| {
-                    self.ex_states.get(*offset..*offset + *size) == Some(encoded.as_slice())
-                })
-            }
-            StateData::EnergyHolding(state) => {
-                // Factory может пропустить неизвестный level, сохранив его
-                // wire-запись. Level неизменен; mutable charge для identity
-                // непригоден, потому что DB-проекция обновляется при save.
-                let level = state.skill_level();
-                let same_level = self.state_entries.entries().filter(|(_, entry)| {
-                    matches!(entry, StateData::EnergyHolding(entry) if entry.skill_level() == level)
-                }).position(|(candidate, _)| candidate == key)?;
-                records.into_iter().filter(|(offset, _)| {
-                    read_u32(&self.ex_states, offset + 4) == Some(level)
-                }).nth(same_level)
-            }
-            _ => record,
-        });
-        let position = self.state_entries.index_of(key)?;
-        let state = self.state_entries.remove_at(position)?;
-        if let Some((offset, amount)) = span {
-            self.remove_serialized_state_record_at(offset, amount);
-        }
-        Some(state)
+        nebokrai_zone::skills::state::remove_applied_state(&mut self.state_storage, key)
     }
 
 
@@ -1361,11 +1217,7 @@ impl CMoveShape {
         &mut self,
         state: SpiderWebState,
     ) -> Option<SpiderWebState> {
-        let previous = self.state_entries.first_key::<SpiderWebState>()
-            .and_then(|key| self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
+        nebokrai_zone::skills::state::replace_spider_web_state(&mut self.state_storage, state)
     }
 
 
@@ -1378,9 +1230,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
-        let key = self.state_entries.first_key::<SpiderWebState>()?;
-        let state = self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES)?;
-        Some(state)
+        nebokrai_zone::skills::state::take_spider_web_state(&mut self.state_storage)
     }
 
 
@@ -1422,10 +1272,11 @@ impl CMoveShape {
         key: StateKey,
         now_ms: u32,
     ) -> Option<BattleFairyAttributeState> {
-        if !self.applied_state::<BattleFairyAttributeState>(key)?.expired(now_ms) {
-            return None;
-        }
-        self.remove_applied_state_record::<BattleFairyAttributeState>(key, BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES)
+        nebokrai_zone::skills::state::take_expired_battle_fairy_attribute_state(
+            &mut self.state_storage,
+            key,
+            now_ms,
+        )
     }
 
 
@@ -1476,22 +1327,13 @@ impl CMoveShape {
     pub(crate) fn undead_state_tick(
         &mut self,
         key: StateKey,
-        mut now_milliseconds: impl FnMut() -> u32,
+        now_milliseconds: impl FnMut() -> u32,
     ) -> (bool, Option<(u32, u32)>) {
-        let Some(state) = self.applied_state_mut::<UndeadState>(key) else {
-            return (false, None);
-        };
-        if state.keep_time_ms() != 0 && state.expired(now_milliseconds()) {
-            return (true, None);
-        }
-        state.ensure_item_clock_started();
-        if state.frequency_ms() != 0 && state.item_index() != 0 && state.item_amount() != 0
-            && state.item_due(now_milliseconds())
-        {
-            state.set_last_item_tick(now_milliseconds());
-            return (false, Some((state.item_index(), state.item_amount())));
-        }
-        (false, None)
+        nebokrai_zone::skills::state::undead_state_tick(
+            &mut self.state_storage,
+            key,
+            now_milliseconds,
+        )
     }
 
 
@@ -1508,26 +1350,13 @@ impl CMoveShape {
     pub(crate) fn extended_state_tick(
         &mut self,
         key: StateKey,
-        mut now_milliseconds: impl FnMut() -> u32,
+        now_milliseconds: impl FnMut() -> u32,
     ) -> (bool, Option<(u32, u32)>) {
-        let Some(state) = self.applied_state_mut::<ExtendedState>(key) else {
-            return (false, None);
-        };
-        if state.keep_time_ms != 0 && state.expired(now_milliseconds()) {
-            return (true, None);
-        }
-        if state.kind == ExtendedStateKind::New {
-            if state.last_item_tick_ms == 0 {
-                state.last_item_tick_ms = state.started_ms;
-            }
-            if state.frequency_ms != 0 && state.item_index != 0 && state.item_amount != 0
-                && state.item_due(now_milliseconds())
-            {
-                state.restart_item_clock(now_milliseconds());
-                return (false, Some((state.item_index, state.item_amount)));
-            }
-        }
-        (false, None)
+        nebokrai_zone::skills::state::extended_state_tick(
+            &mut self.state_storage,
+            key,
+            now_milliseconds,
+        )
     }
 
 

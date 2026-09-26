@@ -4,9 +4,11 @@
 //! Перенесена из переходного Game: хранилище — бывший
 //! `appserver/moveshape/state_storage.rs`, `CanonicalStateStorage` и
 //! `LegacyStateCodec` — бывший `appserver/moveshape.rs` (шаг B moveshape п3).
-//! Сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20) и
-//! AddExStatesToByteArray (0x004D10F0) остаются у владельца hub moveshape,
-//! общий UpdateAbnormality (0x004CFD00) — в его states/state.rs.
+//! Сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20): append/remove/insert
+//! записей — соседний `mutations` (волна Z-M2b),
+//! AddExStatesToByteArray (0x004D10F0) — `serialization`,
+//! общий UpdateAbnormality (0x004CFD00) остаётся у владельца hub moveshape
+//! в его states/state.rs.
 //! Порядок добавления и пустые позиции после удаления принадлежат этому
 //! контейнеру; уплотнение выполняется только явно. Новый экземпляр получает
 //! новый поколенческий ключ даже при замене в прежней позиции. Общий End
