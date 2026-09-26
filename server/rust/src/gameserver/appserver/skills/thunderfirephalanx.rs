@@ -45,7 +45,5 @@ impl ThunderFirePhalanxGame for CGame {
 
     fn weapon_damage_factors(&self) -> (f32, f32) { self.globe_setup().weapon_damage_factors() }
 
-    fn base_combat_scales(&self) -> [f32; 5] { self.globe_setup().base_combat_scales() }
-
     fn skill_random_below(&mut self, maximum: i32) -> i32 { self.skill_random_below(maximum) }
 }

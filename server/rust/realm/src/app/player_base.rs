@@ -2,14 +2,15 @@
 //!
 //! Источник: `CRsPlayer::OpenPlayerBase` в точной паре `Nworldserver.exe` +
 //! `WorldServer.pdb` (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
-//! По инструкциям VA `0x0050F7E0..0x0050F845` подтверждены байт успеха,
-//! account, 16-битный счётчик и повторный 16-битный ноль перед возвратом
-//! в ветке без строк. Прежний Rust записывал там 32-битный ноль; исправлено
-//! в обработчике ниже.
-//! VA `0x0050F85B..0x0050F8A3` вызывает `OpenPlayerBaseInDB` перед
-//! `OpenPlayerBaseInMem`; счётчик складывается 8-битной арифметикой.
-//! Порядок остальных полей строки и формула оставшихся дней пока PARTIAL:
-//! ниже сохранена прежняя Rust-реализация без изменения алгоритма.
+//! Wire-контракт VERIFIED по машинным инструкциям владельца и обеих веток
+//! `OpenPlayerBaseInDB`/`OpenPlayerBaseInMem`: байт успеха, account и
+//! 16-битный счётчик (повторный 16-битный ноль в пустой ветке), строка —
+//! индекс short, id dword, C-строка имени, байты level/occupation/sex/country/head,
+//! 11 dword ID экипировки и 11 byte уровней в порядке слотов HELM..FAIRY,
+//! region dword, статус удаления char. Статус: restore-кандидат → -1; время
+//! только из списка deletion (ветка БД — с fallback `GetPlayerDeletionDate`),
+//! нулевое → -1; иначе `deletion_days - (int)(difftime/86400)` 8-битной
+//! арифметикой с clamp к 0. Адреса разбора — `docs/reconstruction/realm-services.md`.
 
 use crate::app::world_game_view::WorldGameView;
 use crate::app::world_message::{CMessage, SendMessageError};

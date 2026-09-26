@@ -9,7 +9,9 @@
 //! Швы: hub `battlefairyskill::BattleFairyGame` (игрок, WarSoul, таблица,
 //! RNG); обход клетки и регистрация — прежний владелец.
 //!
-//! PARTIAL: число и маппинг аргументов ctor не раскрыты.
+//! Маппинг 7 аргументов ctor досмотрен (VERIFIED, точная пара): level, min,
+//! max, elem (с AddElementAtk), cch после базовых (master&, lifetime);
+//! четыре own-поля живыми телами не читаются.
 //!
 //! Исходный владелец PDB: `appserver/skills/thunder2phalanx.cpp`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#области-cthunderphalanx-cleimingphalanx2-ctianhuophalanx

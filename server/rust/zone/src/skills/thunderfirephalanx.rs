@@ -14,8 +14,9 @@
 //! региональный runtime старого пакета; клиентский снимок — конверт
 //! `summonshape`; регистрация и доставка — координация старого пакета.
 //!
-//! UNKNOWN: нормализация blast/knock-back scale в Calculate машинно не
-//! обнаружена; блок не добавляется и не удаляется (вопрос открыт).
+//! Нормализация пяти combat-scale: тело Calculate `0x5E1310` досмотрено до
+//! ret целиком — такого блока нет (VERIFIED, точная пара); безосновательный
+//! clamp-блок прежней реконструкции удалён.
 //!
 //! Исходный владелец PDB: `appserver/skills/thunderfirephalanx.cpp/.h`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#thunderfirephalanx--cthunderfirephalanx-0x322-предметный-citemskill_2
@@ -64,9 +65,6 @@ pub trait ThunderFirePhalanxGame {
 
     /// Базовые делитель/пол оружейного урона (`CGlobeSetup`).
     fn weapon_damage_factors(&self) -> (f32, f32);
-
-    /// Нормализация пяти scale (см. UNKNOWN в шапке).
-    fn base_combat_scales(&self) -> [f32; 5];
 
     fn skill_random_below(&mut self, maximum: i32) -> i32;
 }
@@ -189,7 +187,7 @@ pub fn calculate_owned_thunder_fire_attack<Game: ThunderFirePhalanxGame>(
     target_level: u8,
 ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let player = game.find_player(phalanx.master.master_id)?;
-    let mut combat = player.combat_properties();
+    let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
     let (divisor, minimum) = game.weapon_damage_factors();
@@ -234,14 +232,5 @@ pub fn calculate_owned_thunder_fire_attack<Game: ThunderFirePhalanxGame>(
             power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
-    // UNKNOWN: нормализация scale из прежней реконструкции; в машинном
-    // дампе Calculate 0x5E1310 не обнаружена (см. шапку).
-    let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
-        game.base_combat_scales();
-    if combat.blast_attack_scale() < 1.0 { combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits(); }
-    if combat.blast_defense_scale() < 0.01 { combat.blast_defense_scale_bits = blast_defense.max(0.01).to_bits(); }
-    if combat.element_blast_attack_scale() < 1.0 { combat.element_blast_attack_scale_bits = element_blast_attack.max(1.0).to_bits(); }
-    if combat.element_blast_defense_scale() < 0.01 { combat.element_blast_defense_scale_bits = element_blast_defense.max(0.01).to_bits(); }
-    if combat.full_miss_scale() < 0.01 { combat.full_miss_scale_bits = full_miss.max(0.01).to_bits(); }
     Some((attack, combat, occupation, attacker_level))
 }

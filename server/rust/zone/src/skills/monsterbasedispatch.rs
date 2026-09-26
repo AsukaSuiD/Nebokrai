@@ -10,8 +10,10 @@
 //! стационарных лучников — швы своих групп (`bossblue`, `bossfiend`, `lord`,
 //! `fixedpositionarcher`).
 //!
-//! UNKNOWN: состав и порядок обхода массивов default-ID по категориям
-//! `GetDefaultAttackSkillID` — у владельца реестра `moveshape`.
+//! VERIFIED (дизассемблинг `0x004CE240`): default-ID — скан attack-вектора
+//! `+0x130` (ID == 2 → 2), иначе summon-вектора `+0x150` (ID == 3 → 3),
+//! иначе 1, без `QuerySkillType` — у владельца реестра
+//! `regions/skillregistry.rs` (`default_attack_skill_id`).
 //!
 //! Исходный владелец PDB: `appserver/skills/monsterbaseattack.cpp`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#monsterbasedispatch--диспетчер-cmonsterai

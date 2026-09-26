@@ -15,8 +15,8 @@
 //! query по origin-name — шов владельца региона; клиентский снимок — общий
 //! конверт `summonshape`.
 //!
-//! UNKNOWN: blast/knock-back нормализация в Calc не вводится и не удаляется
-//! (вопрос открыт).
+//! Нормализация combat-scale: тело Calculate `0x5F77B0` досмотрено до ret
+//! целиком — такого блока нет (VERIFIED, точная пара), вводить нечего.
 //!
 //! Исходный владелец PDB: `appserver/skills/thunderslashphalanx.cpp/.h`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#thunderslashphalanx--cthunderslashphalanx

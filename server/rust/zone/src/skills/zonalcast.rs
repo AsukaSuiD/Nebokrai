@@ -10,8 +10,11 @@
 //! (`appserver/skills/firewall.rs` старого пакета, шов `summon_fire_wall`).
 //! Часы main loop приходят указателем `now_milliseconds`.
 //!
-//! PARTIAL: тела Check/AI YinYang/YinYang2, GodThunder/GodThunder2 и
-//! SoulMirror индивидуально не досматривались и следуют прежней реконструкции;
+//! VERIFIED (дизассемблинг, `.local/verify-t5/REPORT.md`): тела Check и AI
+//! YinYang/YinYang2 (`0x1A5EA0`/`0x167F10`, `0x1A5BB0`/`0x167C20`) и
+//! GodThunder/GodThunder2 (`0x173470`/`0x1536B0`, `0x173180`/`0x1533C0`) —
+//! MATCH общему скелету семьи; Check SoulMirror (`0x1A4850`) сверен
+//! (оговорка: цель `SetMoveable` — arg2). PARTIAL: AI SoulMirror не разобран;
 //! клиентское чтение кадров — UNKNOWN.
 //!
 //! Исходные владельцы PDB: `appserver/skills/{weak,poisonfog,snowstorm,yinyang,yinyang2,godthunder,godthunder2,firewall,chaossphere,soulmirror}.cpp`.

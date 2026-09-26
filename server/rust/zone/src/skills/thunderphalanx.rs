@@ -8,7 +8,9 @@
 //!
 //! Машинные quirks: нулевая frequency заменяется единицей конструктором;
 //! 49-ячеечные окна Initialize — массив для клиента, не серверный выбор.
-//! PARTIAL: полный маппинг 9 аргументов ctor не досмотрен.
+//! Маппинг 9 аргументов ctor досмотрен (VERIFIED, точная пара): level,
+//! frequency, min, max, elem, target_count, cch после базовых
+//! (master&, lifetime).
 //!
 //! Швы: hub `battlefairyskill::BattleFairyGame` (игрок, WarSoul, таблица,
 //! RNG); оружейный шов `ThunderPhalanxGame` — делегат старого пакета

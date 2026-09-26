@@ -11,8 +11,10 @@
 //! (машинный фильтр, симметричный `skills/projectile.rs::apply_projectile_critical`);
 //! отношение `+1` к ширине есть у RawRange и обоих abs-видов и нет у Archery
 //! (живой Archery-roll — в `skills/projectile.rs`). `source_property` по типу
-//! владельца — PARTIAL: собственные тела getter-ов CPlayer отдельно не
-//! пересверялись; Element и CCH монстра всегда 0. RNG при неположительной
+//! владельца — VERIFIED_DISASSEMBLY: getter-ы CPlayer — прямые чтения полей
+//! (MIN/MAX/Element — DWORD, CCH/Soul — WORD), нулевые getter-ы
+//! NPC/Build/CityGate — `xor eax,eax`/`xor ax,ax`; Element и CCH монстра
+//! всегда 0. RNG при неположительной
 //! ширине принадлежит владельцу (`game_legacy_random` возвращает 0 без расхода
 //! состояния); формула передаёт ширину дословно.
 //! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#боевые-формулы

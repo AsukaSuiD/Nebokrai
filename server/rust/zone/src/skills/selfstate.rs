@@ -11,8 +11,13 @@
 //! Живой обход Game (арена, участники, очередь, часы) — за переходным
 //! `appserver/skills/{selfstatecast,selfshield,agility,agilitystate,
 //! agilitystate2}.rs`; данные состояний и формулы — zone/effects.
-//! UNKNOWN: тела AI Natural/Rapture/DaubPoison/MachineShield и ctor-маппинг
-//! MachineShield не сняты; общие цепочки подтверждены по ManaShield.
+//! VERIFIED (дизассемблинг, `.local/verify-selfstate/REPORT.md`): тела AI
+//! CNatural `0x16C0B0`, CRapture `0x16CBB0` и CMachineShield `0x1671C0` —
+//! точный клон-шаблон эталона CManaShield::AI; Natural/Rapture проверяют
+//! смерть U (visual2/End(1)), щиты — нет; скан состояний — все
+//! `0xDA/0xDB/0xDC` у пары, первый `0xDE` у MachineShield; ctor-маппинг
+//! MachineShield `10002/10010/20024/20025` подтверждён (`CDaubPoison::AI` —
+//! VERIFIED ранее по recon-de). Клиентское чтение кадров — UNKNOWN.
 //!
 //! Исходные владельцы PDB: `appserver/skills/{agility,agility2,natural,
 //! rapture,daubpoison,manashield,machineshield}.cpp` и owners состояний.
