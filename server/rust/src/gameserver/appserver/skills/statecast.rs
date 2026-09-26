@@ -67,6 +67,8 @@ impl StateCastMoveShape for CMoveShape {
 
     fn set_moveable(&mut self, moveable: bool) { self.set_moveable(moveable) }
 
+    fn set_fightable(&mut self, fightable: bool) { self.set_fightable(fightable) }
+
     fn state_slot_count(&self) -> usize { self.state_slot_count() }
 
     fn state_at(&self, position: usize) -> Option<(StateKey, &StateData)> {

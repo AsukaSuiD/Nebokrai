@@ -437,6 +437,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::fury::publish_fury_visual(self, skill, mode),
             SkillVisualEffectKind::RageBreak =>
                 crate::gameserver::appserver::skills::ragebreak::publish_rage_break_visual(self, skill, mode),
+            SkillVisualEffectKind::BossBlueFury =>
+                crate::gameserver::appserver::skills::bossbluefury::publish_boss_blue_fury_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

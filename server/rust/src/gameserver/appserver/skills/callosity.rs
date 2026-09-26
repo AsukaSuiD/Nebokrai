@@ -21,7 +21,6 @@ use crate::gameserver::gameserver::game::{
 use nebokrai_zone::skills::callosity;
 
 pub(crate) use nebokrai_zone::effects::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
-pub(crate) use nebokrai_zone::skills::callosity::SKILL_USAGE_USER_RP_LOSE;
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity),

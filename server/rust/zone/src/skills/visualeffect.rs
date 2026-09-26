@@ -52,6 +52,7 @@ pub enum SkillVisualEffectKind {
     Hearten,
     Fury,
     RageBreak,
+    BossBlueFury,
 }
 
 #[derive(Debug, Eq, PartialEq)]

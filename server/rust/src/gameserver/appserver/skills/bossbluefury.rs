@@ -1,308 +1,82 @@
-//! Ярость синего босса `CBossBlueFury` (`0x1f7`) для игрока и монстра.
-//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
-//! первого AI исполняются после постановки Attack в том же Run.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/bossbluefury.cpp`. Владелец сохраняет обе проверки RP
-//! игрока, необратимый расход, действия `0/1`, задержку, перезарядку и замену
-//! собственного `BossBlueFuryState`. Состояние остаётся каноническим в
-//! `CMoveShape`; `CGame` только координирует владельца и доставку. Обе ветви
-//! используют абсолютный срок `CSkill::IsRestored`; cast-delay остаётся
-//! elapsed-проверкой. Замена первого собственного состояния вызывает общий
-//! exact-key End владельца: visual, удаление той же записи и снятие обеих
-//! блокировок; одноразовая отметка освобождения не подменяет native End.
-//! Монстровая замена публикует настоящий ServerRegionOwner на время общего
-//! End; после него регион и экземпляр перечитываются, не возвращая старый payload.
-//! Новый Begin/append заканчивается общим UpdateProperty (0x0052EDAC),
-//! до skill End(1). Для этого короткого owning-вызова регион также публикуется.
-//! Begin состояния(0x005E8ED0) создаёт loop=1 visual без Update;
-//! начальный BFE03 обеих ветвей отправляет последующий OnUpdateProperties.
+//! Тонкий путь ярости синего босса `CBossBlueFury` (`0x1F7`) в Zone.
+//! Источник: gameserver.exe + GameServer.pdb, исходный владелец
+//! `appserver/skills/bossbluefury.cpp/.h`. Тела Check/AI (`0x52E8E0`/
+//! `0x52EAC0`), порядок состояний (продув каждого прежнего `0x1F7` → новый
+//! `CBossBlueFuryState` → UpdateProperty `0x52EDAC` → End(1)) и монстровый
+//! owned-вход перенесены буквально в `nebokrai_zone::skills::bossbluefury`
+//! (статусы и швы — там и в `.local/recon-de/notes/E4-bossbluefury.md`;
+//! **FIX F3** — машинный полный продув вместо первого типизированного ключа;
+//! состояние — соседний `bossbluefurystate.rs`). Здесь — делегации с прежними
+//! сигнатурами: зарегистрированный вход игрока идёт общим stateskill,
+//! монстровый — hub `monsterattack` над `CGame`; потребители (`game.rs`,
+//! `monsterbaseattack.rs`, `monster.rs`) не меняются.
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
-use super::baseattack::{
-    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    time_reached,
-};
-use super::bossbluefurystate::BossBlueFuryState;
-use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::callosity::SKILL_USAGE_USER_RP_LOSE;
-use super::monsterattack::resolve_owned_monster_attack_target;
-use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range,
+use super::kernel::SkillTermination;
+use super::statecast::finish_state_cast;
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, execute_player_state_skill,
+    finish_player_state_skill,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{
-    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
-};
-use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, ServerRegionOwner,
+    game_tick_milliseconds,
 };
-use crate::nets::netserver::message::CMessage;
-use nebokrai_shared::values::CGuid;
+use nebokrai_zone::skills::bossbluefury as zone;
 
-const MONSTER_TYPE: i32 = 600;
-const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-const SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER: u32 = 10_003;
-const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
-pub(crate) const BOSS_BLUE_FURY_SKILL_ID: u32 = 0x1f7;
+pub(crate) use nebokrai_zone::skills::bossbluefury::BOSS_BLUE_FURY_SKILL_ID;
 
-fn self_identity(monster_id: i32) -> ShapeIdentity {
-    ShapeIdentity {
-        object_type: MONSTER_TYPE,
-        id: monster_id,
-        ex_id: CGuid::GUID_INVALID,
+pub(crate) const fn is_player_boss_blue_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    zone::is_boss_blue_fury_dispatch(dispatch)
+}
+
+struct BossBlueFury;
+
+impl RegisteredStateSkill for BossBlueFury {
+    const ID: u32 = BOSS_BLUE_FURY_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::BossBlueFury;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, _target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        zone::check_boss_blue_fury_cast(game, address, &mut || runtime.now_milliseconds())
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let outcome = zone::run_boss_blue_fury_ai(game, address, &mut || runtime.now_milliseconds());
+        finish_state_cast(game, address, outcome, runtime)
     }
 }
 
-fn send_cast_start(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
-) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(1);
-    message.add_long(BOSS_BLUE_FURY_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn send_cast_fire(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
-) {
-    let Ok(tile_x) = source.get_tile_x() else {
-        return;
-    };
-    let Ok(tile_y) = source.get_tile_y() else {
-        return;
-    };
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(2);
-    message.add_long(BOSS_BLUE_FURY_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(tile_x);
-    message.add_long(tile_y);
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome {
-        state,
-        first_contact: false,
-    }
-}
-
-pub(crate) fn is_player_boss_blue_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == BOSS_BLUE_FURY_SKILL_ID,
-    }
-}
-
-fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
-    game.send_self_state_skill_failure(0x000b_fe01, player_id, action);
-    match action {
-        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
-    }
-}
-
-fn send_player_visual(game: &mut CGame, player_id: i32, skill_level: i32, action: u8) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(action);
-    message.add_long(BOSS_BLUE_FURY_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    if action == 1 {
-        message.add_long(player.shape().get_direction());
-    } else {
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(player.shape().get_tile_x().unwrap_or_default());
-        message.add_long(player.shape().get_tile_y().unwrap_or_default());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn restore_player_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-}
-
-fn finish_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) {
-    finish_state_skill(game, player_id, BOSS_BLUE_FURY_SKILL_ID, runtime);
-}
-
-fn abort_player_boss_blue_fury(game: &mut CGame, player_id: i32) {
-    restore_player_movement(game, player_id);
+pub(crate) fn publish_boss_blue_fury_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    zone::publish_boss_blue_fury_visual(game, skill, mode);
 }
 
 pub(crate) fn cancel_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    player_ai: &mut CPlayerAI,
-    _runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, BOSS_BLUE_FURY_SKILL_ID).map(|state| state.dispatch()) else {
-        return false;
-    };
-    abort_player_boss_blue_fury(game, player_id);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+    finish_player_state_skill::<BossBlueFury, Runtime>(
+        game, player_id, player_ai, 0, SkillTermination::Cancelled, runtime,
+    )
 }
 
 pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_player_boss_blue_fury_dispatch(dispatch) {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let Some((_region_id, skill_level, initial_rp, dead)) = game
-        .find_player(player_id)
-        .and_then(|player| {
-            Some((
-                player.server_region_id()?,
-                player.learned_skill_level(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory()),
-                player.rp(),
-                player.is_dead(),
-            ))
-        })
-    else {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let Some(properties) = game
-        .skill_base_properties(BOSS_BLUE_FURY_SKILL_ID, skill_level)
-        .cloned()
-    else {
-        if game.player_skill_execution(player_id, BOSS_BLUE_FURY_SKILL_ID).is_some() {
-            abort_player_boss_blue_fury(game, player_id);
-        }
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let rp_loss = properties.query_property(SKILL_USAGE_USER_RP_LOSE);
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as i32;
-    let weak_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    let now_ms = runtime.now_milliseconds();
-    if game.player_skill_execution(player_id, BOSS_BLUE_FURY_SKILL_ID).is_none() {
-        if !skill_is_restored(
-            game.player_skill_last_used_ms(player_id, BOSS_BLUE_FURY_SKILL_ID),
-            reuse_delay_ms,
-            now_ms,
-        ) {
-            send_player_failure(game, player_id, 0x0d, rp_loss);
-            send_player_failure(game, player_id, 2, rp_loss);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if rp_loss == 0 || (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
-            if rp_loss != 0 {
-                send_player_failure(game, player_id, 8, rp_loss);
-            }
-            send_player_failure(game, player_id, 2, rp_loss);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(BOSS_BLUE_FURY_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
-        return player_terminal(QueuedSkillExecutionState::Begun);
-    }
-    if dead {
-        send_player_failure(game, player_id, 2, rp_loss);
-        restore_player_movement(game, player_id);
-        finish_player_boss_blue_fury(game, player_id, player_ai, runtime);
-        return player_terminal(QueuedSkillExecutionState::Completed);
-    }
-    if game.player_skill_execution(player_id, BOSS_BLUE_FURY_SKILL_ID)
-        .is_some_and(|state| state.stage() == SkillStage::Begin)
-    {
-        let rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 {
-            send_player_failure(game, player_id, 8, rp_loss);
-            abort_player_boss_blue_fury(game, player_id);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_rp(rp.wrapping_sub(rp_loss as u16));
-        }
-        let _ = game.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
-        send_player_visual(game, player_id, skill_level, 1);
-        if let Some(state) = game.player_skill_execution_mut(player_id, BOSS_BLUE_FURY_SKILL_ID) {
-            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let started_at_ms = game.player_skill_execution(player_id, BOSS_BLUE_FURY_SKILL_ID)
-        .map(|state| state.started_at_ms())
-        .expect("выполнение ярости хранит время начала");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
-        return player_terminal(QueuedSkillExecutionState::Pending);
-    }
-    send_player_visual(game, player_id, skill_level, 2);
-    if let Some(state) = game.player_skill_execution_mut(player_id, BOSS_BLUE_FURY_SKILL_ID) {
-        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-    let state_now_ms = runtime.now_milliseconds();
-    let state = BossBlueFuryState::new(state_now_ms, keep_time_ms, damage_factor, weak_time_ms);
-    let previous = game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state_key::<BossBlueFuryState>());
-    if let Some(previous) = previous {
-        let _ = super::bossbluefurystate::end_player_boss_blue_fury_state_key(
-            game, player_id, previous, state_now_ms,
-        );
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(false);
-        player.set_skill_fightable(false);
-        player.begin_boss_blue_fury_state(state);
-    }
-    let _ = game.update_player_properties(player_id);
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, BOSS_BLUE_FURY_SKILL_ID) {
-        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_boss_blue_fury(game, player_id, player_ai, runtime);
-    player_terminal(QueuedSkillExecutionState::Completed)
+    execute_player_state_skill::<BossBlueFury, Runtime>(game, player_id, dispatch, player_ai, runtime)
 }
 
+#[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
@@ -313,108 +87,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region_owner) = owner.as_mut() else { return false };
-    let Some((source, cast, last_used_ms)) = region_owner.base_mut()
-        .find_monster_by_id(monster_id)
-        .map(|monster| {
-            (
-                monster.move_shape().shape().clone(),
-                monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory()),
-            )
-        })
-    else {
-        return false;
-    };
-
-    if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity)
-        else {
-            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target(game.skill_factory());
-            }
-            return true;
-        };
-        if !approach_attack_range(
-            game,
-            region_owner.base_mut(),
-            monster_id,
-            MonsterTraceTarget::Shape(target.view),
-            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            runtime,
-        ) {
-            return true;
-        }
-        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-                last_used_ms,
-                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                now_ms,
-            )
-        {
-            return true;
-        }
-        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), self_identity(monster_id));
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-            monster.begin_base_attack_cast(
-                self_identity(monster_id),
-                BOSS_BLUE_FURY_SKILL_ID,
-                skill_level,
-                now_ms,
-                target_object,
-                game.skill_factory(),
-            );
-        }
-        send_cast_start(game, region_owner.base_mut(), &source, skill_level);
-        return true;
-    }
-
-    let cast = cast.expect("выполнение ярости синего босса проверено выше");
-    if cast.dispatch().skill_id != BOSS_BLUE_FURY_SKILL_ID {
-        return false;
-    }
-    if !time_reached(
-        now_ms,
-        cast.started_at_ms(),
-        properties.query_property(SKILL_USAGE_DELAY_TIME),
-    ) {
-        return true;
-    }
-
-    send_cast_fire(game, region_owner.base_mut(), &source, skill_level);
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
-    }
-
-    let state = BossBlueFuryState::new(
-        now_ms,
-        properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
-        properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as i32,
-        properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER),
-    );
-    let previous = region_owner.base().find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().applied_state_key::<BossBlueFuryState>());
-    let region_id = region_owner.base().id;
-    if let Some(previous) = previous {
-        let _ = game.with_published_region(owner, |game| {
-            super::bossbluefurystate::end_boss_blue_fury_state(
-                game, region_id, source.identity(), previous,
-            )
-        });
-    }
-    let Some(region_owner) = owner.as_mut() else { return true };
-    let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) else { return true };
-    monster.move_shape_mut().set_moveable(false);
-    monster.move_shape_mut().set_fightable(false);
-    monster.move_shape_mut().begin_boss_blue_fury_state(state);
-
-    let _ = game.with_published_region(owner, |game| {
-        game.update_move_shape_properties(region_id, source.identity())
-    });
-    let Some(region_owner) = owner.as_mut() else { return true };
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-        let _ = monster.finish_base_attack_cast_with_clock(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
-    }
-    true
+    zone::execute_owned_boss_blue_fury(
+        game, owner, monster_id, target_identity, skill_level, properties, now_ms, runtime,
+        game_tick_milliseconds,
+    )
 }

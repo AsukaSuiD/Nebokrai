@@ -1,9 +1,10 @@
 //! Данные, срок и 12-байтная запись CBossBlueFuryState (0x1F7) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/skills/bossbluefurystate.cpp/.h.
-//! Конструктор VA 0x005E8A60 записывает срок (+0x38), коэффициент атаки
+//! Конструктор VA 0x005E8A60 записывает коэффициент атаки (+0x38), срок
 //! (+0x3C) и срок слабой фазы (+0x40) из аргументов без чтения часов; ID
-//! 0x1F7. Vtable 0x0065F994: AI VA 0x005E8D50 (отдельные часы перед слабой
+//! 0x1F7. Расстановка полей подтверждается рабочими телами: GetRemainedTime и
+//! общий срок AI читают +0x3C, x87-формула OnUpdateProperties — +0x38. Vtable 0x0065F994: AI VA 0x005E8D50 (отдельные часы перед слабой
 //! и общей границами; после слабой снимает оба запрета на каждом проходе),
 //! End VA 0x005E8D10, Restart VA 0x005FD450 (только часы), OnUpdateProperties
 //! VA 0x005E8DC0, GetRemainedTime VA 0x005D5F30, Serialize VA 0x005E7330

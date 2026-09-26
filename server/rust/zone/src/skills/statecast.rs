@@ -73,12 +73,15 @@ pub trait StateCastPlayer {
 /// typed-доступа, которыми пользуются Begin/restart/AI/End состояний пятёрки.
 /// Имена сохраняют методы прежнего владельца; сериализуемый учёт записей
 /// (`append/insert_replacement_state_record`) остаётся его логикой.
+/// Запрет боя (`CBossBlueFuryState::Begin/AI/End`) приехал порцией E3.
 pub trait StateCastMoveShape {
     fn shape(&self) -> &CShape;
 
     fn shape_mut(&mut self) -> &mut CShape;
 
     fn set_moveable(&mut self, moveable: bool);
+
+    fn set_fightable(&mut self, fightable: bool);
 
     fn state_slot_count(&self) -> usize;
 

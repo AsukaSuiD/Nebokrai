@@ -11,6 +11,8 @@ mod battlefairytransfer; // Check/AI CHuoxieshu/CLingzhishu (порция №6b;
 pub mod battlefairysummon; // призыв, следование и гибель/воскрешение боевого духа у CPlayer: SetWarSoulStaus, SummonBF±1, ComputeWarSoulXY, spatial tails и death/revive (порция №7a; view/closure-швы прежнего hub CPlayer).
 pub mod blind; // CBlind (0x76): kernel-вход, visual и AddBlindState (порция №6c; hub-швы `selfcast`).
 pub mod blindstate; // общий lifecycle 8-байт lock-состояний Blind/Rush/Rush2/BoaLock/KnockOut/KnightCut/SpiderWeb/Seal/Strike (порция №6c).
+pub mod bossbluefury; // CBossBlueFury (0x1F7): Check/AI и продув состояний (продув каждого 0x1F7 → новый state → UpdateProperty → End(1)); FIX F3 — машинный полный sweep вместо первого ключа; visual с BYTE-формой отказов (кластер E3; hub-швы `statecast`+`fury`, монстр-вход — hub `monsterattack`).
+pub mod bossbluefurystate; // живые Begin/End/Restart/AI и OnUpdateProperties CBossBlueFuryState с швом fightable (кластер E3; данные/кодек — `effects/bossbluefury`).
 pub mod callosity; // Check/AI взаимно исключающих CCallosity/CCallosity2 (порция №6c; hub-швы `selfcast`).
 pub mod callositystate; // живые replace/restart/AI/End CCallosityState/CCallosityState2 (порция №6c).
 mod chaossphere; // движущаяся область CChaosSpherePhalanx, её живая форма и тело Summon (порция T5).
