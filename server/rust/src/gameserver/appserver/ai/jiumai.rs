@@ -1,212 +1,142 @@
-//! Владелец достигнутой семантики AI101: создание и связывание пары Цзюмай,
-//! выбор цели с минимальным текущим HP и передача цели свободному близнецу.
-//! `WhenBeenHurted` сохраняет прямые допустимые цели и исходный одиночный шаг
-//! при исчезнувшем игроке. `OnSchedule` сначала сближает близнецов, затем
-//! использует общую FIFO навыка для `SearchEnemy/Attack`.
-//! Префикс OnSchedule (0x0060AB10) обслуживает пару до проверки HasTarget,
-//! только для живого владельца с пустыми active/passive очередями. CGame
-//! вызывает его до background/passive; OnFighting и поздний OnIdle не
-//! повторяют ForceMove/RNG. Создание пары остаётся отдельным OnIdle.
-//! OnLoseTarget 0x0060A990 вызывает базовый переход 0x005DCC30 → 0x004C7DA0,
-//! который очищает только цель. Передача потери цели близнецу не отменяет
-//! его исполнение навыка и Move FIFO; дальнейший AI самостоятельно завершает
-//! навык. Отложенная синхронизация ниже пока сохраняет метку связанной цели.
-//! Общий schedule-OnLoseTarget и death FIFO вызывают один переход пары
-//! непосредственно; наличие старой linked-метки ему не требуется.
-//! Отход WhenBeenHurted (0x0060A8E7) вызывает общий CBaseAI::MoveTo(run=0),
-//! а не прямой Move: при успешном Slip за пространственной попыткой всегда
-//! следует ASA_MOVE. Отказ Slip не ставит событие. Defense предшествует выбору
-//! цели или отходу; каждый AddAIEvent получает собственное текущее время.
+//! Делегат ИИ близнецов `CJiuMai` (AI101) в Zone.
+//!
+//! Состояние пары, создание/сближение близнецов, min-HP выбор цели и
+//! hurt-поведение перенесены буквально в `nebokrai_zone::ai::jiumai` —
+//! машинная база `MATCH` по точной паре `4F5C98E0…` + GameServer.pdb (RSDS
+//! match), RVA-якоря (`0x0060A5F0` OnIdle, `0x0060A750` WhenBeenHurted,
+//! `0x0060A990` OnLoseTarget, `0x0060AA50` SetTarget, `0x0060AB10`
+//! OnSchedule, `0x0060AD10` OnSearchEnemy), PARTIAL-оговорка спавна при
+//! отказе позиции и исправленная этой волной запись `CShape::SetDir`
+//! hurt-отхода описаны в её шапке. Здесь:
+//!
+//! - реализации hub-трейтов Zone над прежними `CGame`, `CPlayer` и
+//!   `CMonster` — состояние пары остаётся полем переходного `CMonster`,
+//!   фактический спавн, RNG позиции, `ForceMove` и пространственный
+//!   рантайм — hub-владением;
+//! - делегации с прежними сигнатурами и переэкспорт `JiuMaiAiState` —
+//!   потребители старого пакета (runtime-входы `game.rs`,
+//!   `monsterbaseattack`, виртуальный шов `monsterai`) не меняются.
 
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp
-// `WhenBeenHurted` сопоставлен с RVA 0x0020A750, `OnLoseTarget` — с RVA 0x0020A990,
-// `OnSchedule` — с RVA 0x0020AB10.
-
-use super::archer::select_archer_enemy;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{
-    CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
-};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::tools::get_line_direction;
+use crate::gameserver::appserver::shape::{ShapeAreaCoordinates, ShapeIdentity, ShapeView};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, game_tick_milliseconds};
 use crate::setup::monsterlist::MonsterProperties;
 
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
+use nebokrai_zone::ai::jiumai::{
+    JiuMaiDispatcherGame, JiuMaiDispatcherMonster, JiuMaiDispatcherPlayer,
+};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct JiuMaiAiState {
-    twins_id: i32,
-    linked_target: bool,
+pub(crate) use nebokrai_zone::ai::jiumai::JiuMaiAiState;
+
+impl JiuMaiDispatcherMonster for CMonster {
+    fn jiu_mai_ai(&self) -> Option<&JiuMaiAiState> {
+        CMonster::jiu_mai_ai(self)
+    }
+
+    fn jiu_mai_ai_mut(&mut self) -> Option<&mut JiuMaiAiState> {
+        CMonster::jiu_mai_ai_mut(self)
+    }
+
+    fn is_summoned_creature(&self) -> bool {
+        CMonster::is_summoned_creature(self)
+    }
+
+    fn is_carriage(&self, property: &MonsterProperties) -> bool {
+        CMonster::is_carriage(self, property)
+    }
+
+    fn when_been_hurted(&mut self, now_ms: u32) {
+        CMonster::when_been_hurted(self, now_ms);
+    }
+
+    fn set_shape_direction(&mut self, direction: i32) {
+        CMoveShape::shape_mut(self.move_shape_mut()).set_direction(direction);
+    }
 }
 
-impl JiuMaiAiState {
-    pub(crate) const fn twins_id(&self) -> i32 {
-        self.twins_id
-    }
-
-    pub(crate) const fn set_twins_id(&mut self, twins_id: i32) {
-        self.twins_id = twins_id;
-    }
-
-    const fn linked_target(&self) -> bool {
-        self.linked_target
-    }
-
-    const fn set_linked_target(&mut self, linked_target: bool) {
-        self.linked_target = linked_target;
+impl JiuMaiDispatcherPlayer for CPlayer {
+    fn hit_points(&self) -> u32 {
+        CPlayer::health(self)
     }
 }
 
-/// Выполняет достигнутый префикс `OnIdle` AI101. Обычный монстр один раз
-/// создаёт бессрочного близнеца того же свойства, а призванный близнец берёт
-/// обратный ID из `master_id` и не создаёт следующую сущность.
+impl JiuMaiDispatcherGame for CGame {
+    fn random_region_position(
+        &mut self,
+        region: &CServerRegion,
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<ShapeAreaCoordinates> {
+        self.random_region_position_owned(&region.region, left, top, width, height)
+            .ok()
+            .map(|position| ShapeAreaCoordinates {
+                x: position.x,
+                y: position.y,
+            })
+    }
+
+    fn add_summoned_creature(
+        &mut self,
+        region: &mut CServerRegion,
+        property: &MonsterProperties,
+        master: MasterInfo,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        lifetime_ms: u32,
+    ) -> Option<i32> {
+        self.add_summoned_creature_owned(
+            region, property, master, tile_x, tile_y, direction, lifetime_ms,
+        )
+        .ok()
+    }
+
+    fn force_move_owned_monster(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        run: i32,
+    ) -> bool {
+        self.force_move_owned_monster(region, monster_id, tile_x, tile_y, run as u32)
+            .and_then(Result::ok)
+            .unwrap_or(false)
+    }
+}
+
+/// Выполняет достигнутый префикс `OnIdle` AI101: призванный близнец берёт
+/// обратный ID, обычный монстр один раз создаёт бессрочного близнеца
+/// (прежняя сигнатура). Базовый общий `OnIdle` ставится caller-ом.
 pub(crate) fn ensure_jiumai_twin(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     property: &MonsterProperties,
 ) -> bool {
-    let Some((twins_id, summoned, master, owner)) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            Some((
-                monster.jiu_mai_ai()?.twins_id(),
-                monster.is_summoned_creature(),
-                monster.master_info(),
-                monster.shape_view(property)?,
-            ))
-        })
-    else {
-        return false;
-    };
-    if twins_id != 0 {
-        return true;
-    }
-    if summoned {
-        if let Some(state) = region
-            .find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.jiu_mai_ai_mut())
-        {
-            state.set_twins_id(master.master_id);
-        }
-        return true;
-    }
-
-    let position = game.random_region_position_owned(
-        &region.region,
-        owner.tile_x.wrapping_sub(5),
-        owner.tile_y.wrapping_sub(5),
-        10,
-        10,
-    );
-    let spawned = position.ok().and_then(|position| {
-        game.add_summoned_creature_owned(
-                region,
-                property,
-                MasterInfo {
-                    master_type: MONSTER_TYPE,
-                    master_id: monster_id,
-                    ..MasterInfo::default()
-                },
-                position.x,
-                position.y,
-                -1,
-                u32::MAX,
-            )
-            .ok()
-    });
-    if let Some(state) = region
-        .find_monster_by_id_mut(monster_id)
-        .and_then(|monster| monster.jiu_mai_ai_mut())
-    {
-        state.set_twins_id(spawned.unwrap_or(-1));
-    }
-    true
+    nebokrai_zone::ai::jiumai::ensure_jiumai_twin(game, region, monster_id, property)
 }
 
-/// Сохраняет достигнутый префикс `OnSchedule`: если живой близнец дальше
-/// пяти клеток и текущая цель не ближе к владельцу, владелец получает точный
-/// случайный пункт около близнеца и выполняет исходный `ForceMove` с нулевой
-/// длительностью. Порядок RNG остаётся перед общим боевым расписанием.
+/// Сохраняет достигнутый префикс `OnSchedule`: сближение живого близнеца
+/// через точный случайный пункт и исходный `ForceMove(run=0)` (прежняя
+/// сигнатура). Боевой хвост расписания — общий диспетчер навыка.
 pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((twins_id, owner, target)) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            if monster.active_primary_ai_type() != Some(101) || CMoveShape::is_died(monster.hit_points())
-                || !monster.primary_ai_queues_idle()
-            {
-                return None;
-            }
-            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some((
-                monster.jiu_mai_ai()?.twins_id(),
-                monster.shape_view(property)?,
-                monster.ai_target(),
-            ))
-        })
-    else {
-        return false;
-    };
-    let Some(twin) = region.find_monster_by_id(twins_id).and_then(|monster| {
-        (!CMoveShape::is_died(monster.hit_points())).then(|| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            monster.shape_view(property)
-        })?
-    }) else {
-        return true;
-    };
-    if owner.real_distance(Some(twin)) <= 5 {
-        return true;
-    }
-
-    let target = target.and_then(|identity| match identity.object_type {
-        PLAYER_TYPE => game.find_player(identity.id).and_then(|player| player.shape_view()),
-        MONSTER_TYPE => region.find_monster_by_id(identity.id).and_then(|monster| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            monster.shape_view(property)
-        }),
-        _ => None,
-    });
-    if target.is_some_and(|target| {
-        target.real_distance(Some(owner)) <= target.real_distance(Some(twin))
-    }) {
-        return true;
-    }
-
-    let Ok(destination) = region.region.get_random_pos_in_range(
-        twin.tile_x.wrapping_sub(5),
-        twin.tile_y.wrapping_sub(5),
-        10,
-        10,
-        runtime,
-    ) else {
-        return true;
-    };
-    let _ = game.force_move_owned_monster(
-        region,
-        owner.identity.id,
-        destination.x,
-        destination.y,
-        0,
-    );
-    true
+    nebokrai_zone::ai::jiumai::maintain_jiumai_twin(game, region, monster_id, runtime)
 }
 
-/// Выбирает цель `OnSearchEnemy` AI101: среди игроков и питомцев внутри
-/// дальности охраны остаётся первая цель с минимальным текущим HP.
+/// Выбирает цель `OnSearchEnemy` AI101: первая живая запись с минимальным
+/// текущим HP среди игроков и питомцев (прежняя сигнатура).
 pub(crate) fn select_jiumai_enemy(
     game: &CGame,
     region: &CServerRegion,
@@ -214,276 +144,52 @@ pub(crate) fn select_jiumai_enemy(
     area_index: usize,
     guard_range: i32,
 ) -> Option<ShapeIdentity> {
-    select_archer_enemy(game, region, owner, area_index, guard_range)
+    nebokrai_zone::ai::jiumai::select_jiumai_enemy(game, region, owner, area_index, guard_range)
 }
 
-/// Повторяет `CJiuMai::SetTarget`: основной владелец получает цель всегда,
-/// живой близнец — только когда ещё не ведёт собственный бой.
+/// Повторяет `CJiuMai::SetTarget`: владелец — всегда, живой близнец — только
+/// вне собственного боя (прежняя сигнатура).
 pub(crate) fn assign_jiumai_target(
     region: &mut CServerRegion,
     monster_id: i32,
     target: ShapeIdentity,
 ) -> bool {
-    let Some(twins_id) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| monster.jiu_mai_ai())
-        .map(JiuMaiAiState::twins_id)
-    else {
-        return false;
-    };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_ai_target(target);
-        if let Some(state) = monster.jiu_mai_ai_mut() {
-            state.set_linked_target(true);
-        }
-    }
-    if twins_id > 0
-        && let Some(twin) = region.find_monster_by_id_mut(twins_id)
-        && !CMoveShape::is_died(twin.hit_points())
-        && twin.ai_target().is_none()
-    {
-        twin.set_ai_target(target);
-    }
-    true
+    nebokrai_zone::ai::jiumai::assign_jiumai_target(region, monster_id, target)
 }
 
-/// Завершает достигнутый `OnLoseTarget` после общего боевого такта. Метка
-/// отличает реальный переход ранее связанной цели от обычного бездействия:
-/// независимый бой близнеца без предшествующего `SetTarget` не стирается.
+/// Завершает достигнутый `OnLoseTarget` после общего боевого такта (прежняя
+/// сигнатура): стирается только ранее связанная цель.
 pub(crate) fn synchronize_jiumai_target_loss(
     region: &mut CServerRegion,
     monster_id: i32,
 ) -> bool {
-    let Some((twins_id, lost_linked_target)) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            let state = monster.jiu_mai_ai()?;
-            Some((
-                state.twins_id(),
-                state.linked_target() && monster.ai_target().is_none(),
-            ))
-        })
-    else {
-        return false;
-    };
-    if !lost_linked_target {
-        return true;
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        && let Some(state) = monster.jiu_mai_ai_mut()
-    {
-        state.set_linked_target(false);
-    }
-    if twins_id > 0
-        && let Some(twin) = region.find_monster_by_id_mut(twins_id)
-        && !CMoveShape::is_died(twin.hit_points())
-        && twin.ai_target().is_some()
-    {
-        twin.release_ai_target_for_death();
-    }
-    true
+    nebokrai_zone::ai::jiumai::synchronize_jiumai_target_loss(region, monster_id)
 }
 
-/// Материализует виртуальный `CJiuMai::OnLoseTarget` для расписания и death FIFO. Сначала
-/// общий monster-owner отпускает цель погибшей половины, затем тот же базовый
-/// переход получает живой сражающийся близнец. Оба перехода сохраняют уже
-/// поставленный `ASA_MOVE`, как исходный `CMonsterAI::OnLoseTarget`.
+/// Материализует виртуальный `CJiuMai::OnLoseTarget` для расписания и death
+/// FIFO (прежняя сигнатура, шов трейта `MonsterDispatcherGame`).
 pub(crate) fn release_jiumai_target(
     region: &mut CServerRegion,
     monster_id: i32,
 ) -> bool {
-    let Some(twins_id) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| monster.jiu_mai_ai().map(JiuMaiAiState::twins_id))
-    else {
-        return false;
-    };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.release_ai_target_for_death();
-        if let Some(state) = monster.jiu_mai_ai_mut() {
-            state.set_linked_target(false);
-        }
-    }
-    if twins_id > 0
-        && let Some(twin) = region.find_monster_by_id_mut(twins_id)
-        && !CMoveShape::is_died(twin.hit_points())
-        && twin.ai_target().is_some()
-    {
-        twin.release_ai_target_for_death();
-        if let Some(state) = twin.jiu_mai_ai_mut() {
-            state.set_linked_target(false);
-        }
-    }
-    true
+    nebokrai_zone::ai::jiumai::release_jiumai_target(region, monster_id)
 }
 
-/// Выполняет достигнутые прямые ветви `WhenBeenHurted` AI101 после
-/// освобождения изменяемого заимствования цели. Событие защиты ставится всегда;
-/// свободная пара принимает существующего игрока либо приручённого монстра или
-/// повозку. При исчезнувшем игроке выбирается ближайший игрок, затем монстр;
-/// без найденного ориентира сохраняется прежнее направление. После выбора
-/// выполняется одна попытка ходового MoveTo.
+/// Выполняет достигнутые ветви `WhenBeenHurted` AI101 (прежняя сигнатура):
+/// защита, принятие допустимого атакующего или один отход/сближение общим
+/// `MoveTo(run=0)` с записью направления формы.
 pub(crate) fn retarget_jiumai_after_hurt<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     attacker: ShapeIdentity,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
-    let Some((owner, area_index, direction, fighting)) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            monster.jiu_mai_ai()?;
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some((
-                monster.shape_view(property)?,
-                monster.move_shape().shape().area_index(),
-                monster.move_shape().shape().get_direction(),
-                monster.ai_target().is_some(),
-            ))
-        })
-    else {
-        return false;
-    };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.when_been_hurted(runtime.now_milliseconds());
-    }
-    if fighting {
-        return true;
-    }
-    let eligible = match attacker.object_type {
-        PLAYER_TYPE => game.find_player(attacker.id).is_some_and(|player| {
-            player.server_region_id() == Some(region.id)
-        }),
-        MONSTER_TYPE => region.find_monster_by_id(attacker.id).is_some_and(|monster| {
-            monster.is_tamed()
-                || monster
-                    .base_property_key()
-                    .and_then(|key| game.find_monster_property_by_origin_name(key))
-                    .is_some_and(|property| monster.is_carriage(property))
-        }),
-        _ => false,
-    };
-    if eligible {
-        let _ = assign_jiumai_target(region, monster_id, attacker);
-        return true;
-    }
-    if attacker.object_type != PLAYER_TYPE {
-        return true;
-    }
-
-    let Some(area_index) = area_index else {
-        return true;
-    };
-    let retreat = nearest_jiumai_player(game, region, area_index, owner)
-        .and_then(|threat| jiumai_step(owner, threat, true))
-        .or_else(|| {
-            nearest_jiumai_monster(game, region, area_index, owner, monster_id)
-                .and_then(|companion| jiumai_step(owner, companion, false))
-        })
-        .or_else(|| {
-            CShape::get_direction_position(
-                direction,
-                ShapeAreaCoordinates {
-                    x: owner.tile_x,
-                    y: owner.tile_y,
-                },
-            )
-            .ok()
-        });
-    if let Some(destination) = retreat {
-        super::monsterai::move_owned_monster_to(
-            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
-        );
-    }
-    true
-}
-
-fn nearest_jiumai_player(
-    game: &CGame,
-    region: &CServerRegion,
-    area_index: usize,
-    owner: ShapeView,
-) -> Option<ShapeView> {
-    nearest_jiumai_view(
-        region
-            .player_ids_around_area(area_index)
-            .into_iter()
-            .filter_map(|player_id| {
-                game.find_player(player_id).and_then(|player| {
-                    (player.server_region_id() == Some(region.id))
-                        .then(|| player.shape_view())
-                        .flatten()
-                })
-            }),
-        owner,
+    nebokrai_zone::ai::jiumai::retarget_jiumai_after_hurt(
+        game,
+        region,
+        monster_id,
+        attacker,
+        game_tick_milliseconds,
     )
-}
-
-fn nearest_jiumai_monster(
-    game: &CGame,
-    region: &CServerRegion,
-    area_index: usize,
-    owner: ShapeView,
-    owner_id: i32,
-) -> Option<ShapeView> {
-    nearest_jiumai_view(
-        region
-            .monster_ids_around_area(area_index)
-            .into_iter()
-            .filter(|candidate_id| *candidate_id != owner_id)
-            .filter_map(|candidate_id| {
-                let candidate = region.find_monster_by_id(candidate_id)?;
-                let property = game
-                    .find_monster_property_by_origin_name(candidate.base_property_key()?)?;
-                candidate.shape_view(property)
-            }),
-        owner,
-    )
-}
-
-fn nearest_jiumai_view(
-    candidates: impl Iterator<Item = ShapeView>,
-    owner: ShapeView,
-) -> Option<ShapeView> {
-    candidates
-        .fold(None, |nearest, candidate| {
-            let distance = owner.real_distance(Some(candidate));
-            match nearest {
-                Some((_, current_distance)) if current_distance <= distance => nearest,
-                _ => Some((candidate, distance)),
-            }
-        })
-        .map(|(candidate, _)| candidate)
-}
-
-fn jiumai_step(
-    owner: ShapeView,
-    reference: ShapeView,
-    away_from_reference: bool,
-) -> Option<ShapeAreaCoordinates> {
-    let direction = if away_from_reference {
-        get_line_direction(
-            reference.tile_x,
-            reference.tile_y,
-            owner.tile_x,
-            owner.tile_y,
-        )
-    } else {
-        get_line_direction(
-            owner.tile_x,
-            owner.tile_y,
-            reference.tile_x,
-            reference.tile_y,
-        )
-    };
-    CShape::get_direction_position(
-        direction,
-        ShapeAreaCoordinates {
-            x: owner.tile_x,
-            y: owner.tile_y,
-        },
-    )
-    .ok()
 }

@@ -1,58 +1,76 @@
-//! Достигнутая часть городского охранника с мечом (AI10).
+//! Делегат городского мечевого охранника `CCityGuardWithSword` (AI10) и
+//! унаследованной постовой семьи в Zone.
 //!
-//! Точная пара gameserver.exe + GameServer.pdb и исходный владелец
-//! appserver/ai/cityguardwithsword.cpp подтверждают точку поста, фильтры игроков
-//! и питомцев по `faction_id`/`union_id`, правило минимальной дистанции и особую
-//! ветвь `Tracing`: шаг назад, `ForceMove` около далёкой цели и сброс за
-//! `chase_range`. Городской поиск также включает вражеские повозки `603`,
-//! исключая повозки членов faction/union владельца города. AI10 и производные
-//! окружные AI15/AI19 наследуют
-//! `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и эту ветвь преследования, меняя
-//! только selector. `OnIdle` один раз фиксирует пост и продолжает через общий
-//! idle FIFO. `OnLoseTarget` возвращает владельца к посту, выбирая случайную
-//! соседнюю клетку для заблокированной точки. OnLoseTarget (0x0060D020)
-//! сначала вызывает CMonsterAI::OnLoseTarget (0x005DCC30), очищающий только
-//! цель: он не отменяет cast, выбранный навык или active Move. Один обработчик
-//! обслуживает бой и смерть; последующий SearchEnemy принадлежит caller-у.
-//! OnSearchEnemy (AI9: 0x0060EA60, AI10: 0x0060E290) при имеющейся цели
-//! только сравнивает RealDistance(long,long) до поста с chase_range и при
-//! превышении вызывает OnLoseTarget. Новый selector и добавочный SearchEnemy
-//! в этой ветви не исполняются. Проверка не переносится на такты cast;
-//! координаты источника берутся из CShape, без округления до клетки заранее.
-//! Tracing (0x0060D0E0) за пределом chase_range вызывает виртуальный
-//! OnLoseTarget, затем SearchEnemy (0x0060D292), не общий cancel. При
-//! сближении ForceMove предшествует отдельному Move(0) (0x0060D1F7),
-//! независимо от результата переноса. Короткий отход вызывает общий ходовой
-//! MoveTo: Slip, пространственный шаг и отдельный Move с задержкой.
-//! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
-//! порядка и фильтров достигнутого selector-а.
+//! Точка поста, городской selector (игроки/питомцы с фильтрами владельца
+//! города и минимальной дистанцией навыка), хвост проверки дистанции до
+//! поста и ветвь `Tracing` перенесены буквально в
+//! `nebokrai_zone::ai::cityguardwithsword` — машинная база `MATCH` по точной
+//! паре `4F5C98E0…` + GameServer.pdb (RSDS match), RVA-якоря (`0x0060E290`
+//! OnSearchEnemy AI10, `0x0060DB10` AI11, `0x0060E350`/`0x0060E510`
+//! selector-пара, vtable `0x00662BCC`) описаны в её шапке волной Z-AI вместе
+//! с устранённым расхождением: третий виртуал `SearchEnemyGuildCarriage`
+//! (`+0x98`) городские `OnSearchEnemy`/`WhenBeenHurted` не вызывают (его
+//! caller-ы — только `CVilCouGuardWithBow` AI16), поэтому проход повозок
+//! `603` из городского selector-а удалён. Здесь:
+//!
+//! - реализации hub-трейтов Zone над прежними `CGame`, `CPlayer`,
+//!   `CMonster`, `CMoveShape` и `CServerRegion` — состояние поста остаётся
+//!   полем переходного `CMonster`, `ForceMove` и RNG клеток — hub-швами;
+//! - делегации с прежними сигнатурами и переэкспорт `CitySwordTraceOutcome`
+//!   — потребители старого пакета (`monsterbaseattack`, шов
+//!   `MonsterDispatcherRuntime` в `monsterai.rs`) не меняются.
 
-use super::guardtarget::{
-    GuardDistanceTarget, consider_guard_distance_target, select_guard_target_groups,
-};
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeView};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::tools::get_line_direction;
+use crate::gameserver::appserver::shape::ShapeView;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, game_tick_milliseconds};
+use nebokrai_zone::ai::guardtarget::GuardDistanceTarget;
 
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
+use nebokrai_zone::ai::cityguardwithsword::{
+    CityGuardDispatcherMoveShape, CityGuardDispatcherPlayer, CityGuardDispatcherRegion,
+    GuardStationDispatcherMonster,
+};
 
-fn belongs_to_city_owner(
-    faction_id: i32,
-    union_id: i32,
-    owner_faction_id: i32,
-    owner_union_id: i32,
-) -> bool {
-    (faction_id != 0 && faction_id == owner_faction_id)
-        || (union_id != 0 && union_id == owner_union_id)
+pub(crate) use nebokrai_zone::ai::cityguardwithsword::CitySwordTraceOutcome;
+pub(crate) use super::guardtarget::GuardStationState;
+
+impl GuardStationDispatcherMonster for CMonster {
+    fn guard_station_ai_mut(&mut self) -> Option<&mut GuardStationState> {
+        CMonster::guard_station_ai_mut(self)
+    }
 }
 
-/// Выбирает цель AI10/AI11 отдельными исходными проходами игроков, питомцев и
-/// повозок. Совпадение ненулевой фракции либо союза с владельцем города
-/// исключает живого игрока и принадлежащих ему существ; owner без разрешимого
-/// локального игрока остаётся допустимой целью.
+impl CityGuardDispatcherMoveShape for CMoveShape {
+    fn current_skill_id(&self) -> Option<u32> {
+        CMoveShape::current_skill_id(self)
+    }
+}
+
+impl CityGuardDispatcherPlayer for CPlayer {
+    fn faction_id(&self) -> i32 {
+        CPlayer::faction_id(self)
+    }
+
+    fn union_id(&self) -> i32 {
+        CPlayer::union_id(self)
+    }
+}
+
+impl CityGuardDispatcherRegion for CServerRegion {
+    fn owned_city_faction(&self) -> i32 {
+        CServerRegion::owned_city_faction(self)
+    }
+
+    fn owned_city_union(&self) -> i32 {
+        CServerRegion::owned_city_union(self)
+    }
+}
+
+/// Выбирает цель AI10/AI11 отдельными исходными проходами игроков и
+/// питомцев (прежняя сигнатура). Минимальная дистанция сохраняется
+/// caller-ом текущего навыка.
 pub(crate) fn select_city_guard_enemy(
     game: &CGame,
     region: &CServerRegion,
@@ -61,128 +79,12 @@ pub(crate) fn select_city_guard_enemy(
     guard_range: i32,
     minimum_skill_distance: i32,
 ) -> Option<GuardDistanceTarget> {
-    let owner_faction_id = region.owned_city_faction();
-    let owner_union_id = region.owned_city_union();
-    let mut selected_player = None;
-    for player_id in region.player_ids_around_area(area_index) {
-        let Some(player) = game.find_player(player_id) else {
-            continue;
-        };
-        if player.server_region_id() != Some(region.id)
-            || player.is_dead()
-            || belongs_to_city_owner(
-                player.faction_id(),
-                player.union_id(),
-                owner_faction_id,
-                owner_union_id,
-            )
-        {
-            continue;
-        }
-        let Some(candidate) = player.shape_view() else {
-            continue;
-        };
-        selected_player = consider_guard_distance_target(
-            selected_player,
-            GuardDistanceTarget {
-                identity: candidate.identity,
-                distance: owner.real_distance(Some(candidate)),
-            },
-            guard_range,
-            minimum_skill_distance,
-        );
-    }
-
-    let mut selected_pet = None;
-    for pet_id in region.pet_ids_around_area(area_index) {
-        let Some((candidate, master)) = region
-            .find_monster_by_id(pet_id)
-            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-            .and_then(|pet| {
-                let property =
-                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                Some((pet.shape_view(property)?, pet.master_info()))
-            })
-        else {
-            continue;
-        };
-        let protected_by_owner = (master.master_type == PLAYER_TYPE)
-            .then(|| game.find_player(master.master_id))
-            .flatten()
-            .is_some_and(|player| {
-                belongs_to_city_owner(
-                    player.faction_id(),
-                    player.union_id(),
-                    owner_faction_id,
-                    owner_union_id,
-                )
-            });
-        if protected_by_owner {
-            continue;
-        }
-        selected_pet = consider_guard_distance_target(
-            selected_pet,
-            GuardDistanceTarget {
-                identity: candidate.identity,
-                distance: owner.real_distance(Some(candidate)),
-            },
-            guard_range,
-            minimum_skill_distance,
-        );
-    }
-    let mut selected_carriage = None;
-    for carriage_id in region.carriage_ids_around_area(area_index) {
-        let Some((candidate, master)) = region
-            .find_monster_by_id(carriage_id)
-            .filter(|carriage| !CMoveShape::is_died(carriage.hit_points()))
-            .and_then(|carriage| {
-                let property =
-                    game.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
-                if !carriage.is_carriage(property) {
-                    return None;
-                }
-                Some((carriage.shape_view(property)?, carriage.master_info()))
-            })
-        else {
-            continue;
-        };
-        let protected_by_owner = (master.master_type == PLAYER_TYPE)
-            .then(|| game.find_player(master.master_id))
-            .flatten()
-            .is_some_and(|player| {
-                belongs_to_city_owner(
-                    player.faction_id(),
-                    player.union_id(),
-                    owner_faction_id,
-                    owner_union_id,
-                )
-            });
-        if protected_by_owner {
-            continue;
-        }
-        selected_carriage = consider_guard_distance_target(
-            selected_carriage,
-            GuardDistanceTarget {
-                identity: candidate.identity,
-                distance: owner.real_distance(Some(candidate)),
-            },
-            guard_range,
-            minimum_skill_distance,
-        );
-    }
-    select_guard_target_groups(
-        select_guard_target_groups(selected_player, selected_pet),
-        selected_carriage,
+    nebokrai_zone::ai::cityguardwithsword::select_city_guard_enemy(
+        game, region, owner, area_index, guard_range, minimum_skill_distance,
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CitySwordTraceOutcome {
-    Ready,
-    Handled,
-}
-
-/// Ветка OnSearchEnemy с уже имеющейся целью; завершение FIFO остаётся caller-у.
+/// Ветка `OnSearchEnemy` с уже имеющейся целью (прежняя сигнатура).
 pub(crate) fn check_guard_station_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -190,80 +92,40 @@ pub(crate) fn check_guard_station_target<Runtime: GameMainLoopRuntime>(
     chase_range: i32,
     runtime: &mut Runtime,
 ) {
-    let outside = region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
-        let station = monster.guard_station_ai_mut().and_then(|state| state.station());
-        station.is_some_and(|station| {
-            monster.move_shape().shape().real_distance_to_point(station.x, station.y) > chase_range
-        })
-    });
-    if outside {
-        release_guard_sword_target(game, region, monster_id, runtime);
-    }
+    nebokrai_zone::ai::cityguardwithsword::check_guard_station_target(
+        game, region, monster_id, chase_range, runtime,
+    );
 }
 
-/// Выполняет виртуальный `OnLoseTarget` AI9/AI10/AI15/AI19: цель очищается,
-/// владелец возвращается к сохранённому посту, а заблокированная клетка
-/// заменяется одним `GetRandomPosInRange` на квадрате 3×3. Следующее событие
-/// расписания намеренно остаётся вызывающей стороне.
+/// Выполняет виртуальный `OnLoseTarget` постовой семьи: очистка цели и
+/// возврат к посту (прежняя сигнатура, шов `MonsterDispatcherRuntime`).
 pub(crate) fn release_guard_sword_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     runtime: &mut Runtime,
 ) {
-    let station = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        monster.release_ai_target_for_death();
-        monster.guard_station_ai_mut()?.station()
-    });
-    if let Some(station) = station {
-        let (destination_x, destination_y) = if region
-            .region
-            .get_block(station.x, station.y)
-            .unwrap_or(2)
-            != 0
-        {
-            region
-                .region
-                .get_random_pos_in_range(
-                    station.x.wrapping_sub(1),
-                    station.y.wrapping_sub(1),
-                    3,
-                    3,
-                    runtime,
-                )
-                .map(|position| (position.x, position.y))
-                .unwrap_or((station.x, station.y))
-        } else {
-            (station.x, station.y)
-        };
-        let _ = game.force_move_owned_monster(
-            region,
-            monster_id,
-            destination_x,
-            destination_y,
-            0,
-        );
-    }
+    nebokrai_zone::ai::cityguardwithsword::release_guard_sword_target(
+        game, region, monster_id, runtime,
+    );
 }
 
 /// Выполняет `OnLoseTarget` мечевого охранника перед внешним
-/// `ASA_SEARCH_ENEMY` из его schedule-owner-а.
+/// `ASA_SEARCH_ENEMY` его schedule-owner-а (прежняя сигнатура).
+#[allow(dead_code, reason = "прежняя hub-форма; schedule-owner вызывает release+search швами")]
 pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     runtime: &mut Runtime,
 ) {
-    release_guard_sword_target(game, region, monster_id, runtime);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
-    }
+    nebokrai_zone::ai::cityguardwithsword::lose_guard_sword_target(
+        game, region, monster_id, runtime, game_tick_milliseconds,
+    );
 }
 
-/// Выполняет общую ветвь `Tracing` AI10 и производных AI15/AI19. Слишком
-/// близкая цель вызывает один шаг назад, далёкая в пределах преследования —
-/// исходный `ForceMove` в случайную клетку вокруг неё, а выход за
-/// `chase_range` сбрасывает цель.
+/// Выполняет общую ветвь `Tracing` AI10 и производных AI15/AI19 (прежняя
+/// сигнатура).
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет отдельные пределы навыка и преследования")]
 pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -276,46 +138,16 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
     chase_range: i32,
     runtime: &mut Runtime,
 ) -> CitySwordTraceOutcome {
-    let distance = owner.real_distance(Some(target));
-    let (target_x, target_y) = (target.tile_x, target.tile_y);
-    if minimum_distance <= distance && distance <= maximum_distance {
-        return CitySwordTraceOutcome::Ready;
-    }
-    if distance > chase_range {
-        lose_guard_sword_target(game, region, monster_id, runtime);
-        return CitySwordTraceOutcome::Handled;
-    }
-    if distance > maximum_distance {
-        if let Ok(destination) = region.region.get_random_pos_in_range(
-            target_x.wrapping_sub(1),
-            target_y.wrapping_sub(1),
-            3,
-            3,
-            runtime,
-        ) {
-            let _ = game.force_move_owned_monster(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                0,
-            );
-        }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.begin_active_ai_move(0, runtime.now_milliseconds());
-        }
-        return CitySwordTraceOutcome::Handled;
-    }
-
-    let direction = get_line_direction(target_x, target_y, owner.tile_x, owner.tile_y);
-    let origin = ShapeAreaCoordinates {
-        x: owner.tile_x,
-        y: owner.tile_y,
-    };
-    if let Ok(destination) = CShape::get_direction_position(direction, origin) {
-        super::monsterai::move_owned_monster_to(
-            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
-        );
-    }
-    CitySwordTraceOutcome::Handled
+    nebokrai_zone::ai::cityguardwithsword::trace_city_sword_target(
+        game,
+        region,
+        monster_id,
+        owner,
+        target,
+        minimum_distance,
+        maximum_distance,
+        chase_range,
+        runtime,
+        game_tick_milliseconds,
+    )
 }
