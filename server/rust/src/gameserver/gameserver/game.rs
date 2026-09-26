@@ -12282,14 +12282,14 @@ impl CGame {
                 };
                 if let Some((goods_update, skills)) = initialized {
                     for skill in skills {
-                        if let Some(message) = player_skill_learned_message(
+                        // Сценарный вызов `LoadBFDefualtProperty` публикует
+                        // навыки той же вырожденной dword-формой, что и combine.
+                        if let Some(message) = load_battle_fairy_default_skill_message(
                             skill.message_type,
                             skill.skill_id,
                             skill.skill_level,
-                            skill.skill_level,
                             self.skill_name_or_fallback(skill.skill_name.as_deref()),
                             &self.skill_factory,
-                            false,
                         ) {
                             let _ = message.send_to_player(self.net_server(), skill.player_id);
                         }
@@ -34455,14 +34455,12 @@ impl CGame {
                     );
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
-                    if let Some(message) = player_skill_learned_message(
+                    if let Some(message) = load_battle_fairy_default_skill_message(
                         skill.message_type,
                         skill.skill_id,
                         skill.skill_level,
-                        skill.skill_level,
                         self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
-                        false,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
                         tracing::trace!(
@@ -36486,8 +36484,10 @@ impl CGame {
                     reason,
                     code,
                 } => {
+                    // Inline reject запроса 0x90005: reason пишется dword-ом
+                    // (`04 00 00 00` для war-soul), затем байт кода `0x0C`.
                     let mut message = CMessage::new(message_type as i32);
-                    message.base_mut().add_byte(reason as u8);
+                    message.base_mut().add_ulong(reason);
                     message.base_mut().add_byte(code);
                     let delivery = message.send_to_socket(self.net_server(), socket_id);
                     trace!(
@@ -46596,6 +46596,34 @@ pub(crate) fn player_skill_learned_message(
         player_tell_client,
         |cost| (f64::from(cost) * 0.0001_f64).trunc() as i32,
     )
+}
+
+/// Три кадра default-skill внутри `LoadBFDefualtProperty` (RVA 0x102BC0)
+/// пишутся машинно вырожденной формой: все поля — dword, level/min/max
+/// фиксированы в единицу, а стоимость передаётся сырой, без масштабирования
+/// форм `ResetSkill`/`TellClient`.
+pub(crate) fn load_battle_fairy_default_skill_message(
+    message_type: u32,
+    skill_id: u32,
+    skill_level: i32,
+    skill_name: &[u8],
+    factory: &CSkillFactory,
+) -> Option<CMessage> {
+    const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+    const SKILL_USAGE_REUSE_SKILL_DELAY_TIME: u32 = 10005;
+
+    let properties = factory.query_skill_base_properties(skill_id, skill_level)?;
+    let restore_time = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
+    let raw_cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+
+    let mut message = CMessage::new(message_type as i32);
+    add_legacy_c_string(message.base_mut(), skill_name);
+    message.add_long(1);
+    message.add_ulong(restore_time);
+    message.add_long(1);
+    message.add_long(1);
+    message.add_ulong(raw_cost);
+    Some(message)
 }
 
 fn player_skill_learned_message_with_cost_rule(

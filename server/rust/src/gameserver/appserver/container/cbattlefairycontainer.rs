@@ -10,8 +10,10 @@
 //! truncation к нулю. Gem success/fail/probability и upgrade-price queries
 //! сохраняют positional RNG, signed clamp и неинициализированный cached price
 //! как `Option`. Полный combine теперь разделяет check-only `0xbf92c` и
-//! execution: global gate, точные различия notification для missing catalog,
-//! порядок remove `body → stone → material`, RNG-result и ownership
+//! execution opcode `0x8fc27`: global gate, валидация goods-presence ×3 затем
+//! base-properties ×3 с машинными notification `(56/57/58, затем 56/57/60)`,
+//! молчаливый execution no-match (tail 0x503F81), порядок remove
+//! `body → stone → material`, RNG-result и ownership
 //! созданного товара выполняются в `CPlayer`; этот owner даёт recipe,
 //! positional storage и `LoadBFDefualtProperty` callback в том же порядке.
 //! Gear add/remove теперь замкнуты через `CPlayer`: ранний `BFPropertyAdd`
@@ -626,43 +628,47 @@ impl CBattleFairyContainer {
         })
     }
 
-    /// Actual `BatllteFairyCombine` различает отсутствие properties fetch-body
-    /// (`ZHGS0060`) от check-only opcode, который возвращает `ZHGS0056`.
+    /// Actual `BatllteFairyCombine` (opcode 0x8FC27) сначала проверяет
+    /// goods-presence всех трёх ячеек material/fetch-stone/fetch-body
+    /// (`ZHGS0056`/`ZHGS0057`/`ZHGS0058`), затем base-properties тех же трёх
+    /// в той же последовательности (`ZHGS0056`/`ZHGS0057`/`ZHGS0060`). При
+    /// несовпадении рецепта execution-обработчик машинно завершается молча
+    /// (tail 0x503F81): `Ok(None)` не публикует notification, который
+    /// присущ только check-only opcode.
     pub(crate) fn battle_fairy_combine_recipe(
         &self,
         factory: &CGoodsFactory,
         compose: &[BattleFairyCompose],
-    ) -> Result<BattleFairyCompose, BattleFairyCombineExecutionNotification> {
+    ) -> Result<Option<BattleFairyCompose>, BattleFairyCombineExecutionNotification> {
         let material = self
             .base
             .get_goods(BattleFairyCell::Material.position())
-            .ok_or(BattleFairyCombineExecutionNotification::MissingMaterial)?;
-        let material_properties = factory
-            .query_goods_base_properties(material.base_properties_index())
             .ok_or(BattleFairyCombineExecutionNotification::MissingMaterial)?;
         let fetch_stone = self
             .base
             .get_goods(BattleFairyCell::FetchStone.position())
             .ok_or(BattleFairyCombineExecutionNotification::MissingFetchStone)?;
-        let fetch_stone_properties = factory
-            .query_goods_base_properties(fetch_stone.base_properties_index())
-            .ok_or(BattleFairyCombineExecutionNotification::MissingFetchStone)?;
         let fetch_body = self
             .base
             .get_goods(BattleFairyCell::FetchBody.position())
             .ok_or(BattleFairyCombineExecutionNotification::MissingFetchBody)?;
+        let material_properties = factory
+            .query_goods_base_properties(material.base_properties_index())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingMaterial)?;
+        let fetch_stone_properties = factory
+            .query_goods_base_properties(fetch_stone.base_properties_index())
+            .ok_or(BattleFairyCombineExecutionNotification::MissingFetchStone)?;
         let fetch_body_properties = factory
             .query_goods_base_properties(fetch_body.base_properties_index())
             .ok_or(BattleFairyCombineExecutionNotification::CannotSummon)?;
-        compose
+        Ok(compose
             .iter()
             .find(|recipe| {
                 recipe.fetch_stone == fetch_stone_properties.original_name()
                     && recipe.fetch_body == fetch_body_properties.original_name()
                     && recipe.material == material_properties.original_name()
             })
-            .cloned()
-            .ok_or(BattleFairyCombineExecutionNotification::CannotSummon)
+            .cloned())
     }
 
     /// `BatllteFairyCombine` удаляет input именно в порядке body, stone,

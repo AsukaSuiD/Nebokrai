@@ -11977,7 +11977,10 @@ impl CPlayer {
             .battle_fairy_container
             .battle_fairy_combine_recipe(factory, compose)
         {
-            Ok(recipe) => recipe,
+            Ok(Some(recipe)) => recipe,
+            // Execution no-match машинно завершает обработчик молча (tail
+            // 0x503F81); notification ZHGS0060 здесь не отправляется.
+            Ok(None) => return report,
             Err(notification) => {
                 report.effects.push(BattleFairyCombineEffect::Notification {
                     player_id,
