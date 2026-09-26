@@ -18,13 +18,13 @@
 | Auth | Точный opcode через `AuthMessageKind::from_opcode`, включая проверку `0xCF501/0xCF502`, регистрацию и GM. Неизвестный тип не вызывает handler. | [auth_message.rs](../../server/rust/realm/src/app/auth_message.rs) → `AuthMessageHandlers::handle`. |
 | Billing | Семейства `0xFF000/0xEF200` → billing; `0xEF100/0x10EF00` → server; затем точный тип в handler. | [billing_message.rs](../../server/rust/realm/src/app/billing_message.rs) → `BillingMessageHandler` / `ServerMessageHandler`. |
 | Misc | `0x14ED00` → аукцион; `0x16EA00` → служебная функция; `0x14EC00` — no-op; остальные → `on_other_msg`. | [misc_message.rs](../../server/rust/realm/src/app/misc_message.rs) → `CGame::process_message`. |
-| World, сообщения Misc | `0x15EB00` → `on_misc_auction`, затем `on_msg_m2w_auction`. Это общий принятый server-путь World. | [world_message.rs](../../server/rust/realm/src/app/world_message.rs) → [аукционный обработчик](../../server/rust/src/worldserver/appworld/message/onmsg_m2w_auction.rs). |
+| World, сообщения Misc | `0x15EB00` → `on_misc_auction`, затем `on_msg_m2w_auction`. Это общий принятый server-путь World. | [world_message.rs](../../server/rust/realm/src/app/world_message.rs) → [аукционный обработчик](../../server/rust/realm/src/app/onmsg_m2w_auction.rs). |
 
 Выбор семейства не означает успех операции. Чтобы добавить тип, нужно проследить фильтр входа, диспетчер и точную ветвь handler; порядок работы приведён в [сетевом runtime](../server/network-runtime.md).
 
 ## Вход клиента и обслуживание роли через Login и World
 
-Первичный источник для клиентских значений и клиентских ответов — [Login `OnLogMessage`](../../server/rust/realm/src/access/logmessage.rs); для межсерверных запросов и ответов — [Login `CGame`](../../server/rust/src/loginserver/loginserver/game.rs) и [World `OnLogMessage`](../../server/rust/realm/src/app/logmessage.rs). Статус таблицы — `VERIFIED` для выбора ветви и указанного направления; payload каждого типа требует отдельного анализа и остаётся `PARTIAL`, если нет специальной страницы.
+Первичный источник для клиентских значений и клиентских ответов — [Login `OnLogMessage`](../../server/rust/realm/src/access/logmessage.rs); для межсерверных запросов и ответов — [Login `CGame`](../../server/rust/realm/src/access/game.rs) и [World `OnLogMessage`](../../server/rust/realm/src/app/logmessage.rs). Статус таблицы — `VERIFIED` для выбора ветви и указанного направления; payload каждого типа требует отдельного анализа и остаётся `PARTIAL`, если нет специальной страницы.
 
 | Событие | Клиент → Login | Login → World | World → Login | Login → клиент |
 | --- | --- | --- | --- | --- |
@@ -143,7 +143,7 @@ World передаёт Game ту же структуру конфигураци�
 | Запрос → ответ | Действие | Где записан контракт |
 | --- | --- | --- |
 | `0xCF501` → `0xCF601` | Login → Auth → Login: обычная проверка account с данными корреляции конечного клиента. | [Поля и локальный timeout](login-auth.md); ожидание и дубликаты — [служебные процессы](../server/auth-login-and-services.md). |
-| `0xEF201` → `0xFF001` | Game → Billing → Game: баланс. Запрос описан выше; ответ: `long player_id`, `long result`, только при `result == 0` — `long point`. Пустой account в запросе даёт no-op до чтения ID. | [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs), [CBillingPlayerManager::run](../../server/rust/realm/src/billing/billingplayermanager.rs). |
+| `0xEF201` → `0xFF001` | Game → Billing → Game: баланс. Запрос описан выше; ответ: `long player_id`, `long result`, только при `result == 0` — `long point`. Пустой account в запросе даёт no-op до чтения ID. | [BillingMessageHandler](../../server/rust/realm/src/billing/billingmessage.rs), [CBillingPlayerManager::run](../../server/rust/realm/src/billing/billingplayermanager.rs). |
 | `0xEF202` → `0xFF002` | Покупка в магазине; асинхронный запрос передаёт цену, товар, количество и session-контекст. | Те же обработчик и работник; игровой смысл и поля результата — [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
 | `0xEF203` → `0xFF003` | Расчёт сделки между игроками, включая идентификаторы участников, session/plugin и GUID товара. | Те же обработчик и работник; [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
 

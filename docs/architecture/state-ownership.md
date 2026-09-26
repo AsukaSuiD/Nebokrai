@@ -17,16 +17,16 @@
 
 ## Обязанности исходных процессов: историческая основа
 
-Таблица фиксирует baseline доразбиения: что делал каждый исходный процесс и кто выполняет эту обязанность сейчас. Ссылки на старые входы — переходные адаптеры и свидетельство исходной организации, а не место основного кода.
+Таблица фиксирует baseline доразбиения: что делал каждый исходный процесс и кто выполняет эту обязанность сейчас. Входы бывших shim-пакетов демонтированы; ссылки показывают текущее исполнение роли.
 
-| Исходный процесс | За что отвечал | Текущий владелец | Переходный вход |
+| Исходный процесс | За что отвечал | Текущий владелец | Бывший вход |
 | --- | --- | --- | --- |
-| Auth | Проверка учётной записи, очередь DB-запросов и результаты авторизации. | [realm/access](../../server/rust/realm/src/access/) | старый [Auth CGame](../../server/rust/src/authserver/src/cgame.rs) — shell-делегирование |
-| Login | Клиент до входа в мир, ожидание Auth/GAS, CD-key, выбор мира и маршрутизация. | [realm/access](../../server/rust/realm/src/access/) | старый [Login CGame](../../server/rust/src/loginserver/loginserver/game.rs) — shell-делегирование |
-| World | Мировой реестр персонажей, страны, организации, метаданные регионов, загрузка и сохранение. | realm: [characters](../../server/rust/realm/src/characters/), [organizations](../../server/rust/realm/src/organizations/), [persistence](../../server/rust/realm/src/persistence/) и др. | старый [World CGame](../../server/rust/src/worldserver/worldserver/game.rs) — hub-делегирование |
+| Auth | Проверка учётной записи, очередь DB-запросов и результаты авторизации. | [realm/access](../../server/rust/realm/src/access/) | shell демонтирован; runtime — [Auth CGame](../../server/rust/realm/src/access/authgame.rs) |
+| Login | Клиент до входа в мир, ожидание Auth/GAS, CD-key, выбор мира и маршрутизация. | [realm/access](../../server/rust/realm/src/access/) | shell демонтирован; runtime — [Login CGame](../../server/rust/realm/src/access/game.rs) |
+| World | Мировой реестр персонажей, страны, организации, метаданные регионов, загрузка и сохранение. | realm: [characters](../../server/rust/realm/src/characters/), [organizations](../../server/rust/realm/src/organizations/), [persistence](../../server/rust/realm/src/persistence/) и др. | hub демонтирован; агрегат-шов — [World CGame](../../server/rust/realm/src/app/world_game.rs) |
 | Game | Игроки и объекты региона, соединения игровых клиентов, движение, бой, навыки и NPC. | zone: [sessions](../../server/rust/zone/src/sessions/), [regions](../../server/rust/zone/src/regions/), [skills](../../server/rust/zone/src/skills/), [items](../../server/rust/zone/src/items/) и др. | старый [Game CGame](../../server/rust/src/gameserver/gameserver/game.rs) — hub-делегирование |
-| Billing | Баланс, покупка, обмен и обработка пополнений. | [realm/billing](../../server/rust/realm/src/billing/) | старый [Billing CGame](../../server/rust/src/billingserver/billingserver/game.rs) — shell-делегирование |
-| Misc | Комната аукциона и её обмен с World. | [realm/auction](../../server/rust/realm/src/auction/) | старый [Misc CGame](../../server/rust/src/miscserver/miscserver/game.rs) — shell-делегирование |
+| Billing | Баланс, покупка, обмен и обработка пополнений. | [realm/billing](../../server/rust/realm/src/billing/) | shell демонтирован; runtime — [Billing CGame](../../server/rust/realm/src/billing/game.rs) |
+| Misc | Комната аукциона и её обмен с World. | [realm/auction](../../server/rust/realm/src/auction/) | shell демонтирован; runtime — [Misc CGame](../../server/rust/realm/src/app/misc_game.rs) |
 
 ## Почему мировое состояние и живая симуляция разделены
 

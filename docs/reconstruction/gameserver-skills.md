@@ -373,11 +373,16 @@ CWeak/CFireWall/CSnowStorm/CGodThunder/CYinYang/CYinYang2/CChaosSphere; у
 CGodThunder2 тот же шаблон компилятора, без отдельного досмотра); PoisonFog
 всегда пишет сохранённую точку; SoulMirror — текущий центр U.
 
-Честные неизвестные: тела `CheckCastCondition`/`AI` YinYang/YinYang2,
-GodThunder/GodThunder2 и SoulMirror (у последнего иная арность Check —
-`UAEHPAVCMoveShape@@0@Z`) индивидуально не досматривались; их ветви следуют
-прежней реконструкции (PARTIAL без постатейной машинной выписки). Клиентское
-чтение кадров — вне серверной базы (UNKNOWN).
+Досверка verify-t5 (дизассемблинг точной пары, `.local/verify-t5/`): тела
+`CheckCastCondition`/`AI` YinYang/YinYang2 (`0x1A5EA0`/`0x167F10`,
+`0x1A5BB0`/`0x167C20`) и GodThunder/GodThunder2 (`0x173470`/`0x1536B0`,
+`0x173180`/`0x1533C0`) — VERIFIED-MATCH общему скелету семьи (YinYang2 —
+271/228 инструкций ≡ эталону YinYang, остальные клоны).
+`CSoulMirror::CheckCastCondition` (`0x1A4850`, арность `…PAVCMoveShape@@0@Z`)
+— VERIFIED: MP-контракт по arg1 (U), цель `SetMoveable` — arg2; для
+практических self-кастов они совпадают (S≡U — остающаяся оговорка). Не
+закрыто: машинный разбор `CSoulMirror::AI` (`0x1A4D10`, дамп готов) и
+клиентское чтение кадров (UNKNOWN).
 
 Швы переноса: трейты модуля — переходные фасады прежнего владельца
 `CGame`/`CPlayer`/`CMoveShape`; потребляются статически (generic),
@@ -638,10 +643,13 @@ player-вход выбирает первый CMoveShape клетки, вклю�
 | `CBaseAI::Run` (проекция OnFighting) | `0x0C7D10`, ветка `AI_EVENT 2` | VERIFIED | уже начатый cast продолжается тем же входом: общий объектный навык 1 уходит в `CBaseAttack`, остальные — в executor реестра по точному ID; реестр допуск расписания не меняет и не повторяет |
 | `CPet::OnAttackingSchedule`/`OnStayingSchedule` | `0x0E9A20`/`0x0E9650` | VERIFIED | наследуемый порядок расписания |
 
-UNKNOWN: состав и порядок обхода массивов default-ID по категориям
-`GetDefaultAttackSkillID` (`0x004CE240`) — у владельца реестра `moveshape`.
-Реестр исполнителей `owned_registered_cast_executor` не переносится и
-остаётся владением старого `appserver/skills/monsterbaseattack.rs`.
+`GetDefaultAttackSkillID` (`0x004CE240`) — VERIFIED (см.
+gameserver-npc-and-regions.md#реестр-навыков-cmoveshape): скан
+attack-вектора `+0x130` (ID == 2 → 2), иначе summon-вектора `+0x150`
+(ID == 3 → 3), иначе 1; без `QuerySkillType` и раннего выхода; Rust-owner —
+`zone::regions::skillregistry::default_attack_skill_id`. Реестр исполнителей
+`owned_registered_cast_executor` не переносится и остаётся владением старого
+`appserver/skills/monsterbaseattack.rs`.
 
 ### monsterattack — общая доставка и допуск
 
@@ -738,7 +746,7 @@ MP `[U+0x284]` без RTTI-гейта (небезопасный доступ д�
 |---|---|---|---|
 | `CheckCastCondition` | `0x540F40` | VERIFIED_DISASSEMBLY | целевая клетка в `[+0x24]/[+0x28]` записью навыка; reuse-пакет; GetTargetPath; лимит `Query(5003)` → отказ 0x0B; `BLOCK_UNFLY` → отказ 0x0F; SetMoveable(0) |
 | `AI` | `0x5409B0` | VERIFIED_DISASSEMBLY | `SetDir` направлением к клетке, `SetMoveable(1)` ПЕРЕД выпуском, Summon(user, x, y), End(1); End `0x540890` ≡ CPoisonFog (ICF). Машинно поворота в Begin нет: он исполняется в выпуске AI, не в Begin-стадии (см. `summoncreatureskill`) |
-| `CSpiderMistPhalanx` ctor | `0x5EAEB0` | PARTIAL | формальный состав аргументов записан как `(master, started=lifetime, level, state_lifetime, frequency, hp_loss)`; совпадение с текущим двухчасовым конструктором отдельно не досверено (UNKNOWN) |
+| `CSpiderMistPhalanx` ctor | `0x5EAEB0` (VA) | VERIFIED_DISASSEMBLY | 6 аргументов: (&master, lifetime Query 30001) базе; level→[+0xCC] (level-switch), state_lifetime 10002→[+0xC0], frequency 6001→[+0xC4], hp_loss 20010→[+0xC8]; 0xD0 байт; перекрёст со стеком Summon `0x541140` и AI `0x5EB110` |
 | `CSpiderMistPhalanx::AI` | `0x5EB110` | VERIFIED_DISASSEMBLY | deadline `started + lifetime` строго `ja` → Expired; per-cell пропуски мастера, мёртвых, обладателей 0x131/0x191, неатакуемых; новый state с аргументами из `(info&, +0xC0/+0xC4/+0xC8)` |
 | `ReplaceAffectRegion` | пустое тело `ret 0xC` `0x1FECA0` | VERIFIED_DISASSEMBLY | ICF-склейка 15 имён пустых реализаций семьи CSummonShape; у CSpiderMistPhalanx реальное тело `0x5EAC30` (есть в Zone) |
 | `CSpiderMist::Summon` | `0x541140` | VERIFIED_DISASSEMBLY | единственный живой JJ-вариант мира (J1/J2 = tile X/Y точки через SetTileXY слот `+0x88`) |
@@ -808,10 +816,8 @@ Check/AI общие с CThunder (`0x121330`/`0x121940`), BF918 — круг
 | `AI` | `0x122DC0` (VA `0x522DC0`) | VERIFIED_DISASSEMBLY | MP списывается необратимо на первом AI; `0xBF918` точечно `SendToPlayer` (`0x12300B`); затем поворот U (GetLineDir + SetDirection `+0x60`) и повторная проверка длины пути (visual 0xB + ZHGS0049); по абсолютному сроку сохранённая объектная S проверяется на смерть и превращается в точку до visual1; visual1 → Summon → безусловный внешний End(1) |
 | `Summon` | `0x123280` (VA `0x523280`) | VERIFIED_DISASSEMBLY | region-RTTI → свежая таблица → очистка тройки `[+0x18/1C/20]` → Master → player-RTTI → мёртвые чтения GAP `0xC3` и usage 20015 (`let _ =`) → ctor-стек (lifetime, level, min, max, elem) → SetCenter → GetShape(клетка) + RTTI + skill==0x21A → `vcall [+0xa8]` свёртка старой области → Add → `0xBF502`; свёртка — регистрационный шов прежнего владельца (`replace_tianhuo_phalanxes_in_cell` до add); отказ Summon не меняет End(1). Gameplay ID области — 0x21A, legacy ID режима применения эффекта — 0x13A |
 
-UNKNOWN списком: маппинг аргументов ctor CTianhuoPhalanx — PARTIAL (ctor
-`0x1E5890`, 6 аргументов без id/часов); ветка AI с не-player U читает CPlayer
-после RTTI без проверки — прежняя реконструкция возвращает отказ вместо
-разыменования (сохраняется).
+UNKNOWN: ветка AI с не-player U читает CPlayer после RTTI без проверки —
+прежняя реконструкция возвращает отказ вместо разыменования (сохраняется).
 
 Текущая реализация: `zone::skills::tianhuo`; поворот U — шов
 `set_summon_cloud_user_direction`.
@@ -820,17 +826,17 @@ UNKNOWN списком: маппинг аргументов ctor CTianhuoPhalanx
 
 | Функция/symbol | RVA (VA) | Статус | Факт |
 |---|---|---|---|
-| `CThunderPhalanx` ctor | `0x1E4FE0` | PARTIAL | 9 аргументов, часы и id приходят аргументами; полный маппинг J/K не досмотрен; **нулевая frequency заменяется единицей конструктором**, в том числе для выделения и сериализации массива |
+| `CThunderPhalanx` ctor | `0x1E4FE0` | VERIFIED_DISASSEMBLY | 9 аргументов: (&master, lifetime) базе; level→[+0xD8], frequency 6001→[+0xC4] (**нулевая заменяется единицей**), min 20008→[+0xCC], max 20009→[+0xD0], elem-modifier trunc(20015·1e-6·W)→[+0xD4], target_count 20010→[+0xDC], CCH (word, vcall+0x114)→[+0xE4]; массив [+0xBC] ёмкостью (lifetime/freq)·H·L·8; перекрёст со стеком Summon `0x521D30` и Calc `0x1E5250` |
 | `CThunderPhalanx` Calc | `0x1E5250` | VERIFIED_DISASSEMBLY | базовый урон — расширенный порядок x87, усечение в `i64`, чтение младших 32 бит; первый RNG использует диапазон ctor и расходуется до свежего WarSoul/таблицы; второй берёт живые min/max; поздний отказ сохраняет метаданные без записи урона |
 | `CThunderPhalanx` AI | `0x1E5560` | VERIFIED_DISASSEMBLY | три чтения часов — срок по `+0xB4`+`+0xB0`, частота `+0xC4`, lastAttack `+0xC8`; обход маски 7×7: X снаружи, Y внутри |
 | `CThunderPhalanx` Initialize | ICF `0x1EEF30` (`CGodThunderPhalanx2::Initialize`) | VERIFIED_DISASSEMBLY | центр читается после SetCenter; пары RNG расходуются по окнам ≤ 49 целей — массив для клиента, не выбор серверных попаданий |
 | `CThunderPhalanx` AddToByteArray | ICF `0x1EF0C0` | VERIFIED_DISASSEMBLY | группа GodThunder/GodThunder2/ThunderPhalanx; пятипольный префикс zone-конверта; расширенный хвост `n = ([B0]/[C4])·[DC]` + raw 8n не переоткрыт: wire сохраняет исходный счётчик `(lifetime/frequency)·targetCount` и читает префикс массива на 49 ячеек на окно; при некорректном счётчике чтение ограничено буфером вместо выхода за границу |
 | `CThunderPhalanx` Replace | ICF `0x1FDCA0` | VERIFIED_DISASSEMBLY | — |
 | маска 7×7 | — | VERIFIED_DISASSEMBLY (свойство сборки) | одна для всех уровней; константа сборки `godthunder::ROUNDED_THUNDER_SCOPE` |
-| `CLeimingPhalanx2` ctor | `0x1E4810` | PARTIAL | число и маппинг аргументов не раскрыты; поля следуют прежнему телу |
+| `CLeimingPhalanx2` ctor | `0x1E4810` | VERIFIED_DISASSEMBLY | 7 аргументов: (&master, lifetime) базе; level→[+0xCC], min 20008→[+0xC0], max 20009→[+0xC4], elem+AddElementAtk→[+0xC8], CCH→[+0xD0]; own-поля живыми телами не читаются (Calc `0x1E4A00` — формула из таблицы); перекрёст со стеком Summon `0x120990` |
 | `CLeimingPhalanx2` AI | `0x1E4CE0` | VERIFIED_DISASSEMBLY | по истечении срока область обходит свою ячейку, поражает каждую цель один раз и удаляется; End помечает удаление только после всех попаданий (`[+0xAC]`). Все уровни имеют одну активную ячейку (машинный факт) |
 | `CLeimingPhalanx2` Replace/AddTo/Decord | `0x1E4520`/`0x1E47A0`/`0x1EA070` | VERIFIED_DISASSEMBLY | AddToByteArray — семейная группа `0x1E47A0`; ReplaceAffectRegion выключает совпавшую клетку; создание Leiming2 и общий AddObject его не вызывают; Decord не перенесён |
-| `CTianhuoPhalanx` ctor | `0x1E5890` | PARTIAL | 6 аргументов без id и часов; полный маппинг не досмотрен |
+| `CTianhuoPhalanx` ctor | `0x1E5890` | VERIFIED_DISASSEMBLY | 6 аргументов без id/часов: (&master, lifetime) базе; level→[+0xC8], min 20008→[+0xBC], max 20009→[+0xC0], elem — **сырой Query(20015)**→[+0xC4]; Calc `0x1E5920` читает те же смещения (min/max/level; elem не читается); перекрёст со стеком Summon `0x123280` |
 | `CTianhuoPhalanx` AI | `0x1E5C00` | VERIFIED_DISASSEMBLY | пока срок не истёк, на каждом проходе сканирует свою клетку в исходном порядке региона; после каждой допустимой атаки помечается на удаление и немедленно шлёт `0xBF504` (End→BF504); один проход обрабатывает уже полученный снимок — пакет удаления может повториться |
 | `CTianhuoPhalanx` Replace/AddTo/Decord | ICF `0x1F54A0`/`0x1F54D0`/`0x1FF7C0` | VERIFIED_DISASSEMBLY | группа `0x1F54D0` (CWeakPhalanx, CGodPunishmentPhalanx, CThunderBlowPhalanx, CTianhuoPhalanx); совпавшая старая область завершается до регистрации новой |
 | формулы областей | — | VERIFIED_DISASSEMBLY | у Leiming2 один вызов legacy RNG лишь при наличии боевого духа и таблицы; у Tianhuo один вызов при наличии предмета в слоте 10 до повторного чтения; базовый урон — общий x87-порядок ThunderPhalanx: слагаемое духа и случайная база складываются в x87 до единственного усечения в `i64`, читаются младшие 32 бита |
@@ -945,8 +951,8 @@ instance-id в окно 0x212..0x224 (боевой октет 0x212..0x219 = 530
 до RNG крита; критический множитель — FISTP-усечение к нулю
 (`truncate_original`).
 
-UNKNOWN: blast/knock-back нормализация в Calc не вводится и не удаляется —
-вопрос открыт.
+Нормализация combat-scale: тело Calculate `0x5F77B0` досмотрено до ret 4
+целиком — блока нет (VERIFIED_DISASSEMBLY); в реализацию не вводится.
 
 Текущая реализация: `zone::skills::thunderslashphalanx`; тикер и публикация
 удаления — региональный runtime старого пакета.
@@ -986,9 +992,10 @@ UNKNOWN: blast/knock-back нормализация в Calc не вводится
 (см. `tick`). После End по idx-исчерпанию машинный хвост выполняет разовый
 ForceMove — блок уже закрыт первым проходом, различия нет.
 
-UNKNOWN: нормализация blast/knock-back scale прежней реконструкции в теле
-Calculate `0x5E1310` машинным дампом НЕ обнаружена; блок не добавляется и не
-удаляется, вопрос открыт (см. `calculate_owned_thunder_fire_attack`).
+Нормализация пяти scale: тело Calculate `0x5E1310` досмотрено до ret 8
+целиком — блока нет (VERIFIED_DISASSEMBLY); безосновательный clamp-блок
+прежней реконструкции удалён из `calculate_owned_thunder_fire_attack` вместе
+с методом трейта.
 
 Текущая реализация: `zone::skills::thunderfirephalanx`; исходный владелец PDB `appserver/skills/thunderfirephalanx.cpp/.h`.
 
@@ -1363,11 +1370,20 @@ OnChangeStates → CAN → visual0 → condition → unsigned start+delay → vi
 читаются после завершения старых; Agility2 затем дополнительно читает
 persist. Visual object Begin — loop1 постоянные / loop0 временная Agility2;
 BFE03/BFE04 несут time=0 (клиентский остаток — у Agility2) и additional=0.
-UNKNOWN: тела `CNatural::AI`, `CRapture::AI`, `CDaubPoison::AI`,
-`CMachineShield::AI` и ctor-маппинг MachineShield не сняты; разделяемые
-строки/цепочки подтверждены по ManaShield (ctor-маппинг keep `0x2712`, life
-`0x271A`, phys `0x271B`, elem `0x271C`, `0x4E38`/`0x4E39`, MP-отказ
-visual7+GS0288 — 1:1).
+Досверка verify-selfstate (дизассемблинг той же пары, identity match
+заново, `.local/verify-selfstate/`): `CNatural::AI` `0x16C0B0`,
+`CRapture::AI` `0x16CBB0`, `CMachineShield::AI` `0x1671C0` — VERIFIED-MATCH,
+точный клон-шаблон эталона `CManaShield::AI` `0x169DF0`. Natural/Rapture
+проверяют `IsDied(U)` → visual2/End(1); щиты смерть не проверяют. Скан
+состояний: Natural завершает все `0xDA/0xDB/0xDC`, Rapture — все (порядок
+сравнений `0xDA/0xDC/0xDB`), MachineShield — первый непустой `0xDE`
+(ManaShield — первый `0x141`). ctor-маппинг MachineShield: usage
+`10002`→keep (state `+0x38`), `10010`→life (`+0x3C`), `20024`→hp-фактор
+(`+0x40`, WORD), `20025`→mp-фактор (`+0x42`, WORD); MP-отказ —
+visual7+GS0288 с ценой usage 2. Natural Q(`112`) → `CNaturalState(G)`
+`0x5F36D0`; Rapture Q(`125`) → `CRaptureState(G)` `0x5F3BC0`.
+`CDaubPoison::AI` `0x166690` тем же шаблоном подтверждён (recon-de VERIFIED
+действует). Клиентское чтение кадров — UNKNOWN.
 
 ### wangsheng — `CWangsheng` (0x221)
 

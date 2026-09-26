@@ -34,7 +34,7 @@ Marker `6` и версия настроек проверяются после с
 | `0xCF501`, Login → Auth | C-строка account; C-строка password с текстовым hex-digest; `u32 client_ip`; `i32 client_socket_id`. |
 | `0xCF601`, Auth → Login | `i32 result`; C-строка account; `u32 client_ip`; `i32 client_socket_id`. |
 
-Источники: Login [`send_quest_message` / `AuthManager::on_response_auth`](../../server/rust/realm/src/access/authmanager.rs), Auth [`AuthMessageHandlers::on_auth_account`](../../server/rust/src/authserver/appauth/message/message_func.rs) и [`send_auth_result`](../../server/rust/src/authserver/src/cgame.rs). Это межсерверный [CRC-кадр без RLE](transport.md). В задании Auth `return_socket_id` хранится отдельно и берётся из принятого Login-соединения; `client_socket_id` в payload относится к конечному клиенту внутри Login.
+Источники: Login [`send_quest_message` / `AuthManager::on_response_auth`](../../server/rust/realm/src/access/authmanager.rs), Auth [`AuthMessageHandlers::on_auth_account`](../../server/rust/realm/src/access/message_func.rs) и [`send_auth_result`](../../server/rust/realm/src/access/authgame.rs). Это межсерверный [CRC-кадр без RLE](transport.md). В задании Auth `return_socket_id` хранится отдельно и берётся из принятого Login-соединения; `client_socket_id` в payload относится к конечному клиенту внутри Login.
 
 Локальный timeout Login создаёт такую же форму `0xCF601` с результатом `4` и публикует её в очередь Auth events без отправки в сеть. Корреляция текущего `AuthManager` использует account; переданные IP/socket читаются из ответа. Поэтому эти поля не следует описывать как уникальный request ID.
 

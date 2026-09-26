@@ -10,11 +10,11 @@
 
 | Каталог | Что читает процесс |
 | --- | --- |
-| `AuthServer` | `setup.ini`, список допуска `allowed_ls.ini` и, при включённом фильтре, `client_forbid_ip.ini`. Ошибка настройки может приводить к применению значений по умолчанию и продолжению запуска. [Auth CGame](../../server/rust/src/authserver/src/cgame.rs). |
-| `LoginServer` | `setupex.ini` с первой числовой парой `area_id` ещё до создания CGame; затем `setup.ini`, `port.ini`, `WorldInfoSetup.ini`, `aslist.ini`. В `port.ini` сначала идёт клиентский порт, затем порт World. [Login CGame](../../server/rust/src/loginserver/loginserver/game.rs). |
-| `BillingServer` | `Setup.ini` и список допуска `GSInfoSetup.ini`. Оба пути перед чтением разрешаются без учёта ASCII-регистра, поэтому нижний регистр, используемый подготовкой, допустим. [Billing CGame](../../server/rust/src/billingserver/billingserver/game.rs). |
-| `WorldServer` | `setup.ini`, `serverSetup.ini` с маршрутами Game, языковые таблицы и прочие ресурсы; маршрутный файл также допускает различие ASCII-регистра. [World CGame](../../server/rust/src/worldserver/worldserver/game.rs), [загрузка ресурсов](../architecture/resources-and-configuration.md). |
-| `MiscServer` | `setup.ini`; ещё до его чтения процесс создаёт или обнуляет `debug.txt`, поэтому каталог должен быть доступен для записи. [Misc CGame](../../server/rust/src/miscserver/miscserver/game.rs). |
+| `AuthServer` | `setup.ini`, список допуска `allowed_ls.ini` и, при включённом фильтре, `client_forbid_ip.ini`. Ошибка настройки может приводить к применению значений по умолчанию и продолжению запуска. [Auth CGame](../../server/rust/realm/src/access/authgame.rs). |
+| `LoginServer` | `setupex.ini` с первой числовой парой `area_id` ещё до создания CGame; затем `setup.ini`, `port.ini`, `WorldInfoSetup.ini`, `aslist.ini`. В `port.ini` сначала идёт клиентский порт, затем порт World. [Login CGame](../../server/rust/realm/src/access/game.rs). |
+| `BillingServer` | `Setup.ini` и список допуска `GSInfoSetup.ini`. Оба пути перед чтением разрешаются без учёта ASCII-регистра, поэтому нижний регистр, используемый подготовкой, допустим. [Billing CGame](../../server/rust/realm/src/billing/game.rs). |
+| `WorldServer` | `setup.ini`, `serverSetup.ini` с маршрутами Game, языковые таблицы и прочие ресурсы; маршрутный файл также допускает различие ASCII-регистра. [World CGame](../../server/rust/realm/src/app/world_game.rs), [загрузка ресурсов](../architecture/resources-and-configuration.md). |
+| `MiscServer` | `setup.ini`; ещё до его чтения процесс создаёт или обнуляет `debug.txt`, поэтому каталог должен быть доступен для записи. [Misc CGame](../../server/rust/realm/src/app/misc_game.rs). |
 | `GameServer` | `gameserver.exe`, конфигурация и соответствующие ему ресурсы Windows-комплекта. Образ Wine запускает этот файл из `/runtime` под пользователем `nebokrai` с UID 1000; права на смонтированные данные должны позволять ему работу. [Dockerfile.game](../../deploy/hybrid/Dockerfile.game). |
 
 Login и World пробуют `setup.dat` только при ошибке чтения `setup.ini`, а не после неудачного разбора его содержимого. Подготовка стенда при этом требует именно редактируемых INI. Позиционные парсеры могут сохранить часть значений и вернуть отчёт об остановке чтения: открытый файл ещё не означает полную настройку. Подробности форматов и выбора источника — в [конфигурации и ресурсах](../architecture/resources-and-configuration.md).
@@ -65,7 +65,7 @@ docker compose up -d --build
 
 Порты в этой таблице — ожидания Compose и скриптов; фактические порты прослушивания Rust берёт из конфигурации. MSSQL на хост не опубликован. Клиентские публикации не ограничены адресом `127.0.0.1`; доступность с другой машины определяется также Docker-хостом и его сетью. Источники — [Compose](../../deploy/hybrid/compose.yaml), [подготовка](../../deploy/hybrid/prepare-runtime.ps1) и [entrypoint Game](../../deploy/hybrid/game-entrypoint.sh).
 
-Например, перенос клиентского порта Login требует согласовать первую пару `LoginServer/port.ini`, правую сторону публикации контейнерного порта и адрес входа в клиенте. Межсерверный порт Login — вторая пара того же файла; при его изменении затрагиваются настройки World и healthcheck Login. Это два независимых направления. Для Game клиентский адрес нужно согласовать с `LocalIP`, маршрутом World и публикацией Docker; текущая подготовка жёстко ориентирована на `2347` и запись Game с ID 1. Загрузчики — [Login CGame](../../server/rust/src/loginserver/loginserver/game.rs), [World CGame](../../server/rust/src/worldserver/worldserver/game.rs); шаблон замен — [prepare-runtime.ps1](../../deploy/hybrid/prepare-runtime.ps1).
+Например, перенос клиентского порта Login требует согласовать первую пару `LoginServer/port.ini`, правую сторону публикации контейнерного порта и адрес входа в клиенте. Межсерверный порт Login — вторая пара того же файла; при его изменении затрагиваются настройки World и healthcheck Login. Это два независимых направления. Для Game клиентский адрес нужно согласовать с `LocalIP`, маршрутом World и публикацией Docker; текущая подготовка жёстко ориентирована на `2347` и запись Game с ID 1. Загрузчики — [Login CGame](../../server/rust/realm/src/access/game.rs), [World CGame](../../server/rust/realm/src/app/world_game.rs); шаблон замен — [prepare-runtime.ps1](../../deploy/hybrid/prepare-runtime.ps1).
 
 ## Базы и постоянные данные
 
@@ -80,7 +80,7 @@ docker compose up -d --build
 | Bind-mount `runtime/<служба>`, `/runtime` | Конфиги, ресурсы и записанные службой файлы. Это рабочие данные, а не только вход для образа. |
 | `runtime/Database`, `/backup:ro` | Исходные backup; SQL не записывает туда текущие изменения БД. |
 
-В частности, World пишет состояния городских регионов в `regions/<ID>.rgn` и обновляет `setup/JJcConfig.ini`, а файловые журналы служб попадают обратно в их host-каталоги. Поэтому сохранение одного SQL-тома не охватывает все локальные данные. Права на запись и исходная структура подкаталогов имеют значение. Источники — [Compose](../../deploy/hybrid/compose.yaml), [сохранение региона](../../server/rust/src/worldserver/appworld/region.rs), [World save-контекст](../../server/rust/realm/src/app/world_process_save.rs).
+В частности, World пишет состояния городских регионов в `regions/<ID>.rgn` и обновляет `setup/JJcConfig.ini`, а файловые журналы служб попадают обратно в их host-каталоги. Поэтому сохранение одного SQL-тома не охватывает все локальные данные. Права на запись и исходная структура подкаталогов имеют значение. Источники — [Compose](../../deploy/hybrid/compose.yaml), [сохранение региона](../../server/rust/realm/src/regions/worldregion.rs), [World save-контекст](../../server/rust/realm/src/app/world_process_save.rs).
 
 ## Остановка и повторное использование стенда
 
