@@ -6,9 +6,14 @@
 //! форматирование текстов и отправка (`Send` на log server) остаются у прежнего
 //! owner.
 //!
-//! Wire-константы `0x60201`/`0x60202` — семья MATCH; состав `0x6020D` машинно не
-//! переоткрывался — Rust форма соответствует прежнему владельцу и держит честный
-//! статус `UNKNOWN`. C-строковый примитив общий с `trade/session.rs`
+//! Wire-константы `0x60201`/`0x60202`/`0x6020D` — семья MATCH. Валютный кадр
+//! `0x6020D` сверен по двум сайтам `?Trade@CTrader` (тело RVA `0x1B9470`, сайты
+//! RVA `0x1BA52A` kind 2 payer и `0x1BA659` kind 3 receiver): byte kind,
+//! C-строка transaction, u32 amount, C-строка текста, u32 owner (`[trader+8]`),
+//! u32 balance (`[trader+0xBE0]`), затем `Send(false)`; текст форматирует caller
+//! через StringTable+sprintf. У других владельцев (IncShop billing `0x486F49`,
+//! script `0x4B6310`) семья `0x6020D` позиционно расширена хвостом — вне этого
+//! контракта. C-строковый примитив общий с `trade/session.rs`
 //! ([`append_legacy_c_string`]).
 //! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 

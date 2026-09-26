@@ -471,4 +471,5 @@ impl CTrader {
 }
 
 // Достигнутый CTrader lifecycle исполняется typed owner-ами: агрегат здесь,
-// двухфазная transaction commit/rollback — у `CGame`.
+// двухфазная transaction commit/rollback — у `trade/commit` (живые шаги
+// реестра игроков и transport — hub `CGame` через `PlayerTradeHost`).

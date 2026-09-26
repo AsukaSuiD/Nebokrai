@@ -1,10 +1,10 @@
 //! Скалярное ядро оркестрации обмена `CGame` исторического GameServer:
 //! порядок условий `CheckTradeCondition`, Billing-вилка YuanBao и кадр запроса
 //! `0xEF203`. Исходный владелец `appserver/game.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb`. Мгновенный владелец `game.rs` исполняет
-//! регистрацию, packet-simulation ёмкостей, detach/add последствия и весь
-//! transport; здесь — проверяемый порядок скалярных условий, billing-решение и
-//! сам кадр запроса.
+//! `gameserver.exe` + `GameServer.pdb`. Packet-simulation ёмкостей и
+//! двухфазный commit/rollback — `trade/commit`; hub `game.rs` исполняет
+//! регистрацию, detach/add последствия и весь transport; здесь — проверяемый
+//! порядок скалярных условий, billing-решение и сам кадр запроса.
 //!
 //! Риск-нота Billing-complete: завершение обмена по ответу Billing исполняет
 //! commit БЕЗ повторной дистанционной проверки участников — оригинал доверяет

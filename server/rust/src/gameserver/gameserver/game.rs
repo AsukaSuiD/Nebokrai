@@ -292,7 +292,9 @@
 //! по `+0x68`; размеры находятся по `+0x6C/+0x70` и в этот хвост не входят.
 //! Pending login начинается реальным client `0x8F702` caller-ом. Zone sessions
 //! хранит записи проверок по игрокам; `CGame` отправляет `0xBF402/0xBF403`
-//! до decode, а отказ/OnLost/Kick и Release очищают записи.
+//! до decode, а отказ/OnLost/Kick и Release очищают записи. Ответ клиента —
+//! штампы `+0x08`/`+0x0C` исходящего заголовка, отдельного opcode нет;
+//! парный GameServer штампы не читает (docs/reconstruction/client-wire-runtime.md).
 //! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
@@ -723,6 +725,10 @@
 //! структурированными событиями `tracing`; подписчик остаётся ответственностью
 //! будущего процесса GameServer. Межвладельческие действия налоговых сессий
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
+//! Двухфазный commit/rollback обмена, packet-симуляция CheckTradeCondition и
+//! очередь goods-audit `0x60201` перенесены в Zone `trade/commit`; живые шаги
+//! исполняет `impl PlayerTradeHost for CGame`, делегаты сохраняют прежние
+//! сигнатуры. Кадры quest-lifecycle собирает Zone `quests/frames`.
 
 mod fatalblow;
 mod poisonfog;
@@ -754,12 +760,19 @@ pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
 use nebokrai_zone::content::{QuestCatalog, ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
-use nebokrai_zone::quests::append_client_quest_record;
+use nebokrai_zone::quests::{
+    player_quest_add_frame, player_quest_complete_frame, player_quest_enabled_frame,
+    player_quest_position_frame, player_quest_remove_frame, player_quest_time_begin_frame,
+    player_quest_time_clear_frame, world_quest_add_request_frame, world_quest_remove_request_frame,
+};
 use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
 use nebokrai_zone::trade::auction::auction_listing_goods_allowed;
 use nebokrai_zone::trade::audit::{
-    GroundMoveAuditActor, TradeAuditPartyFrame, ground_goods_move_log_frame,
-    trade_currency_audit_frame, trade_goods_audit_frame,
+    GroundMoveAuditActor, ground_goods_move_log_frame, trade_currency_audit_frame,
+};
+use nebokrai_zone::trade::commit::{
+    self, PlayerTradeAddition, PlayerTradeAuditParty, PlayerTradeDelivery, PlayerTradeHost,
+    PlayerTradePartySnapshot,
 };
 use nebokrai_zone::trade::ctrader::{
     trade_extend_id_parts, trade_offer_amount_satisfies,
@@ -767,8 +780,7 @@ use nebokrai_zone::trade::ctrader::{
 };
 use nebokrai_zone::trade::currency::{
     TradeMoneyMerge, bank_currency_amount_valid, bank_currency_transfer_positions_valid,
-    bank_currency_transfer_route_allowed, bank_transfer_audit_reason,
-    ground_currency_index_matches, merge_trade_money,
+    bank_currency_transfer_route_allowed, bank_transfer_audit_reason, ground_currency_index_matches,
 };
 use nebokrai_zone::trade::ground::{
     ground_currency_pickup_destination, ground_drop_amount_valid, ground_drop_forbidden,
@@ -776,9 +788,7 @@ use nebokrai_zone::trade::ground::{
 };
 use nebokrai_zone::trade::session::{
     PlayerTradeConditionBlock, TradeBillingRequest, build_trade_billing_request_frame,
-    trade_condition_notice, trade_currency_balance_insufficient,
-    trade_currency_capacity_exceeded, trade_resulting_burden_exceeded,
-    trade_yuan_billing_decision,
+    trade_condition_notice, trade_yuan_billing_decision,
 };
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
@@ -850,7 +860,9 @@ use crate::gameserver::appserver::container::cfairycontainer::{
     FairySyncretizeReport,
 };
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
-use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowSourceChangeOutcome;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
+    GoodsShadow, ShadowSourceChangeOutcome,
+};
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
     VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome, VolumeGoodsSwapRemoval,
 };
@@ -2177,44 +2189,290 @@ pub(crate) enum PlayerTradeOfferMutation {
     Removed(TraderOfferRemoved),
 }
 
-#[derive(Clone, Debug)]
-struct PlayerTradePartySnapshot {
-    plug_id: i32,
-    owner_id: i32,
-    goods: Vec<crate::gameserver::appserver::container::cgoodsshadowcontainer::GoodsShadow>,
-    gold: u32,
-    yuan_bao: u32,
-}
+/// Живые шаги двухфазного commit обмена для Zone-драйвера `trade/commit`:
+/// remove/insert реестра игроков, клиентские/log сообщения и equipment
+/// property/skill проход остаются здесь; наблюдаемый порядок фаз и отказов
+/// принадлежит Zone `trade/commit` (`commit_player_trade`).
+impl PlayerTradeHost for CGame {
+    type Delivery = CiQingPacketAddition;
 
-#[derive(Clone, Debug)]
-struct DeliveredPlayerTradeGoods {
-    source_plug_id: i32,
-    receiver_id: i32,
-    original: CGoods,
-    addition: CiQingPacketAddition,
-}
+    fn query_trade_offer_source(
+        &mut self,
+        owner_id: i32,
+        offer: &GoodsShadow,
+    ) -> Option<(u32, u32)> {
+        self.players
+            .get(&owner_id)?
+            .trade_source_goods(
+                offer.original_container_extend_id,
+                offer.original_goods_position,
+                offer.goods_id,
+            )
+            .map(|source| (source.amount(), source.base_properties_index()))
+    }
 
-#[derive(Clone, Debug)]
-struct PlayerTradeAuditParty {
-    owner_id: i32,
-    pk_count: u32,
-    money: u32,
-    tile_x: i32,
-    tile_y: i32,
-    client_ip: u32,
-    name: Vec<u8>,
-}
+    fn create_trade_split_goods(&mut self, base_properties_index: u32) -> Option<CGoods> {
+        self.create_goods_core(base_properties_index)
+    }
 
-impl PlayerTradeAuditParty {
-    /// Скаляры party-записи audit-кадра `0x60201` владельца Zone `trade/audit`.
-    fn frame(&self) -> TradeAuditPartyFrame {
-        TradeAuditPartyFrame {
-            owner_id: self.owner_id,
-            pk_count: self.pk_count,
-            money: self.money,
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
-            client_ip: self.client_ip,
+    fn detach_trade_packet_offer(
+        &mut self,
+        owner_id: i32,
+        offer: &GoodsShadow,
+        split: Option<CGoods>,
+    ) -> Option<CGoods> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        let player = players.get_mut(&owner_id)?;
+        let source = player
+            .trade_source_goods(
+                offer.original_container_extend_id,
+                offer.original_goods_position,
+                offer.goods_id,
+            )
+            .filter(|goods| {
+                trade_offer_amount_satisfies(
+                    offer.original_container_extend_id,
+                    goods.amount(),
+                    offer.goods_amount,
+                )
+            })
+            .cloned()?;
+        let previous_amount = source.amount();
+        let mut split = split;
+        let taken = match player.packet_mut().take_goods(
+            offer.original_goods_position,
+            offer.goods_amount,
+            goods_factory,
+            |_| split.take(),
+        )? {
+            VolumeGoodsRemoveOutcome::Removed(taken)
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+        };
+        let (detached_goods, removed_position) = match taken {
+            AmountLimitGoodsTaken::Removed(removed) => (removed.goods, removed.position),
+            AmountLimitGoodsTaken::Split(split) => (split.goods, split.position),
+        };
+        let consumption = CiQingPacketConsumption {
+            player_id: owner_id,
+            goods: source.identity(),
+            position: removed_position.unwrap_or(offer.original_goods_position),
+            previous_amount,
+            remaining_amount: previous_amount.wrapping_sub(offer.goods_amount),
+            removal: None,
+        };
+        let deliveries = self.send_player_packet_consumption(&consumption);
+        tracing::trace!(
+            player_id = owner_id,
+            goods = ?consumption.goods,
+            ?deliveries,
+            "предмет обмена удалён из инвентаря"
+        );
+        Some(detached_goods)
+    }
+
+    fn detach_trade_equipment_offer(
+        &mut self,
+        owner_id: i32,
+        offer: &GoodsShadow,
+    ) -> Option<CGoods> {
+        let mut player = self.players.remove(&owner_id)?;
+        let source = player
+            .trade_source_goods(
+                offer.original_container_extend_id,
+                offer.original_goods_position,
+                offer.goods_id,
+            )
+            .filter(|goods| {
+                trade_offer_amount_satisfies(
+                    offer.original_container_extend_id,
+                    goods.amount(),
+                    offer.goods_amount,
+                )
+            })
+            .cloned();
+        let detached = source.and_then(|source| {
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
+                &player,
+                &source,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute = player_property_recompute!(self);
+            let mut removal = player.remove_equipment_goods(
+                offer.goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut removal);
+            match std::mem::replace(
+                &mut removal.outcome,
+                EquipmentRemoveOutcome::Missing {
+                    partial_effects: Default::default(),
+                },
+            ) {
+                EquipmentRemoveOutcome::Removed(removed) => {
+                    let previous = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
+                        container_type: 400,
+                        container_id: owner_id,
+                        container_extend_id: 2,
+                        goods_position: offer.original_goods_position,
+                    };
+                    let delivery = self.send_container_object_delete(
+                        owner_id,
+                        &previous,
+                        removed.goods.identity(),
+                        removed.goods.amount(),
+                    );
+                    tracing::trace!(player_id = owner_id, goods = ?removed.goods.identity(), delivery, "предмет обмена снят с экипировки");
+                    Some(removed.goods)
+                }
+                outcome => {
+                    removal.outcome = outcome;
+                    None
+                }
+            }
+        });
+        self.players.insert(owner_id, player);
+        detached
+    }
+
+    fn deliver_trade_goods(
+        &mut self,
+        receiver_id: i32,
+        goods: Vec<CGoods>,
+    ) -> Result<PlayerTradeDelivery<CiQingPacketAddition>, Vec<CGoods>> {
+        if !self.players.contains_key(&receiver_id) {
+            return Err(goods);
+        }
+        let (additions, rejected) = self
+            .with_player_goods(receiver_id, |game, player| {
+                let encoder =
+                    OldClientGoodsEncoder::new(&game.goods_factory, game.globe_setup.da_kong_key());
+                let mut encode = move |goods: &CGoods| encoder.encode(goods);
+                player.add_traded_goods_to_packet(
+                    goods,
+                    &game.goods_factory,
+                    &mut encode,
+                    &mut |player, additional| game.on_player_goods_added(player, additional),
+                )
+            })
+            .expect("получатель проверен перед синхронным add");
+        for addition in &additions {
+            let deliveries = self.send_player_packet_addition(addition);
+            tracing::trace!(player_id = receiver_id, goods = ?addition.source, ?deliveries, "предмет обмена добавлен получателю");
+        }
+        Ok(PlayerTradeDelivery {
+            additions: additions
+                .into_iter()
+                .map(|addition| PlayerTradeAddition {
+                    resulting_amount: addition.resulting_amount,
+                    token: addition,
+                })
+                .collect(),
+            rejected,
+        })
+    }
+
+    fn undo_trade_delivery(
+        &mut self,
+        receiver_id: i32,
+        addition: CiQingPacketAddition,
+        original_amount: u32,
+    ) -> bool {
+        let Some(player) = self.players.get_mut(&receiver_id) else {
+            return false;
+        };
+        let Some(consumption) = player.rollback_traded_packet_addition(&addition, original_amount)
+        else {
+            return false;
+        };
+        let deliveries = self.send_player_packet_consumption(&consumption);
+        tracing::trace!(player_id = receiver_id, goods = ?consumption.goods, ?deliveries, "доставка предмета обмена отменена");
+        true
+    }
+
+    fn restore_trade_goods(
+        &mut self,
+        owner_id: i32,
+        goods: Vec<CGoods>,
+    ) -> Option<PlayerTradeDelivery<()>> {
+        let (additions, unrecoverable) = self.with_player_goods(owner_id, |game, player| {
+            let encoder =
+                OldClientGoodsEncoder::new(&game.goods_factory, game.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
+            player.add_traded_goods_to_packet(
+                goods,
+                &game.goods_factory,
+                &mut encode,
+                &mut |player, additional| game.on_player_goods_added(player, additional),
+            )
+        })?;
+        for addition in &additions {
+            let deliveries = self.send_player_packet_addition(addition);
+            tracing::trace!(player_id = owner_id, goods = ?addition.source, ?deliveries, "отделённый предмет обмена возвращён");
+        }
+        Some(PlayerTradeDelivery {
+            additions: additions
+                .into_iter()
+                .map(|addition| PlayerTradeAddition {
+                    resulting_amount: addition.resulting_amount,
+                    token: (),
+                })
+                .collect(),
+            rejected: unrecoverable,
+        })
+    }
+
+    fn notify_trade_restore_loss(&mut self, owner_id: i32, unrecoverable: usize) {
+        let notification_delivery =
+            colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0277"))
+                .send_to_player(self.net_server(), owner_id);
+        tracing::warn!(
+            player_id = owner_id,
+            notification_delivery,
+            unrecoverable,
+            "не все предметы обмена удалось вернуть"
+        );
+    }
+
+    fn trade_party_money(&mut self, owner_id: i32) -> Option<u32> {
+        self.players.get(&owner_id).map(CPlayer::money)
+    }
+
+    fn apply_trade_money_merge(&mut self, owner_id: i32, merge: TradeMoneyMerge) {
+        match merge {
+            TradeMoneyMerge::Decrease(delta) => {
+                let change = self
+                    .players
+                    .get_mut(&owner_id)
+                    .expect("trade party остаётся online")
+                    .decrease_money(delta, &self.goods_factory);
+                let deliveries = self.send_player_money_decrease(owner_id, &change.outcome);
+                tracing::trace!(
+                    player_id = owner_id,
+                    ?deliveries,
+                    "деньги обмена списаны"
+                );
+            }
+            TradeMoneyMerge::Increase(delta) => {
+                let created =
+                    self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
+                let outcome = self
+                    .players
+                    .get_mut(&owner_id)
+                    .expect("trade party остаётся online")
+                    .increase_money(delta, &self.goods_factory, created);
+                let deliveries = self.send_player_money_increase(owner_id, &outcome);
+                tracing::trace!(
+                    player_id = owner_id,
+                    ?deliveries,
+                    "деньги обмена начислены"
+                );
+            }
+            TradeMoneyMerge::Unchanged => {}
         }
     }
 }
@@ -14973,111 +15231,34 @@ impl CGame {
             return Err(PlayerTradeConditionBlock::SessionUnavailable);
         }
         let parties = self.player_trade_snapshots(session_id)?;
-        let maximum_gold = self
-            .goods_factory
-            .query_goods_max_stack_number(self.goods_factory.get_gold_coin_index());
-        let maximum_yuan_bao = self
-            .goods_factory
-            .query_goods_max_stack_number(self.goods_factory.get_yuan_bao_index());
-        for index in 0..2 {
-            let party = &parties[index];
-            let contrary = &parties[1 - index];
-            let player = self
-                .players
-                .get(&party.owner_id)
-                .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
-            let mut packet = player.packet().clone();
-            let mut own_weight = 0u32;
-            for offer in &party.goods {
-                let goods = player
-                    .trade_source_goods(
-                        offer.original_container_extend_id,
-                        offer.original_goods_position,
-                        offer.goods_id,
+        // Порядок отказов `CheckTradeCondition`, packet-симуляция, вес и
+        // валюта — Zone `trade/commit`; живые чтения игроков поставляют
+        // эти closures, копия packet остаётся локальной симуляцией.
+        commit::validate_player_trade(
+            &self.goods_factory,
+            &parties,
+            |owner_id, extend_id, position, goods_id| {
+                self.players
+                    .get(&owner_id)?
+                    .trade_source_goods(extend_id, position, goods_id)
+                    .cloned()
+            },
+            |owner_id| self.players.get(&owner_id).map(|player| player.packet().clone()),
+            |owner_id| {
+                self.players.get(&owner_id).map(|player| {
+                    (
+                        player.current_burden(&self.goods_factory),
+                        u32::from(player.combat_properties().burden),
                     )
-                    .filter(|goods| {
-                        trade_offer_amount_satisfies(
-                            offer.original_container_extend_id,
-                            goods.amount(),
-                            offer.goods_amount,
-                        )
-                    })
-                    .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
-                let mut offered_goods = goods.clone();
-                offered_goods.set_amount(offer.goods_amount);
-                own_weight = own_weight.wrapping_add(offered_goods.weight(&self.goods_factory));
-                if offer.original_container_extend_id == 1 {
-                    let mut split = Some(goods.clone());
-                    if packet
-                        .take_goods(
-                            offer.original_goods_position,
-                            offer.goods_amount,
-                            &self.goods_factory,
-                            |_| split.take(),
-                        )
-                        .is_none()
-                    {
-                        return Err(PlayerTradeConditionBlock::MissingOfferedGoods);
-                    }
-                }
-            }
-            let contrary_player = self
-                .players
-                .get(&contrary.owner_id)
-                .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
-            let mut incoming_weight = 0u32;
-            for offer in &contrary.goods {
-                let goods = contrary_player
-                    .trade_source_goods(
-                        offer.original_container_extend_id,
-                        offer.original_goods_position,
-                        offer.goods_id,
-                    )
-                    .filter(|goods| {
-                        trade_offer_amount_satisfies(
-                            offer.original_container_extend_id,
-                            goods.amount(),
-                            offer.goods_amount,
-                        )
-                    })
-                    .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
-                let mut offered_goods = goods.clone();
-                offered_goods.set_amount(offer.goods_amount);
-                incoming_weight =
-                    incoming_weight.wrapping_add(offered_goods.weight(&self.goods_factory));
-                let mut incoming = Some(offered_goods);
-                let outcome = packet.add_goods(&mut incoming, &self.goods_factory, true);
-                if incoming.is_some() || matches!(outcome, VolumeGoodsAddOutcome::Rejected(_)) {
-                    return Err(PlayerTradeConditionBlock::PacketSpace);
-                }
-            }
-            if trade_resulting_burden_exceeded(
-                player.current_burden(&self.goods_factory),
-                own_weight,
-                incoming_weight,
-                u32::from(player.combat_properties().burden),
-            ) {
-                return Err(PlayerTradeConditionBlock::BurdenExceeded);
-            }
-            if trade_currency_balance_insufficient(player.money(), party.gold) {
-                return Err(PlayerTradeConditionBlock::InsufficientGold);
-            }
-            if trade_currency_capacity_exceeded(player.money(), party.gold, contrary.gold, maximum_gold)
-            {
-                return Err(PlayerTradeConditionBlock::GoldCapacity);
-            }
-            if trade_currency_balance_insufficient(player.yuan_bao(), party.yuan_bao) {
-                return Err(PlayerTradeConditionBlock::InsufficientYuanBao);
-            }
-            if trade_currency_capacity_exceeded(
-                player.yuan_bao(),
-                party.yuan_bao,
-                contrary.yuan_bao,
-                maximum_yuan_bao,
-            ) {
-                return Err(PlayerTradeConditionBlock::YuanBaoCapacity);
-            }
-        }
+                })
+            },
+            |owner_id| {
+                self.players
+                    .get(&owner_id)
+                    .map(|player| (player.money(), player.yuan_bao()))
+            },
+            |owner_id| self.players.contains_key(&owner_id),
+        )?;
         Ok(parties)
     }
 
@@ -15284,240 +15465,16 @@ impl CGame {
                 name: player.player_name().to_vec(),
             }
         });
-        let mut removed_by_plug = BTreeMap::<i32, Vec<CGoods>>::new();
-        let mut delivered = Vec::<DeliveredPlayerTradeGoods>::new();
-        for party in &parties {
-            let mut packet_splits = BTreeMap::<CGuid, CGoods>::new();
-            for offer in &party.goods {
-                if offer.original_container_extend_id != 1 {
-                    continue;
-                }
-                let Some((source_amount, base_properties_index)) = self
-                    .players
-                    .get(&party.owner_id)
-                    .and_then(|player| {
-                        player.trade_source_goods(
-                            offer.original_container_extend_id,
-                            offer.original_goods_position,
-                            offer.goods_id,
-                        )
-                    })
-                    .map(|source| (source.amount(), source.base_properties_index()))
-                else {
-                    continue;
-                };
-                if offer.goods_amount < source_amount {
-                    let Some(split) = self.create_goods_core(base_properties_index) else {
-                        self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                        self.rollback_detached_trade_goods(&parties, removed_by_plug);
-                        return false;
-                    };
-                    packet_splits.insert(offer.goods_id, split);
-                }
-            }
-            let Some(mut player) = self.players.remove(&party.owner_id) else {
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug);
-                return false;
-            };
-            let mut removed_goods = Vec::new();
-            let mut failed = false;
-            for offer in &party.goods {
-                let source = player
-                    .trade_source_goods(
-                        offer.original_container_extend_id,
-                        offer.original_goods_position,
-                        offer.goods_id,
-                    )
-                    .filter(|goods| {
-                        if offer.original_container_extend_id == 1 {
-                            goods.amount() >= offer.goods_amount
-                        } else {
-                            goods.amount() == offer.goods_amount
-                        }
-                    })
-                    .cloned();
-                let Some(source) = source else {
-                    failed = true;
-                    break;
-                };
-                if offer.original_container_extend_id == 1 {
-                    let previous_amount = source.amount();
-                    let mut split = packet_splits.remove(&offer.goods_id);
-                    let Some(outcome) = player.packet_mut().take_goods(
-                        offer.original_goods_position,
-                        offer.goods_amount,
-                        &self.goods_factory,
-                        |_| split.take(),
-                    ) else {
-                        failed = true;
-                        break;
-                    };
-                    let taken = match outcome {
-                        VolumeGoodsRemoveOutcome::Removed(taken)
-                        | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
-                    };
-                    let (detached_goods, removed_position) = match taken {
-                        AmountLimitGoodsTaken::Removed(removed) => {
-                            (removed.goods, removed.position)
-                        }
-                        AmountLimitGoodsTaken::Split(split) => (split.goods, split.position),
-                    };
-                    let consumption = CiQingPacketConsumption {
-                        player_id: party.owner_id,
-                        goods: source.identity(),
-                        position: removed_position.unwrap_or(offer.original_goods_position),
-                        previous_amount,
-                        remaining_amount: previous_amount.wrapping_sub(offer.goods_amount),
-                        removal: None,
-                    };
-                    let deliveries = self.send_player_packet_consumption(&consumption);
-                    tracing::trace!(player_id = party.owner_id, goods = ?consumption.goods, ?deliveries, "предмет обмена удалён из инвентаря");
-                    removed_goods.push(detached_goods);
-                } else if offer.original_container_extend_id == 2 {
-                    let facts = player_equipment_remove_runtime_facts(
-                        &self.goods_factory,
-                        &player,
-                        &source,
-                        self.globe_setup.pack_add_enabled(),
-                    );
-                    let mut recompute = player_property_recompute!(self);
-                    let mut removal = player.remove_equipment_goods(
-                        offer.goods_id,
-                        &self.goods_factory,
-                        &self.skill_factory,
-                        facts,
-                        &mut recompute,
-                    );
-                    drop(recompute);
-                    self.publish_player_equipment_remove_report(&mut removal);
-                    let outcome = std::mem::replace(
-                        &mut removal.outcome,
-                        EquipmentRemoveOutcome::Missing {
-                            partial_effects: Default::default(),
-                        },
-                    );
-                    match outcome {
-                        EquipmentRemoveOutcome::Removed(removed) => {
-                            let previous = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
-                                container_type: 400,
-                                container_id: party.owner_id,
-                                container_extend_id: 2,
-                                goods_position: offer.original_goods_position,
-                            };
-                            let delivery = self.send_container_object_delete(
-                                party.owner_id,
-                                &previous,
-                                removed.goods.identity(),
-                                removed.goods.amount(),
-                            );
-                            tracing::trace!(player_id = party.owner_id, goods = ?removed.goods.identity(), delivery, "предмет обмена снят с экипировки");
-                            removed_goods.push(removed.goods);
-                        }
-                        outcome => {
-                            removal.outcome = outcome;
-                            failed = true;
-                            break;
-                        }
-                    }
-                } else {
-                    failed = true;
-                    break;
-                }
-            }
-            self.players.insert(party.owner_id, player);
-            removed_by_plug.insert(party.plug_id, removed_goods);
-            if failed {
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug);
-                return false;
-            }
-        }
-        let audit_goods_by_plug = removed_by_plug.clone();
-
-        for index in 0..2 {
-            let source = &parties[index];
-            let receiver = &parties[1 - index];
-            let goods = removed_by_plug.remove(&source.plug_id).unwrap_or_default();
-            if !self.players.contains_key(&receiver.owner_id) {
-                removed_by_plug.insert(source.plug_id, goods);
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug);
-                return false;
-            }
-            let originals = goods.clone();
-            let (additions, rejected) = self.with_player_goods(receiver.owner_id, |game, player| {
-                let encoder = OldClientGoodsEncoder::new(&game.goods_factory, game.globe_setup.da_kong_key());
-                let mut encode = move |goods: &CGoods| encoder.encode(goods);
-                player.add_traded_goods_to_packet(goods, &game.goods_factory, &mut encode,
-                    &mut |player, additional| game.on_player_goods_added(player, additional))
-            }).expect("получатель проверен перед синхронным add");
-            for addition in &additions {
-                let deliveries = self.send_player_packet_addition(addition);
-                tracing::trace!(player_id = receiver.owner_id, goods = ?addition.source, ?deliveries, "предмет обмена добавлен получателю");
-            }
-            let failed = !rejected.is_empty()
-                || additions
-                    .iter()
-                    .any(|addition| addition.resulting_amount.is_none());
-            for (original, addition) in originals.into_iter().zip(additions.iter()) {
-                if addition.resulting_amount.is_some() {
-                    delivered.push(DeliveredPlayerTradeGoods {
-                        source_plug_id: source.plug_id,
-                        receiver_id: receiver.owner_id,
-                        original,
-                        addition: addition.clone(),
-                    });
-                }
-            }
-            if failed {
-                removed_by_plug.insert(source.plug_id, rejected);
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug);
-                return false;
-            }
-        }
-
-        for index in 0..2 {
-            let party = &parties[index];
-            let contrary = &parties[1 - index];
-            let current = self.players.get(&party.owner_id).map_or(0, CPlayer::money);
-            match merge_trade_money(current, party.gold, contrary.gold) {
-                TradeMoneyMerge::Decrease(delta) => {
-                    let change = self
-                        .players
-                        .get_mut(&party.owner_id)
-                        .expect("trade party остаётся online")
-                        .decrease_money(delta, &self.goods_factory);
-                    let deliveries = self.send_player_money_decrease(party.owner_id, &change.outcome);
-                    tracing::trace!(
-                        player_id = party.owner_id,
-                        ?deliveries,
-                        "деньги обмена списаны"
-                    );
-                }
-                TradeMoneyMerge::Increase(delta) => {
-                    let created =
-                        self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
-                    let outcome = self
-                        .players
-                        .get_mut(&party.owner_id)
-                        .expect("trade party остаётся online")
-                        .increase_money(delta, &self.goods_factory, created);
-                    let deliveries = self.send_player_money_increase(party.owner_id, &outcome);
-                    tracing::trace!(
-                        player_id = party.owner_id,
-                        ?deliveries,
-                        "деньги обмена начислены"
-                    );
-                }
-                TradeMoneyMerge::Unchanged => {}
-            }
+        // Двухфазный detach/deliver/rollback и денежное слияние исполняет
+        // Zone-драйвер `trade/commit`; живые шаги — impl PlayerTradeHost выше.
+        let report = commit::commit_player_trade(self, &parties);
+        if !report.completed {
+            return false;
         }
         self.send_player_trade_audits(
             &parties,
             &audit_parties,
-            &audit_goods_by_plug,
+            &report.audit_goods_by_plug,
             billing_payer_id,
             billing_amount,
             transaction,
@@ -15535,35 +15492,20 @@ impl CGame {
         transaction: &[u8],
     ) {
         if self.log_system.goods_trade_log_enabled() {
-            for source_index in 0..2 {
-                let receiver_index = 1 - source_index;
-                let source = &audit_parties[source_index];
-                let receiver = &audit_parties[receiver_index];
-                for goods in goods_by_plug
-                    .get(&parties[source_index].plug_id)
-                    .into_iter()
-                    .flatten()
-                {
-                    self.send_player_trade_goods_audit(
-                        source,
-                        receiver,
-                        goods.identity().ex_id,
-                        goods.price(),
-                        goods.amount(),
-                        goods.name(),
-                    );
-                }
-                let gold = parties[source_index].gold;
-                if gold != 0 {
-                    self.send_player_trade_goods_audit(
-                        source,
-                        receiver,
-                        CGuid::GUID_INVALID,
-                        gold,
-                        gold,
-                        b"",
-                    );
-                }
+            // Очередь кадров 0x60201 собирает Zone `trade/commit` поверх
+            // `trade/audit`; здесь — transport-отправка прежнего owner-а.
+            for audit in
+                commit::player_trade_goods_audit_frames(parties, audit_parties, goods_by_plug)
+            {
+                let delivery = audit.frame.send(self, false);
+                tracing::trace!(
+                    source_id = audit.source_id,
+                    receiver_id = audit.receiver_id,
+                    goods_id = ?audit.goods_id,
+                    amount = audit.amount,
+                    ?delivery,
+                    "журнал предмета обмена отправлен"
+                );
             }
         }
         if self.log_system.increment_log_enabled()
@@ -15620,83 +15562,6 @@ impl CGame {
                     player_id = party.owner_id,
                     ?delivery,
                     "журнал валюты обмена отправлен"
-                );
-            }
-        }
-    }
-
-    fn send_player_trade_goods_audit(
-        &self,
-        source: &PlayerTradeAuditParty,
-        receiver: &PlayerTradeAuditParty,
-        goods_id: CGuid,
-        price: u32,
-        amount: u32,
-        goods_name: &[u8],
-    ) {
-        // Кадр 0x60201 собирает Zone `trade/audit`; этот owner выполняет
-        // только transport-отправку на log server.
-        let audit = trade_goods_audit_frame(&source.frame(), &receiver.frame(), goods_id, price, amount, goods_name);
-        let delivery = audit.send(self, false);
-        tracing::trace!(source_id = source.owner_id, receiver_id = receiver.owner_id, goods_id = ?goods_id, amount, ?delivery, "журнал предмета обмена отправлен");
-    }
-
-    fn undo_delivered_trade_goods(
-        &mut self,
-        detached_by_plug: &mut BTreeMap<i32, Vec<CGoods>>,
-        delivered: Vec<DeliveredPlayerTradeGoods>,
-    ) {
-        for delivered in delivered.into_iter().rev() {
-            let Some(player) = self.players.get_mut(&delivered.receiver_id) else {
-                continue;
-            };
-            let Some(consumption) = player
-                .rollback_traded_packet_addition(&delivered.addition, delivered.original.amount())
-            else {
-                continue;
-            };
-            let deliveries = self.send_player_packet_consumption(&consumption);
-            tracing::trace!(player_id = delivered.receiver_id, goods = ?consumption.goods, ?deliveries, "доставка предмета обмена отменена");
-            detached_by_plug
-                .entry(delivered.source_plug_id)
-                .or_default()
-                .push(delivered.original);
-        }
-    }
-
-    fn rollback_detached_trade_goods(
-        &mut self,
-        parties: &[PlayerTradePartySnapshot; 2],
-        mut goods_by_plug: BTreeMap<i32, Vec<CGoods>>,
-    ) {
-        for party in parties {
-            let goods = goods_by_plug.remove(&party.plug_id).unwrap_or_default();
-            if goods.is_empty() {
-                continue;
-            }
-            let Some((additions, unrecoverable)) = self.with_player_goods(party.owner_id, |game, player| {
-                let encoder = OldClientGoodsEncoder::new(&game.goods_factory, game.globe_setup.da_kong_key());
-                let mut encode = move |goods: &CGoods| encoder.encode(goods);
-                player.add_traded_goods_to_packet(goods, &game.goods_factory, &mut encode,
-                    &mut |player, additional| game.on_player_goods_added(player, additional))
-            }) else { continue };
-            for addition in &additions {
-                let deliveries = self.send_player_packet_addition(addition);
-                tracing::trace!(player_id = party.owner_id, goods = ?addition.source, ?deliveries, "отделённый предмет обмена возвращён");
-            }
-            if !unrecoverable.is_empty()
-                || additions
-                    .iter()
-                    .any(|addition| addition.resulting_amount.is_none())
-            {
-                let notification_delivery =
-                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0277"))
-                        .send_to_player(self.net_server(), party.owner_id);
-                tracing::warn!(
-                    player_id = party.owner_id,
-                    notification_delivery,
-                    unrecoverable = unrecoverable.len(),
-                    "не все предметы обмена удалось вернуть"
                 );
             }
         }
@@ -17403,9 +17268,7 @@ impl CGame {
 
     pub(crate) fn add_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
         if !self.players.contains_key(&player_id) {
-            let mut request = CMessage::new(0x0006_013b);
-            request.add_long(player_id);
-            request.base_mut().add_short(quest_id as i16);
+            let request = world_quest_add_request_frame(player_id, quest_id);
             let _ = request.send(self, false);
             return;
         }
@@ -17419,10 +17282,7 @@ impl CGame {
         }
         let quest = quest.expect("допуск Zone проверил наличие определения");
 
-        let mut message = CMessage::new(0x000b_ff2c);
-        let mut record = Vec::new();
-        append_client_quest_record(&mut record, quest_id, quest);
-        message.base_mut().add(&record);
+        let message = player_quest_add_frame(quest_id, quest);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -17442,17 +17302,13 @@ impl CGame {
             return;
         }
 
-        let mut message = CMessage::new(0x000b_ff2d);
-        message.base_mut().add_short(quest_id as i16);
-        add_legacy_c_string(message.base_mut(), &quest_name);
+        let message = player_quest_complete_frame(quest_id, &quest_name);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     pub(crate) fn remove_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
         if !self.players.contains_key(&player_id) {
-            let mut request = CMessage::new(0x0006_013c);
-            request.add_long(player_id);
-            request.base_mut().add_short(quest_id as i16);
+            let request = world_quest_remove_request_frame(player_id, quest_id);
             let _ = request.send(self, false);
             return;
         }
@@ -17472,9 +17328,7 @@ impl CGame {
             return;
         }
 
-        let mut message = CMessage::new(0x000b_ff2e);
-        message.base_mut().add_short(quest_id as i16);
-        add_legacy_c_string(message.base_mut(), &quest_name);
+        let message = player_quest_remove_frame(quest_id, &quest_name);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -17520,11 +17374,7 @@ impl CGame {
             return;
         }
 
-        let mut message = CMessage::new(0x000b_ff2f);
-        message.base_mut().add_short(quest_id as i16);
-        message.add_long(region_id);
-        message.add_long(tile_x);
-        message.add_long(tile_y);
+        let message = player_quest_position_frame(quest_id, region_id, tile_x, tile_y);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -17533,8 +17383,7 @@ impl CGame {
             return;
         };
         player.set_quest_enabled(enabled);
-        let mut message = CMessage::new(0x000b_f728);
-        message.add_byte(u8::from(enabled));
+        let message = player_quest_enabled_frame(enabled);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -17548,8 +17397,7 @@ impl CGame {
             return;
         };
         player.begin_quest_time(now_seconds, time_limit);
-        let mut message = CMessage::new(0x000b_f729);
-        message.add_long(time_limit);
+        let message = player_quest_time_begin_frame(time_limit);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -17558,7 +17406,7 @@ impl CGame {
             return;
         };
         player.clear_quest_time();
-        let message = CMessage::new(0x000b_f72a);
+        let message = player_quest_time_clear_frame();
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -29862,7 +29710,10 @@ impl CGame {
         issued_wall_seconds: u32,
     ) -> Result<(), GamePlayerLoginPreludeError> {
         // Настройка здесь включает отправку; её числовое значение не входит
-        // в BF402 и не используется текущим Rust для проверки ответа.
+        // в BF402. Семантика ответа установлена по машинному клиенту: drift-пара
+        // в поле `+0x08`, элемент последовательности в `+0x0C` исходящего
+        // заголовка; парный GameServer штампы не проверяет (верифицировано —
+        // docs/reconstruction/client-wire-runtime.md).
         let validate_enabled = self.setup.message_validate_time_ms != 0;
         let validate_delivery = validate_enabled.then(|| {
             self.login_validation.append_validate_time(player_id, true);
