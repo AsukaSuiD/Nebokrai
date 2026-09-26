@@ -1,5 +1,2 @@
-//! DB-владелец village-war, подтверждённый `worldserver.exe` и
-//! `worldserver.pdb`.
-//!
-//! Lifecycle не хранит самостоятельного состояния; save делегируется
-//! существующему соединению с исходными значениями bool и SQL-порядком.
+//! Документация DB-владельца village-war перенесена в Realm activities
+//! (`realm/src/activities/rsvillagewar.rs`).

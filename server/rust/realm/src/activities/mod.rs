@@ -10,6 +10,8 @@ pub mod leiting; // суточное обновление LeiTing.
 pub mod leitingreset; // DB-владелец сброса LeiTing.
 pub mod leitingresetworker; // fire-and-forget worker сброса LeiTing.
 pub mod misc; // process-global номер копии ShengSiShiSu.
+pub mod rscitywar; // пустой DB-адаптер городской войны: документация lifetime.
 pub mod rsgodsbattle; // DB-владелец Gods Battle.
 pub mod rsjjcsys; // DB-владелец JJC.
+pub mod rsvillagewar; // DB-владелец деревенской войны: документация lifecycle.
 pub mod villagewarsys; // расписание деревенских войн.

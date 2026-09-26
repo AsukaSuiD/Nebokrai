@@ -17,11 +17,6 @@ pub(crate) mod dbgoods;
 pub(crate) mod dbmisc;
 #[allow(
     dead_code,
-    reason = "CGoodsListener подключён через SaveGoodsFiled/CreatePlayer перед New Character transaction"
-)]
-pub(crate) mod goodslistener;
-#[allow(
-    dead_code,
     reason = "CLargess::SaveLoadDetails подготовлен для следующей LoadDetails phase DoSaveData"
 )]
 pub(crate) mod largess;

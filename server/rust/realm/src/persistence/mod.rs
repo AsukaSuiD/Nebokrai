@@ -1,7 +1,7 @@
 //! Координация сохранения и DB-инфраструктура World Realm.
 
 pub mod dbmisc; // DB-владелец аукционных очередей World.
-pub mod largess; // CLargess: DB-владелец и worker подарков.
+pub mod largess; // CLargess: DB-владелец подарков, его трейт, Tiberius-реализация и worker.
 pub mod row; // чтение именованных полей SQL-строки через Tiberius.
 pub mod rsgenvar; // CRsGenVar: DB-владелец общих переменных мира.
 pub mod rsplayer; // DB-owner игрока мира: трейт RsPlayerOwner и его data-семьи.

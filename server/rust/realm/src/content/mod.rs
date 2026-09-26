@@ -5,7 +5,7 @@ pub mod cgoods; // товар CGoods.
 pub mod cgoodsfactory; // фабрика товаров: реестры по ID и original-name.
 mod clientresource; // жизненный цикл ресурсов World: установка, чтение и освобождение.
 pub mod countryparam; // параметры стран CCountryParam.
-pub mod dbgoods; // DB-owner товаров мира: трейт DbGoodsOwner и его data-семья.
+pub mod dbgoods; // DB-owner товаров мира: трейт DbGoodsOwner, data-семья и Tiberius-реализация.
 pub mod goods; // базовые свойства товара CGoodsBaseProperties.
 pub mod goodsdb; // DB snapshots goods-домена.
 pub mod goodslistener; // listener обхода товаров при сохранении полей.
