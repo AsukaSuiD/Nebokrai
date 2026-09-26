@@ -86,11 +86,11 @@ impl WorldSaveWorker {
         Arc::clone(&self.serialization)
     }
 
- /// Запускает очередной background role, не ожидая предыдущий поток.
- ///
- /// Исходный caller закрывал только kernel handle: уже запущенный save-thread
- /// продолжал работу и сериализовался внутри `SaveThreadFunc`. Rust хранит
- /// join-handle-ы до release, но собирает здесь лишь уже завершившиеся.
+    /// Запускает очередной background role, не ожидая предыдущий поток.
+    ///
+    /// Исходный caller закрывал только kernel handle: уже запущенный save-thread
+    /// продолжал работу и сериализовался внутри `SaveThreadFunc`. Rust хранит
+    /// join-handle-ы до release, но собирает здесь лишь уже завершившиеся.
     pub(crate) fn launch(&mut self, job: WorldSaveThreadJob) -> WorldSaveThreadHandleState {
         self.collect_finished();
 

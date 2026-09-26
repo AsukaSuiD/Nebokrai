@@ -8,7 +8,7 @@
 
 use std::error::Error;
 
-use crate::authserver::src::cgame::{
+use nebokrai_realm::access::authgame::{
     AuthGameThreadReport, AuthRuntimePaths, AuthRuntimeStep, game_thread_func,
 };
 use crate::nets::servers::ServerIoCompletion;

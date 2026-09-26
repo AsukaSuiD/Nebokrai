@@ -6,12 +6,12 @@
 
 use std::error::Error;
 
-use crate::billingserver::appbilling::billingmessage::BillingMessageOutcome;
-use crate::billingserver::appbilling::servermessage::ServerMessageOutcome;
-use crate::billingserver::billingserver::game::{
+use nebokrai_realm::billing::billingmessage::BillingMessageOutcome;
+use nebokrai_realm::billing::game::{
     BillingGameMessageOutcome, BillingGameThreadReport, BillingRuntimePaths, BillingRuntimeStep,
     game_thread_func,
 };
+use nebokrai_realm::billing::servermessage::ServerMessageOutcome;
 use crate::nets::servers::{AdmissionOutcome, ServerIoCompletion};
 use super::{process_shutdown, run_process};
 
