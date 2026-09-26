@@ -38,7 +38,7 @@ use nebokrai_shared::values::{TagTime, TagTimeArithmeticBlock};
 use crate::activities::rsjjcsys::{
     PlayerJjcDataSnapshot, PlayerJjcLoadFailure, PlayerJjcLoadOutcome, RsJjcSysOwner,
 };
-use crate::characters::honordb::{
+use crate::rankings::honordb::{
     HONOR_RANK_BLOB_HEADER_SIZE, HONOR_RANK_CATEGORY_COUNT, HONOR_RANK_ENTRY_SIZE,
     HONOR_RANK_TYPE_COUNT, HonorRankDbEntry, HonorRanksBlobDecodeBlock,
     HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot, HonorRanksLoadBlock,
@@ -46,7 +46,7 @@ use crate::characters::honordb::{
     HonorRanksType,
 };
 use crate::characters::player::{CPlayer, PlayerLoadDataOwner, PlayerLoadedGoodsInsertBlock};
-use crate::characters::playerranks::{
+use crate::rankings::playerranks::{
     CPlayerRanks, PlayerRankAddBlock, PlayerRankOrganizingLookup,
 };
 use crate::content::cgoods::GoodsLoadedAddonBlock;
@@ -3670,7 +3670,7 @@ impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
     }
 }
 
-impl crate::characters::honorranks::HonorRanksDbOwner for TiberiusRsPlayer {
+impl crate::rankings::honorranks::HonorRanksDbOwner for TiberiusRsPlayer {
     fn load_honor_ranks<S: HonorRanksLoadSink>(
         &mut self,
         sink: &mut S,

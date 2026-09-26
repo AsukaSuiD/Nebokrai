@@ -86,9 +86,9 @@ use crate::app::worldserver::{
 };
 use crate::auction::auctionlog::CAuctionLog;
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerCodecError};
-use crate::characters::playerranks::{
+use crate::rankings::playerranks::{
     CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksScheduleBlock,
     PlayerRanksSerializationBlock,
 };

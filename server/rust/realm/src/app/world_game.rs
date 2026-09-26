@@ -7,7 +7,7 @@
 //! `EnemyFactionSink`/`CountrySaveSink`/`OrganizingSaveSink`/`HonorRanksGameView`
 //! и `WorldGameThreadGame`. Inherent-тела загрузки/хода/reload/save/dispatch
 //! лежат в соседних файлах `world_game_init`, `world_main_loop`, `world_reload`,
-//! `world_dispatch` и `persistence::world_db_data_collect`.
+//! `world_dispatch` и `world_db_data_collect`.
 //!
 //! Статус по модели `app` — **переходный агрегат-шов (decomposition seam),
 //! а не чистая оркестрация и не образец app-модуля**. Первичных domain stores
@@ -74,12 +74,12 @@ use crate::app::worldothermessage::{WorldPlayerNameChangeDisposition, WorldPlaye
 use crate::app::worldserver::{WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldErrorLogDelivery, WorldGameServerLookupError, WorldGameServerLostReport, WorldGenerateDbDataBlock, WorldGlobeVariables, WorldGlobeVariablesDelivery, WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind, WorldInitialRegionSnapshotSource, WorldLogLocalTime, WorldLogTextOwner, WorldLostGameServerPlayer, WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldPingGameServerInfo, WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate, WorldReconnectedPlayerDecode, WorldReconnectedPlayerOwner, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate, WorldRegionParamDecodeOutcome, WorldReloadContext, WorldReloadResult, WorldSaveThreadHandleState, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, send_err_log_to_login};
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot, PlayerExploitUpdate, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport, PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport, PlayerLoadDataOutcome, PlayerLoadDataOwner, PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerPropertyCoefficients};
 use crate::characters::playerdataqueue::CPlayerDataQueue;
 use crate::characters::playerloadqueue::{CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome, PlayerLoadQueueEntry};
 use crate::characters::playerloadworker::{WorldPlayerDataLoadOwner, WorldPlayerLoadWorkerPool};
-use crate::characters::playerranks::CPlayerRanks;
+use crate::rankings::playerranks::CPlayerRanks;
 use crate::characters::worldplayers::WorldPlayerRegistry;
 use crate::content::WorldContentCatalogs;
 use crate::content::goods::GoodsBasePropertiesRegistry;
@@ -1132,13 +1132,13 @@ impl crate::organizations::organizingctrl::OrganizingSaveSink for CGame {
     }
 }
 
-impl crate::characters::honorranks::HonorRanksGameView for CGame {
+impl crate::rankings::honorranks::HonorRanksGameView for CGame {
     fn queue_honor_ranks_world_message(
         &self,
         message: CMessage,
-    ) -> Result<(), crate::characters::honorranks::HonorRanksLocalQueueBlock> {
+    ) -> Result<(), crate::rankings::honorranks::HonorRanksLocalQueueBlock> {
         self.queue_local_world_message(message).map_err(|block| {
-            crate::characters::honorranks::HonorRanksLocalQueueBlock {
+            crate::rankings::honorranks::HonorRanksLocalQueueBlock {
                 message_type: block.message_type,
             }
         })

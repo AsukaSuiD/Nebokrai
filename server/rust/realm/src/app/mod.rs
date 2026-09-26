@@ -39,6 +39,7 @@ pub mod playerdataqueue; // loaded-queue стадия MainLoop: FIFO загру�
 pub mod servermessage; // диспетчер server-сообщений World.
 pub mod teammessage; // входящий team-диспетчер 0x600xx World.
 pub mod world_client; // исходящий клиент World->Login.
+pub mod world_db_data_collect; // save-семья CGame: GenerateDBData, materialize/take и делегирование append/clear накопителю persistence.
 pub mod world_game_view; // узкий game-view обработчиков мировых сообщений.
 pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов; переходный агрегат-шов (decomposition seam): composition handle-ы владельцев + процессные поля, прежние pub facade делегируют построчно; не образец app-модуля.
 pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers.

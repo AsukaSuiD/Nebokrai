@@ -41,7 +41,7 @@ use crate::app::world_runtime::{
 use crate::app::world_server::CMyNetServer;
 use crate::app::worldserver::WorldSaveThreadHandleState;
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::playerranks::PlayerRanksReleaseReport;
+use crate::rankings::playerranks::PlayerRanksReleaseReport;
 use crate::content::cgoodsfactory::release_goods_registry;
 use crate::content::skillfactory::CSkillFactory;
 use crate::content::TimeToReturn;

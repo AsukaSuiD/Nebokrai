@@ -52,9 +52,9 @@ use crate::app::worldserver::{
 };
 use crate::auction::auctionlog::AuctionLogLoadOutcome;
 use crate::billing::incrementlog::{CIncrementLog, IncrementLogLoadOutcome};
-use crate::characters::honordb::HonorRanksLoadOutcome;
+use crate::rankings::honordb::HonorRanksLoadOutcome;
 use crate::characters::playerloadworker::WorldGameInitWorkerHandleState;
-use crate::characters::playerranks::{
+use crate::rankings::playerranks::{
     PlayerRanksInitializationReport, PlayerRanksReleaseReport, PlayerRanksScheduleBlock,
 };
 use crate::content::countryparam::{CountryParamLoadError, CountryParamLoadReport};

@@ -43,8 +43,8 @@ use crate::app::world_reload_profiles::{WORLD_RELOAD_ACTIONS, WorldRegionLoadSpe
 use crate::app::world_runtime::{WorldRegionOwner, WorldStringTableEncodingBlock};
 use crate::app::world_setup::WorldServerSetupTokens;
 use crate::app::worldserver::{WorldLogLocalTime, WorldRegionListBlock, WorldRegionOwnerLoadBlock, WorldRegionOwnerSerializationBlock, WorldReloadBlock, WorldReloadContext, WorldReloadRegionSnapshotBlock, WorldReloadResult};
-use crate::characters::honorranks::CHonorRanks;
-use crate::characters::playerranks::CPlayerRanks;
+use crate::rankings::honorranks::CHonorRanks;
+use crate::rankings::playerranks::CPlayerRanks;
 use crate::content::{QUEST_EX_PATH, QUEST_PATH, normalize_script_path};
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::cgoodsfactory::{load_goods_registry, serialize_goods_registry};

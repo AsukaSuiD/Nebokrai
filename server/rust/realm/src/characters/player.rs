@@ -3477,7 +3477,7 @@ impl crate::activities::rsjjcsys::RsJjcSysPlayerTarget for CPlayer {
     }
 }
 
-impl crate::characters::honorranks::HonorRankPlayerView for CPlayer {
+impl crate::rankings::honorranks::HonorRankPlayerView for CPlayer {
     fn get_id(&self) -> i32 {
         self.get_id()
     }

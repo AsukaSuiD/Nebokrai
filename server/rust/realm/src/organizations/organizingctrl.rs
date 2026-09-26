@@ -51,7 +51,7 @@ use crate::app::worldothermessage::WorldPlayerNameLookupError;
 use crate::characters::player::{
     PlayerOrganizingState, PlayerOrganizingUpdateError, PlayerOrganizingUpdater,
 };
-use crate::characters::playerranks::{PlayerRankFactionLookup, PlayerRankOrganizingLookup};
+use crate::rankings::playerranks::{PlayerRankFactionLookup, PlayerRankOrganizingLookup};
 use crate::content::organizing::{ECityState, EOperator, TagTimeValue};
 use crate::organizations::countryhandler::CCountryHandler;
 use crate::organizations::faction::{

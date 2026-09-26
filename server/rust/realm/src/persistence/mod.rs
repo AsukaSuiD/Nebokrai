@@ -12,4 +12,3 @@ pub mod saveworker; // worker-вход SaveThreadFunc и RAII/trigger seam со�
 pub mod writelog; // payload-контракт FIFO журнала World.
 pub mod writelogqueue; // FIFO команд World write-log.
 pub mod writelogworker; // worker журнала с явным владением.
-pub mod world_db_data_collect; // save-семья CGame: GenerateDBData, materialize/take и делегирование append/clear накопителю.

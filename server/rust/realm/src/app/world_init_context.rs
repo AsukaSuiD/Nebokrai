@@ -35,7 +35,7 @@ use crate::app::world_runtime::{
     WorldGameInitWorkerKind,
 };
 use crate::auction::auctionnode::CGoodsNode;
-use crate::characters::honorranks::HonorRanksDbOwner;
+use crate::rankings::honorranks::HonorRanksDbOwner;
 use crate::characters::player::{CPlayer, PlayerPropertyCoefficients};
 use crate::characters::playerloadworker::WorldPlayerDataLoadOwner;
 use crate::content::goods::GoodsBasePropertiesRegistry;

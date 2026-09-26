@@ -29,7 +29,7 @@ use crate::app::world_message::{CMessage, SendMessageError};
 use crate::app::world_organizing_view::WorldOrganizingView;
 use crate::app::worldserver::AddLogTextDisposition;
 use crate::billing::incrementlog::{CIncrementLog, IncrementLogPageBlock};
-use crate::characters::honorranks::{
+use crate::rankings::honorranks::{
     CHonorRanks, HonorRankPushBlock, HonorRanksKilledPlayerReport,
 };
 use crate::characters::player::PlayerCodecError;

@@ -34,10 +34,10 @@ use crate::app::world_setup::{WorldServerSetupTokens, resolve_world_runtime_file
 use crate::app::worldserver::{WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldLogTextOwner, WorldReloadContext, resolve_first_local_ipv4};
 use crate::auction::auctionlog::{AuctionLogLoadOutcome, CAuctionLog};
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::CPlayer;
 use crate::characters::playerloadworker::{WorldGameInitWorkerHandleState, WorldPlayerDataLoadOwner, WorldPlayerLoadBatchBlock, WorldPlayerLoadBatchReport, WorldPlayerLoadWorkerBlock, WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerSpec};
-use crate::characters::playerranks::{CPlayerRanks, PlayerRanksInitializationConfig};
+use crate::rankings::playerranks::{CPlayerRanks, PlayerRanksInitializationConfig};
 use crate::content::countryparam::CCountryParam;
 use crate::content::skillfactory::CSkillFactory;
 use crate::content::{TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport};

@@ -45,9 +45,9 @@ use crate::app::worldserver::{AddLogTextDisposition, WorldLogLocalTime, WorldLog
 use crate::persistence::writelog::{WorldFactionLogWrite, WorldWriteLogCommand};
 use crate::auction::auctionlog::{AuctionBangUpdateOutcome, CAuctionLog};
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerCodecError};
-use crate::characters::playerranks::CPlayerRanks;
+use crate::rankings::playerranks::CPlayerRanks;
 use crate::content::cgoods::CGoods;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::countryparam::CCountryParam;
@@ -65,7 +65,7 @@ use crate::persistence::rsplayer::{PlayerRanksStatOutcome, RsPlayerOwner, Tiberi
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::savedb::SaveDataLifecycleState;
 use crate::persistence::saveworker::WorldSaveRuntimeContext;
-use crate::persistence::world_db_data_collect::{WorldRunSavePreGateReport, WorldRunSaveTriggerReport};
+use crate::app::world_db_data_collect::{WorldRunSavePreGateReport, WorldRunSaveTriggerReport};
 use crate::sessions::csessionfactory::CSessionFactory;
 use nebokrai_shared::resources::{CGodsBattleConf, GlobeSetupSnapshot};
 use nebokrai_shared::runtime::{AsyncTimerRunBlock, CNetSessionManager, CTimer};

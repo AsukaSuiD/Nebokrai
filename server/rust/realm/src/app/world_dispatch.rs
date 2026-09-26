@@ -47,9 +47,9 @@ use crate::app::worldserver::{AddLogTextDisposition, WorldSaveThreadHandleState}
 use crate::app::writelogmessage::{WorldWriteLogMessageDispatch, on_write_log_message};
 use crate::auction::auctionlog::CAuctionLog;
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport, PlayerPropertyCoefficients};
-use crate::characters::playerranks::CPlayerRanks;
+use crate::rankings::playerranks::CPlayerRanks;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::cgoodsfactory::{GoodsOriginalNameIndex, query_goods_name};
 use crate::content::countryparam::{CCountryParam, CountryParameterUnavailable};

@@ -24,7 +24,7 @@ use crate::app::world_message::CMessage;
 use crate::app::world_runtime::WorldRegionOwner;
 use crate::app::world_save_reports::{WorldCollectPlayerDataBroadcast, WorldCollectPlayerDataRequestState, WorldManualSaveRequestReport, WorldRunImmediateSaveReport, WorldRunSaveLaunchReport, WorldRunSaveTriggerDisposition, WorldRunSaveTriggerState, WorldSaveAllOrganizationsLaunchReport, WorldSaveNotifyDelivery, WorldSaveNotifyReport};
 use crate::app::worldserver::{WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldLogLocalTime, WorldLogTextOwner, WorldSaveThreadHandleState, prepare_save_thread_launch};
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerPropertyCoefficients};
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::variablelist::CVariableList;

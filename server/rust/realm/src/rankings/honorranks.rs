@@ -26,7 +26,7 @@ use std::fmt;
 use chrono::{Datelike, Local, Timelike};
 
 use crate::app::world_message::{CMessage, SendMessageError};
-use crate::characters::honordb::{
+use crate::rankings::honordb::{
     HonorRankDbEntry, HonorRankDbLists, HonorRanksCopyTimeSnapshot, HonorRanksDbDataSnapshot,
     HonorRanksLoadOutcome, HonorRanksLoadSink, HonorRanksSavePeriod, HonorRanksType,
 };

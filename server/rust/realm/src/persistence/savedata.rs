@@ -9,7 +9,7 @@
 //! Первичное хранилище принадлежит `persistence`:
 //! [`WorldSaveDataAccumulator`] владеет типом, инвариантами и
 //! append/swap/clear операциями, а `CGame` хранит только cloneable
-//! composition handle. Generation-ветки (`persistence/world_db_data_collect`)
+//! composition handle. Generation-ветки (`app/world_db_data_collect`)
 //! обращаются через handle; session facade и отделённый batch owner
 //! остаются чистыми данными, которые DB I/O save worker-а
 //! (`persistence/saveworker`) разбирает, поэтому поля публичны.

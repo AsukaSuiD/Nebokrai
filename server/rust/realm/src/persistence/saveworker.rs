@@ -31,7 +31,7 @@ use crate::activities::rsjjcsys::RsJjcSysOwner;
 use crate::app::worldserver::{
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, send_err_log_to_login,
 };
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::CPlayer;
 use crate::content::dbgoods::DbGoodsOwner;
 use crate::content::goods::GoodsBasePropertiesRegistry;

@@ -44,8 +44,8 @@ use crate::app::worldserver::{
     AddLogTextBlock, AddLogTextDisposition, SaveLogTextDisposition, WorldLogLocalTime,
     WorldLogTextOwner,
 };
-use crate::characters::honordb::HonorRanksDbDataSnapshot;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honordb::HonorRanksDbDataSnapshot;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{CPlayer, PlayerDbProjectionBlock};
 use crate::content::dbgoods::DbGoodsOwner;
 use crate::content::goods::GoodsBasePropertiesRegistry;

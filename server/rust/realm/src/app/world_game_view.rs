@@ -40,7 +40,7 @@ use crate::app::worldothermessage::{
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::app::player_base::WorldPlayerBaseGameView;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::{
     CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
     PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerFactionInfoUpdateBlock,

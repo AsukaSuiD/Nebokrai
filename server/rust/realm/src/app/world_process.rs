@@ -82,9 +82,9 @@ use crate::app::worldserver::{
 };
 use crate::auction::auctionlog::CAuctionLog;
 use crate::billing::incrementlog::CIncrementLog;
-use crate::characters::honorranks::CHonorRanks;
+use crate::rankings::honorranks::CHonorRanks;
 use crate::characters::player::CPlayer;
-use crate::characters::playerranks::CPlayerRanks;
+use crate::rankings::playerranks::CPlayerRanks;
 use crate::content::countryparam::CCountryParam;
 use crate::content::skillfactory::CSkillFactory;
 use crate::content::variablelist::CVariableList;

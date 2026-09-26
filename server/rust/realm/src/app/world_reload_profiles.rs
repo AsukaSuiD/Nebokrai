@@ -31,9 +31,9 @@ use crate::app::worldserver::{
 };
 use crate::app::servermessage::WorldServerMessageError;
 use crate::auction::auctionlog::AuctionBangUpdateOutcome;
-use crate::characters::honorranks::{HonorRanksNewDayBlock, HonorRanksNewDayReport};
+use crate::rankings::honorranks::{HonorRanksNewDayBlock, HonorRanksNewDayReport};
 use crate::characters::player::PlayerPropertyCoefficients;
-use crate::characters::playerranks::{PlayerRanksGameServerUpdate, PlayerRanksSerializationBlock};
+use crate::rankings::playerranks::{PlayerRanksGameServerUpdate, PlayerRanksSerializationBlock};
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
 use crate::content::countryparam::CCountryParam;
 use crate::content::goods::GoodsBasePropertiesRegistry;

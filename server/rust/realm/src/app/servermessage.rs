@@ -69,12 +69,12 @@ use crate::app::worldserver::{
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode,
     WorldServerSnapshotPlayerOwner,
 };
-use crate::characters::honordb::HonorRanksType;
-use crate::characters::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
+use crate::rankings::honordb::HonorRanksType;
+use crate::rankings::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
 use crate::characters::player::{
     PlayerCodecError, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
 };
-use crate::characters::playerranks::{CPlayerRanks, PlayerRanksSerializationBlock};
+use crate::rankings::playerranks::{CPlayerRanks, PlayerRanksSerializationBlock};
 use crate::content::battlefairyproperty::{BattleFairyComposeWireError, CBattleFairyProperty};
 use crate::content::cgoodsfactory::{GoodsRegistrySerializeError, serialize_goods_registry};
 use crate::content::countryparam::{CCountryParam, CountryParamSerializationBlock};
