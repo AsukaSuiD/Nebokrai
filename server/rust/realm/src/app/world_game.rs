@@ -10,28 +10,28 @@
 //! `world_dispatch` и `persistence::world_db_data_collect`.
 //!
 //! Статус по модели `app` — **переходный агрегат-шов (decomposition seam),
-//! а не чистая оркестрация и не образец app-модуля**. Структура физически
-//! хранит первичные domain stores канонических владельцев: индекс
-//! `team_session_ids` — session/team projection, целевой владелец
-//! `sessions`; `system_broadcasts`/`goods_links` — `social`;
-//! `leave_word_id` — `organizations`; `honor_eliminate_list` —
-//! активности/рейтинги; `bai_tan` — исторический анти-флуд член, владелец
-//! назначается при разборе. Процессные и сетевые поля (`setup`, net-края,
-//! workers, очереди write-log/load, time-маркеры) и composition handle-ы —
-//! накопитель сохранения (`persistence::savedata::WorldSaveDataAccumulator`),
-//! мировой реестр игроков и присутствие
-//! (`characters::worldplayers::WorldPlayerRegistry` в `player_registry`;
-//! typed dup-операции и счётчик перенесены владельцу, остальные
-//! очередные/маповые мутации остаются оркестрацией app через его публичные
-//! поля), мировые контентные каталоги (`content::WorldContentCatalogs` в
-//! `content_catalogs`, прежние pub accessors ниже делегируют ему) и реестр
-//! обслуживающих игровых Zone и их ping-индекс
-//! (`regions::worldzones::WorldRegionRegistry` в `region_registry`) —
-//! остаются законной композиционной частью `app`. Дублирования состояния
-//! с domain-модулями нет: эти группы
-//! существуют только здесь и перейдут к владельцам предметной
-//! reconstruction-работой, а не comment-правкой; новые domain-поля в этот
-//! агрегат не добавляются.
+//! а не чистая оркестрация и не образец app-модуля**. Первичных domain stores
+//! канонических владельцев в агрегате больше нет: структура хранит только
+//! composition handle-ы владельцев и делегирующие facade с сохранением прежних
+//! pub-сигнатур — накопитель сохранения
+//! (`persistence::savedata::WorldSaveDataAccumulator` в `db_data`),
+//! мировые контентные каталоги (`content::WorldContentCatalogs` в
+//! `content_catalogs`), мировой реестр игроков и присутствие
+//! (`characters::worldplayers::WorldPlayerRegistry` в `player_registry`),
+//! реестр обслуживающих игровых Zone и их ping-индекс
+//! (`regions::worldzones::WorldRegionRegistry` в `region_registry`), live-список
+//! системных рассылок и реестр goods link (`social` в `system_broadcasts` и
+//! `goods_links`), индекс маршрутов команд (`sessions::teamsessions` в
+//! `team_sessions`), счётчик ID сообщений организации
+//! (`organizations::leavewords` в `leave_words`) и honor-eliminator индекс
+//! (`rankings::honoreliminators` в `honor_eliminators`). `bai_tan` —
+//! исторический анти-флуд реестр запросов публикации с rate/wait-корреляцией;
+//! классифицирован как легитимное app-состояние по §3 карты и остаётся
+//! у `app::baitan`. Процессные и сетевые поля (`setup`, net-края,
+//! workers, очереди write-log/load, time-маркеры, `db_responses`,
+//! `login_server_id`) — законная композиционная часть `app`. Дублирования
+//! состояния с domain-модулями нет; новые domain-поля в этот агрегат не
+//! добавляются.
 //!
 //! Имена и проекции типов здесь — Realm/Shared формы оригинальных
 //! (`organizations`, `activities`, `characters`, `content`, `regions`,
@@ -64,13 +64,13 @@ use crate::app::world_client::CMyNetClient;
 use crate::app::world_dispatch::{WorldCountryInfoDelivery, WorldCountryWarEffects, add_legacy_c_string, copy_name_for_legacy_lowercase, legacy_c_string_prefix};
 use crate::app::world_game_view::{WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldGameServerConnectionState, WorldGameServerDisconnectionState, WorldLoginAccountPlayer, WorldLoginPlayerRouteSnapshot, WorldLoginTimeoutTeamExit, WorldOnlineAccountPlayerRoute, WorldPlayerLoadRequestBlock, WorldPlayerLoadRequestOutcome, WorldPlayerSelectRouteBlock, WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome, WorldProcessPlayerDataQueueBlock, WorldProcessPlayerDataQueueError, WorldProcessPlayerDataQueueOutcome, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, WorldReturnedPlayerDecode, WorldReturnedPlayerDecodeOwner, WorldReturnedPlayerSnapshot};
 use crate::app::world_hub_data::WorldLoadedPlayerRouteOrder;
-use crate::app::world_hub_entries::{WorldAuctionSellerMoney, WorldDetachedFactionInfoContext, WorldFactionPlayerOrganizingContext, WorldGameServerEntry, WorldLoginPlayerEntry, WorldOriginGoodsBlock, WorldOriginGoodsReport, WorldPlayerFactionInfoContext, WorldPlayerOrganizingContext, WorldRegionAssignment, WorldSystemBroadcast, truncate_legacy_money, truncate_scaled_legacy_money};
+use crate::app::world_hub_entries::{WorldAuctionSellerMoney, WorldDetachedFactionInfoContext, WorldFactionPlayerOrganizingContext, WorldGameServerEntry, WorldLoginPlayerEntry, WorldOriginGoodsBlock, WorldOriginGoodsReport, WorldPlayerFactionInfoContext, WorldPlayerOrganizingContext, WorldRegionAssignment, truncate_legacy_money, truncate_scaled_legacy_money};
 use crate::app::world_main_loop_data::{AttackCityTimerOutcome, AttackCityTimerReport, CountryWarTimerBlock, CountryWarTimerReport, FourNationWarTimerReport, PlayerRanksTimerRefreshBlock, PlayerRanksTimerRefreshReport, VillageWarTimerOutcome, VillageWarTimerReport, WorldTimerCallbackBlock};
 use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQueueBlock};
 use crate::app::world_runtime::{WorldGameReleaseContext, WorldGameReleaseResult, WorldRegionOwner};
 use crate::app::world_server::CMyNetServer;
 use crate::app::world_setup::WorldSetup;
-use crate::app::worldothermessage::{WorldGoodsLink, WorldGoodsLinkPayload, WorldHonorEliminatorRegistration, WorldPlayerNameChangeDisposition, WorldPlayerNameChangeReport, WorldPlayerNameLookupError};
+use crate::app::worldothermessage::{WorldPlayerNameChangeDisposition, WorldPlayerNameChangeReport, WorldPlayerNameLookupError};
 use crate::app::worldserver::{WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldErrorLogDelivery, WorldGameServerLookupError, WorldGameServerLostReport, WorldGenerateDbDataBlock, WorldGlobeVariables, WorldGlobeVariablesDelivery, WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind, WorldInitialRegionSnapshotSource, WorldLogLocalTime, WorldLogTextOwner, WorldLostGameServerPlayer, WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldPingGameServerInfo, WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate, WorldReconnectedPlayerDecode, WorldReconnectedPlayerOwner, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate, WorldRegionParamDecodeOutcome, WorldReloadContext, WorldReloadResult, WorldSaveThreadHandleState, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, send_err_log_to_login};
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::billing::incrementlog::CIncrementLog;
@@ -89,6 +89,7 @@ use crate::content::skillfactory::CSkillFactory;
 use crate::content::{TimeToReturn, TimeToReturnCallbacks, TimeToReturnContext, TimeToReturnFireReport};
 use crate::content::variablelist::CVariableList;
 use crate::organizations::country::CountryKingSaveLimits;
+use crate::organizations::leavewords::WorldLeaveWordIds;
 use crate::organizations::countryhandler::CCountryHandler;
 use crate::organizations::dbcountry::CountrySaveSnapshot;
 use crate::organizations::faction::{CFaction, FactionInitialPropertyBlock};
@@ -108,17 +109,20 @@ use crate::regions::region::CRegion;
 use crate::regions::rsregion::{RegionDatabaseParameters, RegionParameterLoadTarget};
 use crate::regions::worldregion::CWorldRegion;
 use crate::regions::worldzones::WorldRegionRegistry;
+use crate::rankings::honoreliminators::{WorldHonorEliminateIndex, WorldHonorEliminatorRegistration};
 use crate::sessions::csessionfactory::CSessionFactory;
+use crate::sessions::teamsessions::WorldTeamSessionIndex;
+use crate::social::broadcasts::WorldSystemBroadcasts;
+use crate::social::goodslinks::{WorldGoodsLink, WorldGoodsLinks};
 use nebokrai_shared::network::ServerCommandHandle;
 use nebokrai_shared::resources::{CCiQingSetup, CContributeSetup, CDupliRegionSetup, CEmotion, CGodsBattleConf, CHitLevelSetup, CIncrementShopList, CPlayerList, CQuestSystem, CTaoZhuangSetup, CThingSetup, CTradeList, CWordsFilter, EquipmentComposeList, GlobeSetupSnapshot, PrisonConf};
 use nebokrai_shared::runtime::{AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, CTimer, CalendarTimerRegistration, TimerCallbackInvocation, TimerCallbackSource, TimerId, put_string_to_file};
 use nebokrai_shared::values::TagTime;
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use crate::app::world_dispatch::format_union_world_string;
 
 /// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
@@ -1047,12 +1051,6 @@ where
     }
 }
 
-const INITIAL_GOODS_LINK_PLACEHOLDERS: usize = 500;
-
-const LEGACY_GOODS_LINK_MAX_SIZE: usize = 0x0CCC_CCCC;
-
-static NEXT_GOODS_LINK_INDEX: AtomicU32 = AtomicU32::new(1);
-
 #[derive(Debug, Eq, PartialEq)]
 pub struct WorldOwnedCityRefreshReport {
     pub(crate) region_id: i32,
@@ -1084,18 +1082,18 @@ pub struct CGame {
     pub(crate) net_client: Option<CMyNetClient>,
     pub(crate) net_server: Option<CMyNetServer>,
     pub(crate) region_registry: WorldRegionRegistry,
-    pub(crate) system_broadcasts: VecDeque<WorldSystemBroadcast>,
-    pub(crate) goods_links: VecDeque<WorldGoodsLink>,
+    pub(crate) system_broadcasts: WorldSystemBroadcasts,
+    pub(crate) goods_links: WorldGoodsLinks,
     pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) player_data_queue: CPlayerDataQueue<CPlayer>,
     pub(crate) player_load_queue: CPlayerLoadQueue,
     pub(crate) player_registry: WorldPlayerRegistry,
-    pub(crate) team_session_ids: BTreeMap<u32, i32>,
-    pub(crate) leave_word_id: i32,
+    pub(crate) team_sessions: WorldTeamSessionIndex,
+    pub(crate) leave_words: WorldLeaveWordIds,
     pub(crate) db_responses: i32,
     pub(crate) db_data: WorldSaveDataAccumulator,
     pub(crate) bai_tan: WorldBaiTanLists,
-    pub(crate) honor_eliminate_list: BTreeMap<u32, VecDeque<u32>>,
+    pub(crate) honor_eliminators: WorldHonorEliminateIndex,
     pub(crate) login_server_id: i32,
     pub(crate) game_server_message_time_ms: u32,
     pub(crate) login_server_message_time_ms: u32,
@@ -2356,20 +2354,18 @@ impl CGame {
             net_client: None,
             net_server: None,
             region_registry: WorldRegionRegistry::new(legacy_tick_ms()),
-            system_broadcasts: VecDeque::new(),
-            goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
-                .take(INITIAL_GOODS_LINK_PLACEHOLDERS)
-                .collect(),
+            system_broadcasts: WorldSystemBroadcasts::new(),
+            goods_links: WorldGoodsLinks::new(),
             write_log_queue: WorldWriteLogQueue::default(),
             player_data_queue: CPlayerDataQueue::new(),
             player_load_queue: CPlayerLoadQueue::new(),
             player_registry: WorldPlayerRegistry::new(),
-            team_session_ids: BTreeMap::new(),
-            leave_word_id: 0,
+            team_sessions: WorldTeamSessionIndex::new(),
+            leave_words: WorldLeaveWordIds::new(),
             db_responses: 0,
             db_data: WorldSaveDataAccumulator::new(),
             bai_tan: WorldBaiTanLists::new(),
-            honor_eliminate_list: BTreeMap::new(),
+            honor_eliminators: WorldHonorEliminateIndex::new(),
             login_server_id: 0,
             game_server_message_time_ms: 0,
             login_server_message_time_ms: 0,
@@ -2394,22 +2390,8 @@ impl CGame {
         format_union_world_string(self.get_string_by_id(string_id), arguments)
     }
 
-    /// Добавляет точную POD-запись в хвост `m_listGoodsLink`.
-    ///
-    /// Constructor уже создал 500 нулевых placeholder-ов, а process-global
-    /// индекс начинается с `1`. Changed-запись сохраняет ID декодированного
-    /// товара и global не двигает. Редкая `list::max_size` ветвь удаляет голову;
-    /// Rust одновременно освобождает её owned товар, исправляя только утечку.
-    pub fn add_goods_link(&mut self, mut link: WorldGoodsLink) -> u32 {
-        if self.goods_links.len() == LEGACY_GOODS_LINK_MAX_SIZE {
-            let _ = self.goods_links.pop_front();
-        }
-        if matches!(&link.payload, WorldGoodsLinkPayload::Original { .. }) {
-            link.index = NEXT_GOODS_LINK_INDEX.fetch_add(1, Ordering::Relaxed);
-        }
-        let index = link.index;
-        self.goods_links.push_back(link);
-        index
+    pub fn add_goods_link(&mut self, link: WorldGoodsLink) -> u32 {
+        self.goods_links.add_goods_link(link)
     }
 
     pub fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
@@ -2422,10 +2404,8 @@ impl CGame {
         self.write_log_queue.clone()
     }
 
-    /// Возвращает первое совпадение в list-order, включая constructor-ный
-    /// placeholder для индекса `0`.
     pub fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
-        self.goods_links.iter().find(|link| link.index == index)
+        self.goods_links.find_goods_link(index)
     }
 
     /// Возвращает appearance snapshot экипировки игрока.
@@ -2504,8 +2484,7 @@ impl CGame {
     }
 
     pub fn allocate_leave_word_id(&mut self) -> i32 {
-        self.leave_word_id = self.leave_word_id.wrapping_add(1);
-        self.leave_word_id
+        self.leave_words.allocate()
     }
 
     pub fn allocate_player_id(&mut self) -> i32 {
@@ -2666,19 +2645,19 @@ impl CGame {
     }
 
     pub fn get_team_session_id(&self, team_id: u32) -> i32 {
-        self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+        self.team_sessions.get_team_session_id(team_id)
     }
 
     pub fn team_session_count(&self) -> usize {
-        self.team_session_ids.len()
+        self.team_sessions.team_session_count()
     }
 
     pub fn publish_team_session(&mut self, team_id: u32, session_id: i32) {
-        self.team_session_ids.insert(team_id, session_id);
+        self.team_sessions.publish_team_session(team_id, session_id);
     }
 
     pub fn remove_team_session(&mut self, team_id: u32) {
-        self.team_session_ids.remove(&team_id);
+        self.team_sessions.remove_team_session(team_id);
     }
 
     pub fn exit_team_player(
@@ -4518,7 +4497,7 @@ impl CGame {
         for player in self.player_registry.players.values_mut() {
             player.reset_honor_eliminate_info(rank_mask);
         }
-        self.honor_eliminate_list.clear();
+        self.honor_eliminators.clear();
         self.player_data_queue
             .reset_honor_eliminate_info(rank_mask);
         true
@@ -4533,15 +4512,7 @@ impl CGame {
             return WorldHonorEliminatorRegistration::MissingOnlinePlayer;
         }
 
-        let eliminators = self.honor_eliminate_list.entry(player_id).or_default();
-        if eliminators
-            .iter()
-            .any(|tracked_id| *tracked_id == eliminator_id)
-        {
-            return WorldHonorEliminatorRegistration::Duplicate;
-        }
-        eliminators.push_back(eliminator_id);
-        WorldHonorEliminatorRegistration::Accepted
+        self.honor_eliminators.register(player_id, eliminator_id)
     }
 
     pub fn queue_local_world_message(

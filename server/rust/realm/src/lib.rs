@@ -14,5 +14,7 @@ pub mod content; // подготовка содержимого Realm; испо�
 pub mod items; // инвентарные контейнеры мира: база, состояние, слушатели и слоты игрока.
 pub mod organizations; // страны, фракции, союзы, членство и заявления.
 pub mod persistence; // координация сохранения и DB-инфраструктура мира.
+pub mod rankings; // мировые рейтинги: honor-eliminator индекс; CPlayerRanks/CHonorRanks пока у characters.
 pub mod regions; // мировые фигуры и регионы: пространственные типы, DB-владелец и реестр обслуживающих Zone.
-pub mod sessions; // мировые сессии взаимодействия: plug/session/team и фабрика.
+pub mod sessions; // мировые сессии взаимодействия: plug/session/team, их маршруты и фабрика.
+pub mod social; // мировая адресация общения: системные рассылки и ссылки на товары.

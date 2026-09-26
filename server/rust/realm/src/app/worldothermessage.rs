@@ -7,6 +7,11 @@
 //! Неизвестный opcode — no-op. Numeric getter на коротком payload возвращает
 //! ноль без сдвига cursor.
 //!
+//! Типы goods link перенесены владельцу [`crate::social::goodslinks`], исход
+//! honor-eliminator регистрации — владельцу
+//! [`crate::rankings::honoreliminators`]; прежние пути сохранены re-export-ами
+//! для прежних consumers.
+//!
 //! Eliminate проверяет duplicate до чтения четырёх счётчиков. Copy-number
 //! увеличивает global до отправки. Rename всегда отвечает исходным именем и
 //! result; increment page отвечает только при найденной истории.
@@ -37,57 +42,9 @@ use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::{WorldChatLogWrite, WorldWriteLogCommand};
 use crate::regions::shapetypes::ShapeTileCoordinateBlock;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorldHonorEliminatorRegistration {
-    MissingOnlinePlayer,
-    Duplicate,
-    Accepted,
-}
-
-/// Владеющая Rust-форма точного 20-байтового `CGame::tagGoodsLink`.
-///
-/// `Box<CGoods>` заменяет сырой owning pointer только для `bChange != 0`;
-/// unchanged-запись хранит исходные `dwType/lNum`. Старый padding не
-/// Создаётся, потому что ни lookup, ни wire его не наблюдают.
-pub enum WorldGoodsLinkPayload {
-    Changed(Box<CGoods>),
-    Original { goods_type: u32, amount: u8 },
-}
-
-pub struct WorldGoodsLink {
-    pub index: u32,
-    pub payload: WorldGoodsLinkPayload,
-}
-
-impl WorldGoodsLink {
-    pub fn placeholder() -> Self {
-        Self {
-            index: 0,
-            payload: WorldGoodsLinkPayload::Original {
-                goods_type: 0,
-                amount: 0,
-            },
-        }
-    }
-
-    pub fn changed(goods: Box<CGoods>) -> Self {
-        Self {
-            index: goods.get_id() as u32,
-            payload: WorldGoodsLinkPayload::Changed(goods),
-        }
-    }
-
-    pub const fn original(goods_type: u32, amount: u8) -> Self {
-        Self {
-            index: 0,
-            payload: WorldGoodsLinkPayload::Original { goods_type, amount },
-        }
-    }
-
-    pub const fn payload(&self) -> &WorldGoodsLinkPayload {
-        &self.payload
-    }
-}
+// Исход honor-eliminator регистрации перенесён владельцу `rankings`, типы goods link — владельцу `social`; прежние пути сохранены re-export-ами.
+pub use crate::rankings::honoreliminators::WorldHonorEliminatorRegistration;
+pub use crate::social::goodslinks::{WorldGoodsLink, WorldGoodsLinkPayload};
 
 /// Safe Rust не воспроизводит переполнение двух исходных `char[260]`.
 ///

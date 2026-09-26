@@ -2856,7 +2856,7 @@ impl CGame {
         let Some(source) = source else {
             return false;
         };
-        self.system_broadcasts.clear();
+        self.system_broadcasts.entries.clear();
         let mut tokens = source
             .split(u8::is_ascii_whitespace)
             .filter(|token| !token.is_empty());
@@ -2896,7 +2896,7 @@ impl CGame {
                     | (values[3] as u32 & 0xff)
             };
             let random_range = max_time_seconds.wrapping_sub(min_time_seconds);
-            self.system_broadcasts.push_back(WorldSystemBroadcast {
+            self.system_broadcasts.entries.push_back(WorldSystemBroadcast {
                 import_level,
                 region_id,
                 min_time_seconds: min_time_seconds as u32,

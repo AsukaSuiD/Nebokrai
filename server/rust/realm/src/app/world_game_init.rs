@@ -128,7 +128,7 @@ impl CGame {
 
     pub const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
         self.player_registry.player_id = loaded.player_id;
-        self.leave_word_id = loaded.leave_world_id;
+        self.leave_words.next = loaded.leave_world_id;
     }
 
     /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
@@ -1595,7 +1595,7 @@ impl CGame {
         // После этого места нет ни одного team lookup до немедленного
         // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
         // меняя session ID, routing либо внешний порядок.
-        self.team_session_ids.clear();
+        self.team_sessions.clear();
         let owner = WorldGameReleaseOptionalOwner::GeneralVariableList;
         let released = context.release_optional_owner(owner);
         events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });

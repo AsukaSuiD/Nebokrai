@@ -26,7 +26,7 @@ pub mod onbillserver; // служебные ветви Misc: client-close и о�
 pub mod othermessage; // ответные ветви MiscServer: нулевое 32-битное поле без приоритета.
 pub mod setup; // позиционная конфигурация MiscServer из setup.ini.
 pub mod auction; // auction-сообщения MSG_S2W_AUCTION у World.
-pub mod baitan; // bai-tan реестр CGame: очередь заявок по ip, маршруты игроков и счётчики повторных ip
+pub mod baitan; // bai-tan реестр мирового game (признанный app-владелец по §3 карты): очередь заявок по ip, маршруты игроков и счётчики повторных ip
 pub mod gmamessage; // GMA-ветви World: kick-player 0x4FD01 и transport 0x4FD04/0x604xx.
 pub mod gmmessage; // GM-диспетчер World и маршруты именованных регионов.
 pub mod jjcsysmessage; // входящий JJC-диспетчер и leaf-ветви World.
@@ -40,11 +40,11 @@ pub mod servermessage; // диспетчер server-сообщений World.
 pub mod teammessage; // входящий team-диспетчер 0x600xx World.
 pub mod world_client; // исходящий клиент World->Login.
 pub mod world_game_view; // узкий game-view обработчиков мировых сообщений.
-pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов; переходный агрегат, физически хранящий первичные states канонических владельцев (decomposition seam, не образец app-модуля).
+pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов; переходный агрегат-шов (decomposition seam): composition handle-ы владельцев + процессные поля, прежние pub facade делегируют построчно; не образец app-модуля.
 pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers.
 pub mod world_dispatch; // process_world_message: диспетчер мировых сообщений, drain union runtime, country/organizing effect-glue и DeleteRole/CreateRole мосты.
 pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры.
-pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, origin-отчёты и organizing player-контексты; re-export записей game/login серверов из владельцев regions и characters.
+pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, x87 money-truncate, origin-отчёты и organizing player-контексты; re-export записей game/login серверов из владельцев regions и characters и системной рассылки с AI-отчётами из владельца social.
 pub mod world_message; // wire-сообщение направлений Login/Game<->World.
 pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration, typed-доставка его событий и runtime-контракт Init с region-load швом dyn RegionParameterLoadTarget (impl у process-owner-а)
 pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, runtime-швы с worker-мостами и process-impl, INI-замена, build error MainLoop DB-stage

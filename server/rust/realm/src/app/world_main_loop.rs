@@ -151,9 +151,9 @@ impl CGame {
 
         let broadcast_tick_ms = get_tick();
         let now_seconds = broadcast_tick_ms / 1000;
-        let mut broadcasts = Vec::with_capacity(self.system_broadcasts.len());
-        for index in 0..self.system_broadcasts.len() {
-            let broadcast = &self.system_broadcasts[index];
+        let mut broadcasts = Vec::with_capacity(self.system_broadcasts.entries.len());
+        for index in 0..self.system_broadcasts.entries.len() {
+            let broadcast = &self.system_broadcasts.entries[index];
             let elapsed_seconds = now_seconds.wrapping_sub(broadcast.last_notify_time_seconds);
             if broadcast.interval_seconds >= elapsed_seconds {
                 broadcasts.push(WorldSystemBroadcastDisposition::Waiting {
@@ -207,7 +207,7 @@ impl CGame {
                 }
             };
 
-            let broadcast = &mut self.system_broadcasts[index];
+            let broadcast = &mut self.system_broadcasts.entries[index];
             // DIFF-A1 (машинная досверка): оригинал записывает
             // `last_notify_time = now` до вызова `random(max-min)`; порядок —
             // контракт, сам по себе эффекта не даёт.

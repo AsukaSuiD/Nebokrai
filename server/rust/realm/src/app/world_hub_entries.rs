@@ -1,7 +1,7 @@
 //! Записи и транспортные контексты таблиц состояния WorldServer (hub-data
-//! уровень): materialized-регион, системная рассылка `tagSysBroadcast` и её
-//! AI-отчёт, деньги аукциона с точным x87-усечением, отчёты origin-снаряжения
-//! и organizing/доставка-контексты обновления faction-информации игрока.
+//! уровень): materialized-регион, деньги аукциона с точным x87-усечением,
+//! отчёты origin-снаряжения и organizing/доставка-контексты обновления
+//! faction-информации игрока.
 //! Источник контракта — та же точная пара, что у
 //! [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
 //! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
@@ -12,14 +12,16 @@
 //!
 //! Запись присутствия login-игрока перенесена владельцу
 //! [`crate::characters::worldplayers`], записи назначения регионов, GameServer
-//! и ping-индекса — владельцу [`crate::regions::worldzones`]; прежние пути
-//! сохраняются re-export-ами для прежних consumers и старого пакета.
+//! и ping-индекса — владельцу [`crate::regions::worldzones`], системная
+//! рассылка `tagSysBroadcast` и её AI-отчёты — владельцу
+//! [`crate::social::broadcasts`]; прежние пути сохраняются re-export-ами для
+//! прежних consumers.
 
 use std::collections::BTreeMap;
 
 use nebokrai_shared::network::ServerCommandHandle;
 
-use crate::app::world_message::{CMessage, SendMessageError};
+use crate::app::world_message::CMessage;
 use crate::characters::player::{
     PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerOrganizingState,
     PlayerOrganizingUpdateError, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
@@ -31,23 +33,11 @@ use crate::organizations::organizingctrl::COrganizingCtrl;
 // Записи реестра обслуживающих Zone мира перенесены владельцу `regions`; прежние пути сохранены re-export-ом.
 pub use crate::regions::worldzones::{WorldGameServerEntry, WorldRegionAssignment};
 
-/// Действующая AI-проекция исходного `CGame::tagSysBroadcast`.
-///
-/// Поля идут по смыслу struct-layout `+0x04..+0x40`; `_login_type` AI не читает,
-/// а Rust-layout не выдаётся за старый 68-байтовый Windows ABI.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorldSystemBroadcast {
-    pub import_level: i32,
-    pub region_id: i32,
-    pub min_time_seconds: u32,
-    pub max_time_seconds: u32,
-    pub odds: u32,
-    pub text_color: u32,
-    pub back_color: u32,
-    pub message: Vec<u8>,
-    pub interval_seconds: u32,
-    pub last_notify_time_seconds: u32,
-}
+// Запись системной broadcast-рассылки и её AI-отчёты перенесены владельцу `social`; прежние пути сохранены re-export-ом.
+pub use crate::social::broadcasts::{
+    WorldGameAiReport, WorldSystemBroadcast, WorldSystemBroadcastDisposition,
+    WorldSystemBroadcastTarget,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorldAuctionSellerMoney {
@@ -119,44 +109,6 @@ pub fn truncate_legacy_money(value: f64) -> i32 {
     } else {
         value.trunc() as i32
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum WorldSystemBroadcastTarget {
-    All {
-        delivery: Result<i32, SendMessageError>,
-    },
-    Region {
-        region_id: i32,
-        game_server_index: Option<u32>,
-        delivery: Option<Result<i32, SendMessageError>>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum WorldSystemBroadcastDisposition {
-    Waiting {
-        elapsed_seconds: u32,
-        interval_seconds: u32,
-    },
-    OddsMissed {
-        roll: i32,
-        odds: u32,
-    },
-    Broadcast {
-        roll: i32,
-        target: WorldSystemBroadcastTarget,
-        assigned_last_notify_time_seconds: u32,
-        assigned_interval_seconds: u32,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct WorldGameAiReport {
-    pub region_ids_run: Vec<i32>,
-    pub broadcast_tick_ms: u32,
-    pub broadcasts: Vec<WorldSystemBroadcastDisposition>,
-    pub legacy_result: i32,
 }
 
 pub use crate::characters::worldplayers::WorldLoginPlayerEntry;

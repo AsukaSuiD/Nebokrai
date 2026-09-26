@@ -3,7 +3,7 @@
 //! `CGame`). Формат-типы (`WorldRegionAssignment`, `WorldGameServerEntry`,
 //! `WorldPingGameServerInfo`, `WorldRegionOwner`) перенесены из
 //! `app/world_hub_entries`, `app/worldserver` и `app/world_runtime`; те же
-//! пути сохранены re-export-ами для прежних consumers и старого пакета.
+//! пути сохранены re-export-ами для прежних consumers.
 //!
 //! `CGame` хранит только composition handle `region_registry` и делегирует
 //! прежний pub facade. Поля публичны — Init/reload/runtime-оркестрация

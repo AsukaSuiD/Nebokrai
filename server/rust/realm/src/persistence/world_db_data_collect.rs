@@ -35,7 +35,7 @@ use crate::organizations::faction::CFaction;
 use crate::organizations::organizingctrl::{COrganizingCtrl, OrganizingSaveDataBlock};
 use crate::organizations::rsenemyfactions::EnemyFactionSaveSnapshot;
 use crate::organizations::union::CUnion;
-use crate::persistence::savedata::{WorldDbDataSaveSession, WorldSaveDataOwner};
+use crate::persistence::savedata::WorldSaveDataOwner;
 use crate::persistence::savedb::{SaveDataLifecycleState, WorldSaveThreadJob};
 use crate::persistence::saveworker::WorldSaveRuntimeContext;
 use crate::regions::rsregion::RegionSaveSnapshot;
@@ -54,11 +54,6 @@ pub type WorldRunSaveTriggerReport<'game> =
     crate::app::world_save_reports::WorldRunSaveTriggerReport<'game, CGame>;
 
 impl CGame {
-    /// Делегирует накопителю typed-доступ save-потока.
-    pub fn db_data_save_session(&mut self) -> WorldDbDataSaveSession<'_> {
-        self.db_data.save_session()
-    }
-
     /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
     /// accumulator для событий, пришедших уже после save-trigger-а.
     pub fn take_save_data_owner(&mut self) -> WorldSaveDataOwner {
@@ -126,7 +121,7 @@ impl CGame {
         organizing_ctrl: &COrganizingCtrl,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<(), WorldGenerateDbDataBlock> {
-        let leave_word_id = self.leave_word_id;
+        let leave_word_id = self.leave_words.next;
         let player_id = self.player_registry.player_id;
 
         {

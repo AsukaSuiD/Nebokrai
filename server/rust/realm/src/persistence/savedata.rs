@@ -9,7 +9,7 @@
 //! Первичное хранилище принадлежит `persistence`:
 //! [`WorldSaveDataAccumulator`] владеет типом, инвариантами и
 //! append/swap/clear операциями, а `CGame` хранит только cloneable
-//! composition handle. Generation-ветки (`app/world_db_data_collect`)
+//! composition handle. Generation-ветки (`persistence/world_db_data_collect`)
 //! обращаются через handle; session facade и отделённый batch owner
 //! остаются чистыми данными, которые DB I/O save worker-а
 //! (`persistence/saveworker`) разбирает, поэтому поля публичны.
@@ -121,18 +121,6 @@ impl WorldSaveDataAccumulator {
     /// Эксклюзивный guard накопителя.
     pub fn lock(&self) -> MutexGuard<'_, WorldDbData> {
         self.data.lock()
-    }
-
-    /// Эксклюзивный доступ `DoSaveData` без guard-а.
-    ///
-    /// Достижим только у единственного держателя handle-а: composition не
-    /// публикует вторых клонов наружу.
-    pub fn save_session(&mut self) -> WorldDbDataSaveSession<'_> {
-        WorldDbDataSaveSession {
-            data: Arc::get_mut(&mut self.data)
-                .expect("save-session достижим только у единственного держателя handle-а")
-                .get_mut(),
-        }
     }
 
     /// Передаёт сформированный batch отдельному owner-у и публикует пустой

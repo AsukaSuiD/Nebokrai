@@ -9,6 +9,7 @@ pub mod faction; // CFaction: базовые свойства и wire-контр
 pub mod factionenemyblock; // отчёт отказа мутации enemy-связи фракций.
 pub mod goodswarmember; // CGoodsWarMember: участники Goods War.
 pub mod king; // CKing: владелец очков контроля/материалов/войны страны.
+pub mod leavewords; // счётчик ID сообщений организации (leave word) мира: wrapping allocate, pub-поле для init/save оркестрации.
 pub mod minister; // CMinister: номинальный minister owner.
 pub mod officer; // COfficer: четыре officer-поля country owner-а.
 pub mod organizingctrl; // COrganizingCtrl: центральный контроллер организаций (Registry, операции, staging) и его wire-контракты/отчёты.
