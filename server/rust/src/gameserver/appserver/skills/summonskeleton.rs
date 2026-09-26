@@ -1,9 +1,10 @@
 //! Призыв скелета `CSummonSkeleton` (`0x19B`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/summonskeleton.cpp`. Точечный, объектный и
-//! self-входы используют общий `summoncreatureskill`: skill-owner сохраняет
-//! reuse, cast-delay, пакеты `0xBFE01`, количество создаваемых существ и их
-//! lifetime, а `CGame` только разрешает владельцев и выполняет dispatch.
+//! `appserver/skills/summonskeleton.cpp`. Константа перенесена в
+//! `nebokrai_zone::skills::summoncreatureskill` (общий путь семьи и статусы
+//! MATCH см. там); до их переноса точечный, объектный и self-входы
+//! использовали общий `summoncreatureskill`, а `CGame` разрешал владельцев
+//! и выполнял dispatch.
 
-pub(crate) const SUMMON_SKELETON_SKILL_ID: u32 = 0x19b;
+pub(crate) use nebokrai_zone::skills::SUMMON_SKELETON_SKILL_ID;
