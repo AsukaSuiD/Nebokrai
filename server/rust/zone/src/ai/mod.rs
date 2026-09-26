@@ -1,9 +1,10 @@
-//! Поведение AI фигур живого региона: хранилища врагов конкретных
-//! производных AI и общая порядковая механика passive-реакций исторического
-//! GameServer. Компонент выделен зелёной порцией PassiveGladiator из старого
-//! пакета (`appserver/ai/passivegladiator.cpp`, `appserver/ai/baseai.cpp`);
-//! поля, постановка событий, три FIFO и active-фаза `CBaseAI` остаются
-//! hub-владением до своих порций.
+//! Поведение AI фигур живого региона: диспетчер-ядро `CMonsterAI`, lifecycle
+//! `CPet`, хранилища врагов конкретных производных AI и общая порядковая
+//! механика passive-реакций исторического GameServer. Компонент выделен из
+//! старого пакета зелёной порцией PassiveGladiator (`appserver/ai/passivegladiator.cpp`,
+//! `appserver/ai/baseai.cpp`) и кластером A1 (`appserver/ai/monsterai.cpp`,
+//! `appserver/ai/pet.cpp`); поля, постановка событий, три FIFO и active-фаза
+//! `CBaseAI` остаются hub-владением до своих порций.
 
 mod events; // элементы `AI_EVENT` и коды `AI_SHAPE_ACTION`; чистый wrapping-deadline.
 pub mod monsterai; // `CMonsterAI`: диспетчер-ядро расписаний боя/idle/tracing и hub-фасады прежних владельцев.
