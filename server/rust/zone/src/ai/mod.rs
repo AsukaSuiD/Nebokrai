@@ -1,4 +1,5 @@
-//! Поведение AI фигур живого региона: диспетчер-ядро `CMonsterAI`, lifecycle
+//! Поведение AI фигур живого региона: базовый владелец очередей `CBaseAI`,
+//! игровой AI игрока `CPlayerAI`, диспетчер-ядро `CMonsterAI`, lifecycle
 //! `CPet`, AI-состояния лордов и боссов кластера E1, конкретные производные
 //! AI волны Z-AI (близнецы Цзюмай, умный гладиатор, слабое существо,
 //! повозка, стационарные лучник и городские охранники) и общая порядковая
@@ -7,20 +8,26 @@
 //! (`appserver/ai/passivegladiator.cpp`, `appserver/ai/baseai.cpp`),
 //! кластером A1 (`appserver/ai/monsterai.cpp`, `appserver/ai/pet.cpp`),
 //! кластером E1 (`appserver/ai/lord.cpp`, `appserver/ai/bossblue.cpp`,
-//! `appserver/ai/bossfiend.cpp`) и волной Z-AI (`appserver/ai/jiumai.cpp`,
+//! `appserver/ai/bossfiend.cpp`), волной Z-AI (`appserver/ai/jiumai.cpp`,
 //! `smartgladiator.cpp`, `puninesscreature.cpp`, `carriage.cpp`,
 //! `fixedpositionarcher.cpp`, `cityguardwithsword.cpp`,
-//! `cityguardwithbow.cpp`); поля, постановка событий, три FIFO и active-фаза
-//! `CBaseAI` остаются hub-владением до своих порций. Общий monster tick hub
-//! (тела Run/OnSchedule/OnIdle/OnMoving этих владельцев и их hurt-schedule
-//! входы `baseai`/`playerai`) кластерам E1 и Z-AI не принадлежит и
-//! переносится своей порцией.
+//! `cityguardwithbow.cpp`) и волной Z-AI-player (`appserver/ai/baseai.cpp`,
+//! `appserver/ai/playerai.cpp`); поля, постановка событий, три FIFO,
+//! object-цель, back-stage список и active-фаза `CBaseAI`, а также состояние
+//! и расписания `CPlayerAI` теперь здесь. Региональный реестр, around-
+//! доставка шагов и час-тик owner-а остаются hub-владением через узкие
+//! фасады `monsterai`/`playerai` делегатов старого пакета. Общий monster
+//! tick hub (тела Run/OnSchedule/OnIdle/OnMoving этих владельцев и их
+//! hurt-schedule входы `baseai`/`playerai`) кластерам E1 и Z-AI не
+//! принадлежит и переносится своей порцией.
 
 mod events; // элементы `AI_EVENT` и коды `AI_SHAPE_ACTION`; чистый wrapping-deadline.
+pub mod baseai; // `CBaseAI`: три FIFO, object-цель, back-stage навыки, dormancy, Slip и задержка шага MoveTo.
 pub mod monsterai; // `CMonsterAI`: диспетчер-ядро расписаний боя/idle/tracing и hub-фасады прежних владельцев.
 pub mod pet; // `CPet`: lifecycle FSM, active-поиск, follow/idle и OnLoseTarget-семья на hub-фасадах `monsterai`.
+pub mod playerai; // `CPlayerAI`: назначения клиента, очереди навыков игрока/боевого духа и хвост Run.
 mod passivegladiator; // `CPassiveGladiator`: список врагов, hurt-разбор и typed-выбор цели.
-mod reactions; // `CBaseAI`: буквальный порядок Defense/Stiffen/Died-реакций над очередями hub-владельца.
+mod reactions; // `CBaseAI`: буквальный порядок Defense/Stiffen/Died-реакций над FIFO `ai/baseai`.
 pub mod lord; // `CLord` (AI100): hurt-план отвода от призванной формы, фазовый выбор навыка и общий enemy-проход E1.
 pub mod bossblue; // `CBossBlue` (AI103): восемь одноразовых порогов ярости и пороговый выбор навыка.
 pub mod bossfiend; // `CBossFiend` (AI104): восемь одноразовых порогов призыва, таймер повторного призыва и min-distance проход.
@@ -34,6 +41,9 @@ pub mod cityguardwithsword; // `CCityGuardWithSword` (AI10): пост, горо�
 pub mod cityguardwithbow; // `CCityGuardWithBow` (AI11): hurt-повторный поиск парой городских selector-ов.
 
 pub use events::{ai_event_deadline_reached, AiEvent, AiShapeAction}; // совместимые данные FIFO обоих AI-владельцев.
+pub use baseai::{
+    AiPhaseState, CBaseAI, find_slip_step_in_direction, one_step_move_delay_ms,
+}; // FIFO-база `CBaseAI`, Slip и задержка шага MoveTo без hub-типов.
 pub use monsterai::{
     MonsterActiveAiView, MonsterAiScheduleState, MonsterBaseAttackDispatch,
     MonsterDispatcherGame, MonsterDispatcherMonster, MonsterDispatcherMoveShape,
@@ -50,6 +60,10 @@ pub use pet::{
     execute_owned_pet_active_search, execute_owned_pet_follow, lose_pet_target_and_search,
     pet_master_ref, queue_pet_idle, release_pet_target,
 }; // lifecycle и расписания приручённого питомца.
+pub use playerai::{
+    AutoIncPlayer, BattleFairySkillQueueOutcome, CPlayerAI, PlayerAiDestination,
+    PlayerAutoProgress, PlayerEnergyRegeneration,
+}; // состояние AI игрока и узкий фасад хвоста Run (авто-прирост/энергия).
 pub use passivegladiator::{
     PassiveGladiatorAttackFacts, PassiveGladiatorAttackOutcome, PassiveGladiatorCandidate,
     PassiveGladiatorEnemyNotice, PassiveGladiatorSelection, PassiveGladiatorState,
