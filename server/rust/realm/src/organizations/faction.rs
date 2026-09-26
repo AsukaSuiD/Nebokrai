@@ -4813,6 +4813,20 @@ impl CFaction {
             true,
             false,
         )?;
+        // Досверка 2026-09-26 (Nworldserver.exe; CFaction::DoJoin=0x4BEE40 —
+        // PDB public 1:000bde40 занижен на 0x1000, как у соседних CFaction-методов,
+        // истинные адреса через vftable 0x547A8C):
+        // purviews нового member пишутся машинно: слоту Exit 2 по 0x4BF3A1
+        // (локальный pair-blob +0x74) и слоту LeaveWord 2 по 0x4BF3A8 (+0x88),
+        // затем девять нулей в остальные слоты 0x4BF3D2..0x4BF40A; каждый слот
+        // пишется один раз — бывшие гипотезы «dead double-store» и «слоты
+        // idx1/idx6 не пишутся» были следом ошибки учёта esp через push между
+        // записями. job_level=99 пишется явно: 0x4BF263 (blob +0x2C), strcpy
+        // title идёт в +0x30 и его не перекрывает. Копия join tagTime полная
+        // (бывший F2 опровергнут): t+0→+0 0x4BF231, t+4→+4 0x4BF23B,
+        // t+0xC→+0xC 0x4BF245, t+8→+8 0x4BF255 — store идёт после push 0x4BF24C
+        // и попадает в свой слот +8, не поверх +0xC; insert (rep movsd 0x3C
+        // @0x4BF601 от blob) уносит все 16 байт в map до рассылки.
         let mut purview = [EPurviewOwnState::No; 11];
         purview[EPurview::Exit as usize] = EPurviewOwnState::Permit;
         purview[EPurview::LeaveWord as usize] = EPurviewOwnState::Permit;
@@ -5640,11 +5654,17 @@ impl CFaction {
             }
         };
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        // Декомпилятор показывает у этого вызова `K=0x87a238`, но в теле
+        // хелпера `0x4B4890` (`SendInfoToAllMember(…, -1, K)`) аргумент
+        // цвета мёртв — жёсткий push константы `0xFFDAEDFE`; в кадр
+        // `0x7F804` всегда уходит `0xFFDAEDFE`. Машинный факт: тело
+        // `0x4B4890` в `Nworldserver.exe` + `WorldServer.pdb` (досверка
+        // CFaction, вердикт F1). См. `send_info_to_all_members_with_color`.
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             &notice,
             legacy_c_string_visible_bytes(&second_text),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             |request| context.send_organizing_info(request),
         ));
 
@@ -5753,6 +5773,15 @@ impl CFaction {
         )
     }
 
+    /// Рассылка info-notice всем членам фракции.
+    ///
+    /// Wire-цвет всех таких рассылок — `0xFFDAEDFE`. Аргумент цвета у
+    /// оригинального хелпера `SendInfoToAllMember` (`0x4B4890`) мёртв: тело
+    /// жёстко пушит константу `0xFFDAEDFE`, а передаваемый у части вызовов
+    /// `K=0x87a238` на провод не попадает. Машинный факт по телу `0x4B4890`
+    /// в `Nworldserver.exe` + `WorldServer.pdb` (досверка CFaction, вердикт
+    /// F1); до неё декомпиляторский `K` в `Demise`/`SetContributor` был
+    /// перенесён как `0x0087_A238` — недокументированное wire-расхождение.
     pub fn send_info_to_all_members_with_color<'a, F>(
         &self,
         first_text: &'a [u8],
@@ -6242,11 +6271,14 @@ impl CFaction {
         );
         let notice = legacy_c_string_visible_bytes(&notice);
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
+        // Цвет тот же `0xFFDAEDFE`, что и у `Demise`: декомпиляторский
+        // `K=0x87a238` мёртв в теле хелпера `0x4B4890`, см. машинный факт
+        // у `send_info_to_all_members_with_color`.
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             notice,
             legacy_c_string_visible_bytes(&second_text),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             |request| context.send_organizing_info(request),
         ));
         self.set_change_data(2);

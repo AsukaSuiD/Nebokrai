@@ -49,25 +49,43 @@ const LOAD_AUCTION_LIMIT: i32 = 100_000;
 
 /// Внутренний discriminant исходного `CDbMisc::OperatorType`.
 ///
+/// Значения зафиксированы по машинным записям `Nworldserver.exe`: входная
+/// запись ModifyState A2B пишется константой `7` в обоих auction-диспетчерах
+/// (RVA `0xA5857` — server-auction, RVA `0xA52BF` — misc-auction), входная
+/// `OT_IN_MODIFY_STATE_A2S` — `4`, входная `OT_IN_INSERT_NEW_ITEM` — `1`
+/// (VERIFIED досверкой диспетчеров той же точной пары). При последовательной
+/// семантике MSVC-enum между `OT_OUT_MODIFY_STATE_A2S_OK` (5) и
+/// `OT_IN_MODIFY_STATE_A2B` (7) у исходного enum объявлен член 6, которому ни
+/// одна машинная запись значения не известна. Имя — INFERRED по симметрии
+/// семьи (`OT_OUT_MODIFY_STATE_A2S_ERROR` между двумя triad-группами
+/// INSERT 1..3 и A2B 7..9): живой отказ A2S в `DoneListIn` вместо него
+/// публикует чужой `OT_OUT_INSERT_NEW_ITEM_ERROR` (ветка ниже в этом файле),
+/// поэтому член 6 — мёртвый объявленный discriminant без наблюдаемой записи.
+/// Следующие члены продолжают последовательность 8..14: их значения — INFERRED
+/// продолжением от машинной точки 7 (новых машинных записей не снималось).
+///
 /// Число не выходит в wire и здесь намеренно не переиспользуется как protocol
 /// ID: наблюдаемым контрактом являются названные переходы между очередями.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorType {
-    OT_NULL,
-    OT_IN_INSERT_NEW_ITEM,
-    OT_OUT_INSERT_NEW_ITEM_OK,
-    OT_OUT_INSERT_NEW_ITEM_ERROR,
-    OT_IN_MODIFY_STATE_A2S,
-    OT_OUT_MODIFY_STATE_A2S_OK,
-    OT_IN_MODIFY_STATE_A2B,
-    OT_OUT_MODIFY_STATE_A2B_OK,
-    OT_OUT_MODIFY_STATE_A2B_ERROR,
-    OT_IN_READ_AUCTION,
-    OT_OUT_READ_AUCTION_RESULT,
-    OT_IN_DELETE_ITEM_SUCESS,
-    OT_IN_DELETE_ITEM_BACK,
-    OT_IN_MODIFY_MONEY,
+    OT_NULL = 0,
+    OT_IN_INSERT_NEW_ITEM = 1,
+    OT_OUT_INSERT_NEW_ITEM_OK = 2,
+    OT_OUT_INSERT_NEW_ITEM_ERROR = 3,
+    OT_IN_MODIFY_STATE_A2S = 4,
+    OT_OUT_MODIFY_STATE_A2S_OK = 5,
+ /// Мёртвый член 6 исходного enum; имя — INFERRED (см. doc enum выше).
+    OT_OUT_MODIFY_STATE_A2S_ERROR = 6,
+ /// Машинная точка 7 исходного enum: RVA `0xA5857`/`0xA52BF` (VERIFIED).
+    OT_IN_MODIFY_STATE_A2B = 7,
+    OT_OUT_MODIFY_STATE_A2B_OK = 8,
+    OT_OUT_MODIFY_STATE_A2B_ERROR = 9,
+    OT_IN_READ_AUCTION = 10,
+    OT_OUT_READ_AUCTION_RESULT = 11,
+    OT_IN_DELETE_ITEM_SUCESS = 12,
+    OT_IN_DELETE_ITEM_BACK = 13,
+    OT_IN_MODIFY_MONEY = 14,
 }
 
 pub struct DbNote {
@@ -310,7 +328,9 @@ impl CDbMisc {
                         OperatorType::OT_OUT_MODIFY_STATE_A2S_OK
                     } else {
  // World действительно использует чужой
-                    // Ветка ошибки INSERT.
+                    // ветку ошибки INSERT: собственный член 6
+                    // (`OT_OUT_MODIFY_STATE_A2S_ERROR`) при этом объявлен
+                    // в исходном enum, но нигде не записывается (см. doc enum).
                         OperatorType::OT_OUT_INSERT_NEW_ITEM_ERROR
                     };
                     let _ = self.push_item_to_list_out(note);
