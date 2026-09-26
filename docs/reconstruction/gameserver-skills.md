@@ -296,12 +296,13 @@ PDB (`appserver/skills/*state.cpp`, `appserver/other states/*state.cpp`,
 `appserver/player.cpp`, `appserver/states/*`) указаны в шапках модулей.
 Таблица собирает адреса, которые жили в шапках zone-файлов; поведенческие
 правила остаются в шапках соответствующих модулей `zone::effects::*`.
-Форма записи — как в прежних шапках-владельцах, статус не повышался.
+Форма записи — как в прежних шапках-владельцах; отдельные строки поднимались
+до VERIFIED_DISASSEMBLY прямыми досверками (отмечено внутри строк).
 
 | zone-владелец | опорные адреса и факт |
 |---|---|
 | `blind` | BlindState-семейство, десять классов: KnightCut (`0x67`) ctor `0x005FCCF0/0x005FCD60`, vt `0x00661254`; KnockOut (`0x192`) `0x005F4F30/0x005F4FA0`, vt `0x00660894`; BoaLock (`0xD2`) `0x005FB560/0x005FB5D0`, vt `0x006610DC`; Blind (`0x76`) `0x00607380`, vt `0x00662214`; Rush (`0x73`) `0x006077E0`, vt `0x00662274`; Rush2 (`0x7C`) `0x005F12E0/0x005F1350`, vt `0x0066041C`; Seal (`0x138`) `0x005FF800/0x005FF870`, vt `0x006615F4`; Strike (`0xDD`) `0x00606830`, vt `0x00662154`; SpiderWeb (`0x199`) `0x005EA6E0/0x005EA750`, vt `0x0065FBCC`; BossBlueQuake (`0x1F8`) `0x005E8590/0x005E8600`, vt `0x0065F934`. Общие: Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, GetRemainedTime `0x005F2CD0`, AI `0x005D5BA0`; у BoaLock — собственный End `0x005FB800` и пустой OnAction |
-| `battlefairy` (Po/Yu ×8) | Pojia `0x005E80B0/0x005E8120` vt `0x0065F8CC` (`0x212`); Pobing `0x005E7B20/0x005E7B90` vt `0x0065F864` (`0x213`); Pomo `0x005E7600/0x005E7670` vt `0x0065F7FC` (`0x214`); Pofa `0x005E70C0/0x005E7130` vt `0x0065F794` (`0x215`); Yujia `0x005E6BD0/0x005E6C40` vt `0x0065F72C` (`0x216`); Yubing `0x005E66E0/0x005E6750` vt `0x0065F6C4` (`0x217`); Yumo `0x005E6220/0x005E6290` vt `0x0065F65C` (`0x218`); Yufa `0x005E5D60/0x005E5DD0` vt `0x0065F5F4` (`0x219`). Общие: Serialize `0x005E7330`, Unserialize `0x005FD660`, GetRemainedTime `0x00605E10`, AI `0x005E6E20`, End `0x005DBCE0`. Отображение вида (Po снижает цель, Yu усиливает держателя) подтверждено различием вызовов в Begin восьми классов; формулы — PARTIAL из существующего Rust |
+| `battlefairy` (Po/Yu ×8) | Pojia `0x005E80B0/0x005E8120` vt `0x0065F8CC` (`0x212`); Pobing `0x005E7B20/0x005E7B90` vt `0x0065F864` (`0x213`); Pomo `0x005E7600/0x005E7670` vt `0x0065F7FC` (`0x214`); Pofa `0x005E70C0/0x005E7130` vt `0x0065F794` (`0x215`); Yujia `0x005E6BD0/0x005E6C40` vt `0x0065F72C` (`0x216`); Yubing `0x005E66E0/0x005E6750` vt `0x0065F6C4` (`0x217`); Yumo `0x005E6220/0x005E6290` vt `0x0065F65C` (`0x218`); Yufa `0x005E5D60/0x005E5DD0` vt `0x0065F5F4` (`0x219`). Общие: Serialize `0x005E7330`, Unserialize `0x005FD660`, GetRemainedTime `0x00605E10`, AI `0x005E6E20`, End `0x005DBCE0`. Отображение вида подтверждено Begin; все 16 property callbacks (OnUpdateProperties 8 классов, ветви игрока и монстра) и общие тела досверены буквально — VERIFIED_DISASSEMBLY: OUP Pojia `0x005E8320`, Pobing `0x005E7D90`, Pomo `0x005E7870`, Pofa `0x005E7390`, Yujia `0x005E6E60`, Yubing `0x005E6950`, Yumo `0x005E6490`, Yufa `0x005E5FD0`; End — fold-обёртка `0x005E7310` над базой `CState::End` `0x005DBCE0`, общие Serialize `0x005E7330`, Unserialize `0x005FD660`, GetRemainedTime `0x00605E10`, AI `0x005E6E20`. Po вычитают с границей 0 (строгий jg), Yu прибавляют: атака — unsigned-clamp INT_MAX (cmp/jbe), уклоны/модификатор — trunc16/wrapping i32 без верхней границы; SetMinAtk/SetMaxAtk `0x42ADB0/0x42ADD0`. Monster-ветви живые только у Pobing (ChangeMin/Max vt +0x1A8/+0x1AC с clamp 0) и Pomo (vt +0x1A4→+0x1D8). Quirk: ctor-поле `+0x08` (1 у Pojia/Pomo/Pofa/Yumo/Yufa, 0 у Pobing/Yujia/Yubing; база `0x7FFFFFFF`) — UNKNOWN |
 | `heal` (×4) | CHealState `0x005F8940/0x005F89D0` vt `0x00660D9C` (`0xD3`); CHeal2State `0x005EFAC0/0x005EFB50` vt `0x0066024C` (`0xE3`); CSuperHealState `0x005F63B0/0x005F6440` vt `0x00660A64` (`0xD9`); CSuperHeal2State `0x005EE960/0x005EE9F0` vt `0x00660134` (`0xE4`). Общие: AI `0x005EEDF0`, End `0x005EEBA0`, GetRemainedTime `0x005F2CD0`, Serialize `0x005F65F0`, Unserialize `0x005EEC70` |
 | `cure` | ctor `0x005E9E50`, Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, AI `0x005D5BA0` |
 | `daubpoison` | ctor `0x005F17B0` (ID `0xDF`), vt `0x0066047C`; общие с CCureState: Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, GetRemainedTime `0x005F2CD0`, AI `0x005D5BA0`, End `0x005FD420` |
@@ -341,11 +342,39 @@ PDB (`appserver/skills/*state.cpp`, `appserver/other states/*state.cpp`,
 | `bloodloss` | ctor `0x005E3820`, vt `0x0065F2AC`, writer `0x005E3B40`, reader `0x005E3C70`; хвост записи — два DWORD с битами f32 и два WORD |
 | `leafcut` (`0x6B`/`0x80`/`0x8F`) | ctor `0x005FC580`/`0x005F05C0`/`0x005EBC00`, vt `0x006611F4`/`0x0066035C`/`0x0065FD44`; общие writer `0x005F0820`, reader `0x005EBF20`, getter `0x00606320`; хвост записи — 2 DWORD и 4 WORD |
 | `wuxing` (×5) | пять vtable направляют writer на `0x005E0030`, reader на `0x005E0880` (ID DWORD и `0x5C` сырых байт с `[this+0x38]`); property callbacks: Metal `0x005E08C0`, остальные `0x005E0080` |
+| `wuxing` AI (×5) | VERIFIED_DISASSEMBLY: тела AI (RVA) `0x10FC40` (Earth), `0x1100F0` (Fire), `0x1105A0` (Water), `0x110CD0` (Wood), `0x111180` (Metal); ctor состояний `0x005DFC40`/`0x005DFE10`/`0x005DFF30`/`0x005E0660`/`0x005E0780`; state id replace-обхода `0x357`/`0x356`/`0x355`/`0x354`/`0x353`; порядок 23/24 чтений 115,116,117,109,112,101–104,118,[119 у Metal],80011,80012,80016,80013,80014,80015,80017–80024 до выбора U/S; word — mov ax, MAX_HP: Water — сырой dword, остальные movsx; float-поля fild→fstp dword, resume 80017–80020 identity fild→fistp под RC=truncate, restored 80021–80024 сырые dword; GetU вирт. `+0x14` с откатом GetS `+0x18`, обязательный тип 400, Begin-fail→dtor и End(1), UpdateProperty вирт. `+0x9C` → `CPlayer::RestoreHpMp` `0x4455D0`, отсутствие таблицы/U/S/типа → End(0); property callbacks: общий `0x005E0080` (406 инстр.), Metal `0x005E08C0` (≡ + блок MAX_MP `[+0x58]!=0` → add, unsigned-кламп `0x7FFFFFFF`); x87: продукты без промежуточных сбросов, единственный конечный fstp/fistp (модель неокруглённого продукта — прецедент lifeshield), клампы word-полей через getter-вирты `+0xE8`/`+0xE4`/`+0xF0`/`+0xFC`, element_modify и int→element signed wrap без клампа, resume floor 1000, restored floor 0, scale-порядок `+0x5C`,`+0x60`,`+0x70`,`+0x64`,`+0x68`,`+0x6C` |
 | `weak` (`0x12E`) | vt `0x006621B4`: AI `0x00606EF0`, property callback `0x00607020`, writer `0x00606FC0`, reader `0x006071F0`, getter срока `0x00605E10` |
 | `wangsheng` (`0x221`) | ctor `0x00605D90`; общий Serialize `0x005E7330`, Unserialize `0x005FD660`, AI `0x005E6E20`, OnUpdateProperties `0x00605FB0` |
 | `automaticrestore` (×4) | AI HP peace `0x004FA8E0` (смерть/полнота HP/мирный режим до часов); все четыре класса вызывают общие тела Serialize `0x005ECE70` / Unserialize `0x004F9D80`; PDB называет общие тела по другим состояниям — принадлежность определяется vtable, не именем символа |
 | `visualeffect` | проверенный диапазон базового `CVisualEffect` `0x005DC1B0..0x005DC234` |
 | `time` | образец таймед-остатка `CHealState::GetRemainedTime` `0x005F2CD0` (при истёкшем сроке второе чтение `timeGetTime` не выполняется) |
+
+State-семейства `CNotDisappearAfterDead::OnUpdateProperties` (`0x005D6580`),
+`CExState`/`CExStateNew`, `CHBYState` (`0x005DA0F0`),
+`CRideState::OnUpdateProperties` (`0x004F9000`) — формулы применения состояний
+перенесены из hub `CPlayer` в Zone `players::properties`
+(`apply_undead_state_properties`, `apply_extended_state_properties`,
+`apply_active_change_body_state_properties`, `apply_ride_state_properties`);
+callers продолжают резолвиться hub-делегатами прежних сигнатур, контракты
+состояний и их wire-записи неизменны (state-типы — zone effects, hub их
+re-export'ит).
+
+ATTR-семья `CPlayer::UpdateProperty` (`0x4593E0`): машинная досверка по дампам
+`MountEquip` `0x442610`, `MountCiQingEquip` `0x447000` и телу UpdateProperty
+(точная пара). VERIFIED (прямое чтение инструкций): порядок base inline →
+BF prelude → `equipment_changed`=1 → MountAllEquip (`0x453480`) →
+`CMoveShape::UpdateProperty` → `OnChangeProperties` → DoneTaoZhuang-gate;
+switch-семантика MountEquip/MountCiQing (low32 add, signed negative gate,
+branchless zero-clamp, RC-guarded FISTP trunc полной суммы, case-96
+base=wBlastAttack, FUMO/ActiveEquip firstPass-only, пять base DWORD
+MountCiQing `0x308..0x318` без INT_MAX-clamp); BF prelude и BF cases
+`0x9B`/`0x9C`/`0x9E..0xA1`. Исправлено по машине (3 float-ассоциативности):
+`growth=(level-1)*(pullulate*1e-4)+1.0`; сумма prelude
+`(potential+base*growth)+modifier`; производные BF `coef*current_effect*1e-4`
+(масштаб последним, BRAVE×2/AGILITY×2/SPRITUALISM×3). PARTIAL: внутренности
+MountAllEquip `0x453480` (двойной snapshot, SetCurFlash, quirk level>99+10).
+Нюанс класса: x87 f80 vs Rust f64/f32 mantissa-tail — в диапазонах статов
+INFERRED-equal.
 
 ## zonalcast: скелет областных призывов
 
@@ -380,9 +409,15 @@ CGodThunder2 тот же шаблон компилятора, без отдел�
 271/228 инструкций ≡ эталону YinYang, остальные клоны).
 `CSoulMirror::CheckCastCondition` (`0x1A4850`, арность `…PAVCMoveShape@@0@Z`)
 — VERIFIED: MP-контракт по arg1 (U), цель `SetMoveable` — arg2; для
-практических self-кастов они совпадают (S≡U — остающаяся оговорка). Не
-закрыто: машинный разбор `CSoulMirror::AI` (`0x1A4D10`, дамп готов) и
-клиентское чтение кадров (UNKNOWN).
+практических self-кастов они совпадают (S≡U — остающаяся оговорка).
+`CSoulMirror::AI` (`0x1A4D10`, полное тело 517 инструкций,
+`.local/reuse-verify-t5/`) — VERIFIED-MATCH скелету zonalcast и обходу
+области `zone::skills::soulmirror`: активный гейт `[+0x4C]`, смерть S →
+visual10 + GS0285 + End(0), NULL таблицы/U → End(0), Begin MP → CAN →
+direction → visual0 → фаза в тот же тик, unsigned `start+delay(10001)` →
+visual1 → обход X-столбцы/Y-строки с маской `[row·width+column]` и свежими
+level/direction на клетку, End(1) включая ветку ненайденного региона U.
+Клиентское чтение кадров — UNKNOWN.
 
 Швы переноса: трейты модуля — переходные фасады прежнего владельца
 `CGame`/`CPlayer`/`CMoveShape`; потребляются статически (generic),
@@ -1071,12 +1106,15 @@ f32 `0.265/0.065/0.045/0.75` по `0x24DC00/04/10/14` и f64 `3.75/5.0/0.5` по
 указывала цель `0x2CF50` — по образу прямая цель `0x2DF50` (исправлено при
 переносе).
 
-UNKNOWN: pub-имя `ReviveBattleFairy` не резолвится (inline в CGame-handler;
-однозначное xref-основание по `GAP_BF_HP`/153 и `GAP_BF_MAX_HP`/185
-недостижимо — поведение остаётся снятой моделью); порядок тела refresh
-внутри periodic `CPlayer::AI` — pub префикса не резолвится, зафиксирован
-PARTIAL; полный tail `SummonBF` за player-частью — у владельца контейнера
-(`CBattleFairyContainer`).
+Порядок тела refresh в periodic `CPlayer::AI` — VERIFIED_DISASSEMBLY
+(полное тело RVA `0x59FF0`, 110 инструкций, `.local/verify-bfai/`):
+refresh — первый блок, GetGoods(10) → GAP 172==1 → GAP 153==0 → записи
+summoned/state/recall/died в этом порядке → вирт. `+0x9C`
+(OnChangeProperties); далее lost-timeout KickPlayer, OnExit-таймаут, гейт
+changing-region, PeriodicalUpdate, `CMoveShape::AI` и «мёртвая» половина
+SetWarSoulXY(−1,−1)/visual −1.0. UNKNOWN: pub-имя `ReviveBattleFairy` не
+резолвится (inline; поведение — снятая модель); полный tail `SummonBF` —
+у владельца контейнера (`CBattleFairyContainer`).
 
 Текущая реализация: `zone::skills::battlefairysummon`; исходный владелец PDB `appserver/player.cpp/.h`.
 
@@ -1084,7 +1122,7 @@ PARTIAL; полный tail `SummonBF` за player-частью — у владе
 
 | Владелец | Символ/RVA | Статус | Факт |
 |---|---|---|---|
-| атрибутный октет Po/Yu (`0x212..0x219`) | CYujia vs CPojia — 167/167 инструкций | VERIFIED_DISASSEMBLY | единый скелет и константы октета; собственный `End(bool)` 8-fold `0x1246C0` — у координатора; quirk двойного списания у Yumo (расход в Check и повторно в первом AI) сохранён `YUMO_SKILL_ID`-веткой |
+| атрибутный октет Po/Yu (`0x212..0x219`) | CYujia vs CPojia — 167/167 инструкций | VERIFIED_DISASSEMBLY | единый скелет и константы октета; собственный `End(bool)` 8-fold `0x1246C0` — у координатора; quirk двойного списания у Yumo (расход в Check и повторно в первом AI) сохранён `YUMO_SKILL_ID`-веткой; state-сторона октета досверена той же парой: 16 property callbacks Pojia `0x1E8320`/Pobing `0x1E7D90`/Pomo `0x1E7870`/Pofa `0x1E7390`/Yujia `0x1E6E60`/Yubing `0x1E6950`/Yumo `0x1E6490`/Yufa `0x1E5FD0` (RVA) — формулы Rust буквальны; общие Serialize `0x1E7330`, Unserialize `0x1FD660`, GetRemainedTime `0x205E10`, AI `0x1E6E20`, End `0x1E7310`→`0x1DBCE0` — VERIFIED_DISASSEMBLY |
 | `CLifeShield` (`0x220`) | Begin×3 `0x118190…`, Check `0x118850`, AI `0x118A60`, собственный End(H) `0x11A700` | VERIFIED_DISASSEMBLY (тела буквально) | state ctor `0x1F29C0`, AddCure `0x1F2FD0` зависит от CureState; End CLifeShieldState — hub-lifecycle `lifeshieldstate.rs` старого пакета |
 | `CFatalBlow` (`0x21C`) | ctor `0x11E130`, `Summon(shape,shape)` `0x51F640` | VERIFIED_DISASSEMBLY | машинная цепочка summon-хелперов: MasterInfo → cast→CPlayer → GetWarSoulGoods → пермишены → prop 156 sprite → CCH WORD → EM 20015 → new → level WORD (`+0x114`) → 20010/20009/20008/6001/30001 → set center → initialize → region → `0xBF502`; порядок cch/region — машинно новый по CThunder, отличается от godthunder-аудитного |
 | `CHuoxieshu`/`CLingzhishu` | (поведение) | VERIFIED_DISASSEMBLY (тела буквально) | Health оставляет одно HP; Mana в Check допускает точную цену, в AI требует остаток ≥ 1; оба AI при нехватке — ZHGS0052 с ценой без масштабирования, Check Health — ZHGS0054 с ценой+1; visual1 при отсутствии предмета повторяется в следующем такте без повторного расхода; восстановление: current → gain из таблицы начала AI → max, при превышении повтор GetMax, одна запись |
