@@ -2,8 +2,15 @@
 //! реализованы; ниже сохранены ещё не нужные runtime-цепочке constructors,
 //! singleton plumbing, split-helper и compiler funclets).
 //! Декомпилятор: Ghidra 12.1.2
-//! Сырой C++ ниже после typed owner-а является комментарием, а не
-//! Rust-реализацией.
+//!
+//! Данные, top-ten wire decoder и скалярные state/правила перенесены в Zone
+//! `regions/servergodsbattleregion` (волна Z-M-Xe, семья war-регионов
+//! war+godsbattle+village); здесь hub-обёртки `CGodsBattleMgr` с
+//! configuration `CGodsBattleConf` и `CServerGodsBattleRegion` поверх hub
+//! `CServerWarRegion` с прежними сигнатурами: SZL/XYD owner-а конфигурации,
+//! startup decode-семейство над owner-ом хранилищ и NPC spawn hub-вызовы,
+//! re-export семейства для старого пакета (включая
+//! `GodsBattleTopTenDecodeError` серверной стены сообщений) и evidence-блок.
 //!
 //! Startup manager snapshot сохраняет подтверждённый wire, section-local clear,
 //! намеренное append-поведение faction rules и обе внутренние audit-записи.
@@ -54,20 +61,22 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.h
 
+pub(crate) use nebokrai_zone::regions::servergodsbattleregion::*;
+
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleDecodeError, GodsBattleFactionXydUpdate, GodsBattleSzlCalculation,
 };
 use std::collections::BTreeSet;
-use thiserror::Error;
 
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeError, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome,
 };
-use nebokrai_shared::protocol::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
-use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
+use super::serverwarregion::{
+    CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError,
+};
 
 // Точные GBK payload из GameServer .rdata VA `0x00651870` и `0x00651850`.
 const REVISE_MONEY_CONFIGURATION_ERROR: &[u8] =
@@ -78,27 +87,7 @@ const EMPTY_DIE_BACK_CONFIGURATION: &[u8] =
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CGodsBattleMgr {
     configuration: CGodsBattleConf,
-    region_set: BTreeSet<i32>,
-    killed_monster_count: std::collections::BTreeMap<Vec<u8>, u32>,
-    pending_top_ten_player_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleTopTenEntry {
-    pub(crate) faction: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) szl: u32,
-    pub(crate) level: u32,
-}
-
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
-pub(crate) enum GodsBattleTopTenDecodeError {
-    #[error("GodsBattle top-ten обрывается на {offset} в поле {field}")]
-    UnexpectedEnd { offset: usize, field: &'static str },
-    #[error("GodsBattle top-ten name с {offset} не имеет NUL-терминатора")]
-    MissingNameTerminator { offset: usize },
-    #[error("GodsBattle top-ten name с {offset} длиной {length} не помещается в 260 байт")]
-    NameOutsideLegacyBuffer { offset: usize, length: usize },
+    inner: GodsBattleMgrState,
 }
 
 impl CGodsBattleMgr {
@@ -107,27 +96,27 @@ impl CGodsBattleMgr {
     }
 
     pub(crate) fn add_region_set(&mut self, region_id: i32) -> bool {
-        self.region_set.insert(region_id)
+        self.inner.add_region_set(region_id)
     }
 
     /// Exact `CGodsBattleMgr::IsGodsBattleRegion`: ordered set membership без
     /// дополнительной проверки concrete region owner.
     pub(crate) fn is_gods_battle_region(&self, region_id: i32) -> bool {
-        self.region_set.contains(&region_id)
+        self.inner.is_gods_battle_region(region_id)
     }
 
     pub(crate) fn region_ids(&self) -> Vec<i32> {
-        self.region_set.iter().copied().collect()
+        self.inner.region_ids()
     }
 
     pub(crate) const fn pending_top_ten_player_id(&self) -> i32 {
-        self.pending_top_ten_player_id
+        self.inner.pending_top_ten_player_id()
     }
 
     /// Exact post-send assignment `GetTopTenSZL`: concurrent request
     /// перезаписывает единственный legacy requester без sequence ID.
     pub(crate) const fn record_top_ten_request(&mut self, player_id: i32) {
-        self.pending_top_ten_player_id = player_id;
+        self.inner.record_top_ten_request(player_id);
     }
 
     pub(crate) fn faction_for_country(&self, country: u8) -> Option<i32> {
@@ -209,17 +198,15 @@ impl CGodsBattleMgr {
     }
 
     pub(crate) fn npc_killed_monster_count(&self, name: &[u8]) -> u32 {
-        self.killed_monster_count.get(name).copied().unwrap_or(0)
+        self.inner.npc_killed_monster_count(name)
     }
 
     pub(crate) fn reset_npc_killed_monster_count(&mut self, name: &[u8]) {
-        self.killed_monster_count.insert(name.to_vec(), 0);
+        self.inner.reset_npc_killed_monster_count(name);
     }
 
     pub(crate) fn increment_npc_killed_monster_count(&mut self, name: &[u8]) -> Option<u32> {
-        let count = self.killed_monster_count.get_mut(name)?;
-        *count = count.wrapping_add(1);
-        Some(*count)
+        self.inner.increment_npc_killed_monster_count(name)
     }
 
     pub(crate) fn update_npc_faction(
@@ -235,7 +222,7 @@ impl CGodsBattleMgr {
         region_id: i32,
         faction: i32,
     ) -> Option<crate::gameserver::appserver::region::RegionReturnPoint> {
-        if !self.region_set.contains(&region_id) {
+        if !self.inner.is_gods_battle_region(region_id) {
             return None;
         }
         let position = self
@@ -256,43 +243,7 @@ impl CGodsBattleMgr {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<Vec<GodsBattleTopTenEntry>, GodsBattleTopTenDecodeError> {
-        let mut entries = Vec::new();
-        loop {
-            let marker = read_top_ten_i32(source, cursor, "marker")?;
-            if marker == 0 {
-                return Ok(entries);
-            }
-            let faction = read_top_ten_i32(source, cursor, "faction")?;
-            let name_offset = *cursor;
-            let remaining =
-                source
-                    .get(name_offset..)
-                    .ok_or(GodsBattleTopTenDecodeError::UnexpectedEnd {
-                        offset: name_offset,
-                        field: "name",
-                    })?;
-            let length = remaining.iter().position(|byte| *byte == 0).ok_or(
-                GodsBattleTopTenDecodeError::MissingNameTerminator {
-                    offset: name_offset,
-                },
-            )?;
-            if length >= 260 {
-                return Err(GodsBattleTopTenDecodeError::NameOutsideLegacyBuffer {
-                    offset: name_offset,
-                    length,
-                });
-            }
-            let name = remaining[..length].to_vec();
-            *cursor = cursor.wrapping_add(length + 1);
-            let szl = read_top_ten_i32(source, cursor, "szl")? as u32;
-            let level = read_top_ten_i32(source, cursor, "level")? as u32;
-            entries.push(GodsBattleTopTenEntry {
-                faction,
-                name,
-                szl,
-                level,
-            });
-        }
+        decode_gods_battle_top_ten(source, cursor)
     }
 
     /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray`, включая оба
@@ -317,47 +268,13 @@ impl CGodsBattleMgr {
     }
 }
 
-fn read_top_ten_i32(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<i32, GodsBattleTopTenDecodeError> {
-    let offset = *cursor;
-    let mut reader = LegacyReader::at(source, offset)
-        .map_err(|_| GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
-    let value = reader
-        .read_i32()
-        .map_err(|_| GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
 /// Startup-часть concrete GodsBattle region. Constructor подтверждает
 /// наследование `CServerWarRegion`; player faction membership уже связан с
 /// Add/Remove tail, NPC/contend gameplay коллекции сохраняют owned defaults.
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerGodsBattleRegion {
     pub(crate) war: CServerWarRegion,
-    faction_players: [BTreeSet<i32>; 3],
-    faction_npcs: [BTreeSet<i32>; 3],
-    contenders: Vec<GodsBattleContender>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GodsBattleContender {
-    pub(crate) symbol_id: i32,
-    pub(crate) symbol_name: Vec<u8>,
-    pub(crate) player_id: i32,
-    pub(crate) gods_battle_faction: i32,
-    pub(crate) current_time: i32,
-    pub(crate) max_time: i32,
-    pub(crate) start_time_ms: u32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GodsBattleContendAdvance {
-    pub(crate) progress: Vec<(i32, i32)>,
-    pub(crate) completed: Vec<GodsBattleContender>,
+    inner: GodsBattleRegionState,
 }
 
 impl CServerGodsBattleRegion {
@@ -385,7 +302,7 @@ impl CServerGodsBattleRegion {
             &mut Context,
         ),
     ) -> Result<bool, ServerRegionDecodeError> {
-        let faction_npcs = &mut self.faction_npcs;
+        let faction_npcs = &mut self.inner.faction_npcs;
         self.war.base.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
@@ -418,7 +335,7 @@ impl CServerGodsBattleRegion {
             &mut Context,
         ),
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
-        let faction_npcs = &mut self.faction_npcs;
+        let faction_npcs = &mut self.inner.faction_npcs;
         self.war
             .decord_from_byte_array_with_npc_entry(
                 source,
@@ -440,10 +357,7 @@ impl CServerGodsBattleRegion {
         npc_id: i32,
         faction: i32,
     ) -> bool {
-        let Some(index) = gods_battle_faction_index(faction) else {
-            return false;
-        };
-        faction_npcs[index].insert(npc_id)
+        GodsBattleRegionState::add_faction_npc_membership(faction_npcs, npc_id, faction)
     }
 
     /// Создаёт NPC через базовый регион и выполняет подтверждённое завершение
@@ -464,7 +378,7 @@ impl CServerGodsBattleRegion {
             &mut Context,
         ),
     ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
-        let faction_npcs = &mut self.faction_npcs;
+        let faction_npcs = &mut self.inner.faction_npcs;
         self.war.base.add_npc_with_clock_and_entry(
             setup,
             remember_setup,
@@ -481,34 +395,19 @@ impl CServerGodsBattleRegion {
     }
 
     pub(crate) fn add_faction_player(&mut self, player_id: i32, faction: i32) -> bool {
-        match faction {
-            5 => self.faction_players[1].insert(player_id),
-            6 => self.faction_players[2].insert(player_id),
-            _ => false,
-        }
+        self.inner.add_faction_player(player_id, faction)
     }
 
     pub(crate) fn remove_faction_player(&mut self, player_id: i32) -> bool {
-        self.faction_players
-            .iter_mut()
-            .fold(false, |removed, players| {
-                players.remove(&player_id) || removed
-            })
+        self.inner.remove_faction_player(player_id)
     }
 
     pub(crate) fn faction_player_ids(&self, faction: i32) -> Option<Vec<i32>> {
-        let index = match faction {
-            5 => 1,
-            6 => 2,
-            _ => return None,
-        };
-        Some(self.faction_players[index].iter().copied().collect())
+        self.inner.faction_player_ids(faction)
     }
 
     pub(crate) fn npc_faction_index(&self, npc_id: i32) -> Option<usize> {
-        self.faction_npcs
-            .iter()
-            .position(|npcs| npcs.contains(&npc_id))
+        self.inner.npc_faction_index(npc_id)
     }
 
     /// Exact `CServerGodsBattleRegion::GetObjFaction`: player faction 5/6
@@ -520,51 +419,26 @@ impl CServerGodsBattleRegion {
         object_id: i32,
         player_faction: impl FnOnce(i32) -> Option<i32>,
     ) -> i32 {
-        match object_type {
-            400 => match player_faction(object_id) {
-                Some(5) => 1,
-                Some(6) => 2,
-                _ => -1,
-            },
-            500 => self
-                .npc_faction_index(object_id)
-                .map_or(-1, |index| index as i32),
-            _ => -1,
-        }
+        self.inner
+            .get_obj_faction(object_type, object_id, player_faction)
     }
 
     pub(crate) fn remove_faction_npc(&mut self, npc_id: i32) -> bool {
-        self.faction_npcs
-            .iter_mut()
-            .fold(false, |removed, npcs| npcs.remove(&npc_id) || removed)
+        self.inner.remove_faction_npc(npc_id)
     }
 
     pub(crate) fn change_npc_faction(&mut self, npc_id: i32, faction: i32) -> bool {
-        let Some(target) = gods_battle_faction_index(faction) else {
-            return false;
-        };
-        let Some(previous) = self.npc_faction_index(npc_id) else {
-            return false;
-        };
-        if self.faction_npcs[target].contains(&npc_id) {
-            return false;
-        }
-        if self.faction_npcs[previous].remove(&npc_id) {
-            self.faction_npcs[target].insert(npc_id);
-        }
-        true
+        self.inner.change_npc_faction(npc_id, faction)
     }
 
     pub(crate) fn is_player_contending_symbol(&self, player_id: i32, symbol_id: i32) -> bool {
-        self.contenders
-            .iter()
-            .any(|contender| contender.player_id == player_id && contender.symbol_id == symbol_id)
+        self.inner.is_player_contending_symbol(player_id, symbol_id)
     }
 
     /// Список обрабатывается полностью до player-state и `0xBFF29(0)`.
     /// Как у War, эти безусловные действия выполняет runtime после mutation.
     pub(crate) fn remove_contenders_for_player(&mut self, player_id: i32) {
-        self.contenders.retain(|contender| contender.player_id != player_id);
+        self.inner.remove_contenders_for_player(player_id);
     }
 
     /// Проверка first-for-faction использует normal `m_lFactionID`, тогда как
@@ -579,62 +453,26 @@ impl CServerGodsBattleRegion {
         max_time: i32,
         now_ms: u32,
     ) -> bool {
-        let first_for_legacy_faction = self
-            .contenders
-            .iter()
-            .all(|contender| contender.gods_battle_faction != normal_faction);
-        self.contenders.push(GodsBattleContender {
-            symbol_id,
-            symbol_name: symbol_name.to_vec(),
+        self.inner.add_contender(
             player_id,
+            normal_faction,
             gods_battle_faction,
-            current_time: 0,
+            symbol_id,
+            symbol_name,
             max_time,
-            start_time_ms: now_ms,
-        });
-        first_for_legacy_faction
+            now_ms,
+        )
     }
 
     pub(crate) fn cancel_contend_by_symbol(
         &mut self,
         symbol_id: i32,
     ) -> Option<GodsBattleContender> {
-        let index = self
-            .contenders
-            .iter()
-            .position(|contender| contender.symbol_id == symbol_id)?;
-        Some(self.contenders.remove(index))
+        self.inner.cancel_contend_by_symbol(symbol_id)
     }
 
     pub(crate) fn advance_contenders(&mut self, now_ms: u32) -> GodsBattleContendAdvance {
-        let mut advance = GodsBattleContendAdvance::default();
-        for contender in &mut self.contenders {
-            let elapsed = now_ms.wrapping_sub(contender.start_time_ms);
-            let candidate = (contender.current_time as u32).wrapping_add(elapsed);
-            if candidate >= contender.max_time as u32 {
-                advance.progress.push((contender.player_id, 100));
-                advance.completed.push(contender.clone());
-            } else if elapsed >= 1000 {
-                contender.current_time = contender.current_time.wrapping_add(elapsed as i32);
-                contender.start_time_ms = now_ms;
-                let percentage = if contender.max_time == 0 {
-                    0
-                } else {
-                    contender.current_time.wrapping_mul(100) / contender.max_time
-                };
-                advance.progress.push((contender.player_id, percentage));
-            }
-        }
-        advance
-    }
-}
-
-fn gods_battle_faction_index(faction: i32) -> Option<usize> {
-    match faction {
-        7 => Some(0),
-        5 => Some(1),
-        6 => Some(2),
-        _ => None,
+        self.inner.advance_contenders(now_ms)
     }
 }
 

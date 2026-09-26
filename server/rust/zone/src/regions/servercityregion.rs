@@ -2,12 +2,14 @@
 //! исторического GameServer, перенесённые в Zone `regions/` волной Z-M-X
 //! (семья регионов country+nation+city + гейты). Исходный владелец —
 //! `appserver/servercityregion.h/.cpp`. Переходный агрегат `CServerCityRegion`
-//! остаётся в старом пакете: хранит hub `CServerWarRegion`, карту concrete
+//! остаётся в старом пакете: хранит hub-обёртку `CServerWarRegion` (сама
+//! обёртка над Zone `regions/serverwarregion`, волна Z-M-Xd), карту concrete
 //! gates `CCityGate` и делегирует этому агрегату чистый state
 //! (defence-return, guard sets, last-attacker колонки) и все скалярные
-//! операции без изменения сигнатур; decode-контексты над owner-ом хранилищ,
-//! wire-stream readers с `RegionDecodeInputBlock` и evidence-блок остаются у
-//! старого пакета.
+//! операции без изменения сигнатур; wire-stream readers с
+//! `RegionDecodeInputBlock` перенесены в Zone `regions/serverwarregion`,
+//! decode-контексты над owner-ом хранилищ, вызовы readers и evidence-блок
+//! остаются у старого пакета.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +

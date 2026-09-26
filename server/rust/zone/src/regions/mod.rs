@@ -13,8 +13,11 @@ pub mod region; // CRegion: spatial/persistence поверхность реги�
 pub mod regionparam; // tagRegionParam: wire-проекция налогов и владения городом.
 pub mod servercityregion; // CServerCityRegion: скалярный state, данные и правила городского war-региона.
 pub mod servercountryregion; // ServerCountryRegion: скалярный state, данные и правила country war-региона.
+pub mod servergodsbattleregion; // CGodsBattleMgr/CServerGodsBattleRegion: GodsBattle state, top-ten decoder и скалярные правила.
 pub mod servernationregion; // ServerNationRegion: скалярный state, данные и правила nation war-региона.
 pub mod serverregion; // CServerRegion: data-типы и позиционное ядро региона.
+pub mod servervillageregion; // CServerVillageRegion: context-контракты, эффекты и скалярные правила деревенского war-региона.
+pub mod serverwarregion; // CServerWarRegion: данные, wire-stream decoder-семья и скалярные операции war-региона.
 pub mod shape; // CShape: spatial/membership-часть и геометрия фигуры.
 pub mod skillregistry; // CMoveShape: реестр навыков (категории, current/item, скалярная identity записи).
 pub mod summonedcreature; // CSummonedCreature: жизненный цикл призванного монстра.

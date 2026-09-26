@@ -4,6 +4,14 @@
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\servervillageregion.cpp`,
 //! точная пара GameServer. PDB подтверждает наследование `CServerWarRegion`,
 //! ordered goods-list `+0x270` и `m_lFlagOwnerFacID +0x27C`.
+//! Context-контракты, типы эффектов и чистые scalar-решения перенесены в Zone
+//! `regions/servervillageregion` (волна Z-M-Xf, семья war-регионов
+//! war+godsbattle+village); здесь hub-обёртка `CServerVillageRegion` поверх
+//! hub `CServerWarRegion` с прежними сигнатурами, hub-поля goods-list и
+//! flag-owner колонки (runtime `CGame` перезаписывает их напрямую при re-init
+//! региона), schedule-запросы `CVillageWarSys`, re-export семейства для
+//! старого пакета и evidence-блок.
+//!
 //! Фазовые callbacks RVA `0x001D1310`, `0x001D13C0`,
 //! `0x001D1590..0x001D16D0`, victory `0x001D12C0` и clear `0x001D1370`
 //! имеют статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`; membership `0x001D12F0`,
@@ -28,6 +36,8 @@
 //! Неизвестного поведения владельца не осталось; STL/SEH заменены безопасными
 //! стандартными контейнерами Rust.
 
+pub(crate) use nebokrai_zone::regions::servervillageregion::*;
+
 use super::organizingsystem::villagewarsys::CVillageWarSys;
 use super::serverregion::ServerRegionDecodeError;
 use super::skills::skillfactory::CSkillFactory;
@@ -36,34 +46,6 @@ use super::serverwarregion::{
     CServerWarRegion, ContendState, WarContendContext, WarRegionClearContext,
     WarRegionDecodeContext, WarRegionDecodeError,
 };
-
-pub(crate) trait VillageOwnerContext {
-    type Region: Copy;
-    /// Ищет сначала `s_mapRegion`, а при miss либо null — `FindProxyRegion`.
-    fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region>;
-    fn owned_city_faction(&mut self, region: Self::Region) -> i32;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageTimeoutEffect {
-    pub(crate) war_number: i32,
-    pub(crate) region_id: i32,
-    pub(crate) flag_owner_faction_id: i32,
-    pub(crate) region_name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageWarLogEffect {
-    pub(crate) string_id: &'static str,
-    pub(crate) region_name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageWarEndTargets {
-    pub(crate) region_id: i32,
-    pub(crate) player_ids: Vec<i32>,
-    pub(crate) goods: Vec<String>,
-}
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerVillageRegion {
@@ -108,9 +90,7 @@ impl CServerVillageRegion {
     }
 
     pub(crate) fn add_need_good(&mut self, good_name: &str) {
-        if !good_name.is_empty() {
-            self.goods.push(good_name.to_owned());
-        }
+        village_add_need_good(&mut self.goods, good_name);
     }
 
     pub(crate) fn is_owner<Context: VillageOwnerContext>(
@@ -131,9 +111,11 @@ impl CServerVillageRegion {
     }
 
     pub(crate) fn on_faction_win_one_symbol(&mut self, faction_id: i32, symbol_id: i32) {
-        if symbol_id == 0 {
-            self.flag_owner_faction_id = faction_id;
-        }
+        self.flag_owner_faction_id = village_flag_owner_after_symbol_win(
+            self.flag_owner_faction_id,
+            faction_id,
+            symbol_id,
+        );
     }
 
     pub(crate) fn on_war_declare(&mut self, war_number: i32) -> VillageWarLogEffect {

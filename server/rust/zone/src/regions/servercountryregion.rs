@@ -3,12 +3,14 @@
 //! (семья регионов country+nation+city + гейты). Исходный владелец —
 //! `appserver/servercountryregion.h/.cpp`. Переходный агрегат
 //! `CServerCountryRegion` остаётся в старом пакете: хранит hub `CServerRegion`,
-//! contender-список (`ContendState` принадлежит владельцу `serverwarregion`)
-//! и карты concrete gates/flags поверх hub-типов, а этому агрегату делегирует
-//! чистый state (symbol ownership, area-maps, guard sets, стороны и фазовые
-//! флаги) и все скалярные операции без изменения сигнатур; entry-effects
-//! для contenders, wire-stream readers с `RegionDecodeInputBlock` и
-//! evidence-блок остаются у старого пакета.
+//! contender-список (element `ContendState` — data-тип Zone
+//! `regions/serverwarregion`, re-export через hub) и карты concrete
+//! gates/flags поверх hub-типов, а этому агрегату делегирует чистый state
+//! (symbol ownership, area-maps, guard sets, стороны и фазовые флаги) и все
+//! скалярные операции без изменения сигнатур; wire-stream readers с
+//! `RegionDecodeInputBlock` перенесены в Zone `regions/serverwarregion`
+//! (волна Z-M-Xd), entry-effects для contenders, их вызовы и evidence-блок
+//! остаются у старого пакета.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
@@ -60,7 +62,7 @@ pub const COUNTRY_CAMP_ATTACK: i32 = 1;
 /// Скалярный state country war-региона без hub-хранилищ: symbol ownership,
 /// defend/attack area-maps и guard sets, выбранные стороны и фазовые флаги.
 /// Contender-список и карты gates/flags остаются у переходного aggregate
-/// старого пакета (element `ContendState` и gate-типы — hub).
+/// старого пакета (element `ContendState` — Zone data-тип, gate-типы — hub).
 #[derive(Debug, Eq, PartialEq)]
 pub struct ServerCountryRegionState {
     symbol_hold: BTreeMap<i32, i32>,
