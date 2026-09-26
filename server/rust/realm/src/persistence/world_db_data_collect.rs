@@ -1,20 +1,17 @@
-//! Save-семья `CGame` (`GenerateDBData` и materialize/take/append/clear),
-//! перенесённая в Realm persistence волной C5-C вместе с типом (см.
-//! [`crate::app::world_game`]).
+//! Save-семья `CGame` (`GenerateDBData` и materialize/take/append/clear):
+//! владелец типа — [`crate::app::world_game`], методы семьи живут здесь.
 //!
 //! БД-поля остаются обычными полями `CGame` (`db_data: Mutex<WorldDbData>` и
-//! соседи) — семья не параметризуется, потому что WorldDbData уже живёт в
-//! Realm persistence. Порядок снапшотов, отдельные соединения, частичный
-//! успех и исходное сопоставление ошибок сохраняются; SaveThreadFunc
-//! (`1:00e30`) заякорен прежними волнами.
+//! соседи), поэтому семья не параметризуется. Порядок снапшотов, отдельные
+//! соединения, частичный успех и исходное сопоставление ошибок сохраняются.
 //!
-//! Статус: тело `generate_db_data` (`1:11e50`) и обслуживающая его семья
-//! append/take/clone сверены полным машинным разбором досверки C5-C по
-//! точной паре `Nworldserver.exe` + `WorldServer.pdb` (RSDS `289F1FB3-…`
-//! age 1; дампы `.local/verify-c5c/`, `dis_generatedbdata.txt` и соседние)
-//! — VERIFIED-МАТЧИ, правок не потребовалось.
+//! Контракт подтверждён точной парой `Nworldserver.exe` + `WorldServer.pdb`
+//! (канонические идентификаторы сборки —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`); S_PUB32
+//! первой секции: worker-вход `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30`, тело
+//! `generate_db_data` — `1:11e50`.
 //!
-//! Нормализации — общие для волны (см. `crate::app::world_game`).
+//! Общие нормализации save-семейства описаны у [`crate::app::world_game`].
 
 use crate::activities::factionwarsys::CFactionWarSys;
 use crate::activities::rsgodsbattle::{GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot};

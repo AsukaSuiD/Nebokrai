@@ -1,7 +1,8 @@
-//! Оркестрация сохранения из `worldserver/savedb.cpp/.h`, перенесённая в Realm
-//! `persistence/`. Источник контракта — та же точная пара, что у
+//! Оркестрация сохранения из `worldserver/savedb.cpp/.h`.
+//! Источник контракта — та же точная пара, что у
 //! [`crate::persistence::savedata`] (`.exe/Nworldserver.exe` +
-//! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
+//! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Машинно подтверждённые точки (S_PUB32 `.exe/Nworldserver.exe`, первая
 //! секция): свободный `?DoSaveData@@YAXXZ` `1:0001b610`, variadic gate
@@ -20,11 +21,10 @@
 //! данных. `Mutex`, `Condvar`, `JoinHandle`, typed snapshots и Tiberius заменяют
 //! Win32/ADO инфраструктуру без изменения error mapping.
 //!
-//! `show_save_info` перенесён из `worldserver/worldserver/game.rs` вместе со
-//! своей save-публикующей семьёй: это тот же gate над
+//! `show_save_info` — это тот же gate над
 //! [`crate::app::worldserver::WorldLogTextOwner`], а его единственный
 //! потребитель в действующем коде — save-оркестрация (`SaveDataLogPublisher`).
-//! `WorldSaveThreadJob` перенесён из того же game.rs, потому что его
+//! `WorldSaveThreadJob` живёт здесь, потому что его
 //! `lifecycle` собран из типов этого модуля.
 
 use std::collections::BTreeMap;

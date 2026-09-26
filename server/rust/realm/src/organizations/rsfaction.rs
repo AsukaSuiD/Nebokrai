@@ -1,5 +1,5 @@
-//! World DB-владелец `CRsFaction` из `rsfaction.cpp`, перенесённый в Realm
-//! `organizations/`: трейт `RsFactionOwner`, его data-семья и Tiberius-реализация
+//! World DB-владелец `CRsFaction` из `rsfaction.cpp`: трейт `RsFactionOwner`,
+//! его data-семья и Tiberius-реализация
 //! `TiberiusRsFaction`. Подтверждён точной парой `Nworldserver.exe` и
 //! `WorldServer.pdb`.
 //!
@@ -9,10 +9,6 @@
 //! транзакцию или rollback поверх уже выполненных команд. Tiberius и owned
 //! values заменяют ADO/COM и MSVC containers без изменения DB-семантики.
 //!
-//! Экранирование leave word через исходный `CGame::check_point` было последней
-//! связью реализации со старым пакетом; сам `CheckPoint` не читает состояние
-//! игры и перенесён буквально в `organizations/checkpoint`.
-//!
 //! `&dyn WorldGameView` заменяет прямую ссылку на игру: owner потребляется
 //! generic-связкой `F: RsFactionOwner` и associated type старого `CGame`,
 //! поэтому RPITIT-форма без dyn-совместимости сохраняется, как у
@@ -21,10 +17,6 @@
 //! них не добавлен; save/delete-методы захватывают только `&mut self`,
 //! `FactionSaveSnapshot`/`CFaction`-данные и `&mut WorldTdsClient` и помечены
 //! `+ Send`.
-//!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub`; старый `dbaccess/worlddb/rsfaction` остаётся glob-реэкспортом этого
-//! модуля.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;

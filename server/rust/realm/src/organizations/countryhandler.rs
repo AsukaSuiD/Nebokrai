@@ -1,6 +1,5 @@
 //! Карта государств `CCountryHandler` из `countryhandler.cpp/.h`,
 //! подтверждённая точной парой `worldserver.exe` и `worldserver.pdb`.
-//! Владелец перенесён в Realm `organizations/`.
 //!
 //! `BTreeMap<u8, Option<Box<CCountry>>>` сохраняет unsigned country order и
 //! nullable slots. Append заменяет прежнее значение; Rust освобождает его вместо
@@ -25,10 +24,9 @@
 //! же wrapping-переходит через `i32::MAX`. Один process handler оригинала
 //! эквивалентен одному Rust owner-у, поэтому observable поведение не меняется.
 //!
-//! Run-, new-day- и initialize-отчёты перенесены вместе с владельцем;
-//! servermessage-волна добавила `CountryHandlerSerializeError` к
-//! `CountrySerializeError`. `CountryAppendDisposition` ссылается на саму
-//! `CCountry` и перенесён вместе с ней этой волной.
+//! Run-, new-day- и initialize-отчёты живут вместе с владельцем;
+//! `CountryHandlerSerializeError` дополняет `CountrySerializeError`, а
+//! `CountryAppendDisposition` ссылается на саму `CCountry` и лежит с ней.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;

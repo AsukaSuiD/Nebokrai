@@ -1,5 +1,4 @@
-//! Отчёт отказа мутации enemy-связи фракций, перенесённый в Realm
-//! `organizations/` формой извлечения RegionParamState/AuthDbContext.
+//! Отчёт заблокированной мутации enemy-связи фракций.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FactionEnemyMutationBlock {

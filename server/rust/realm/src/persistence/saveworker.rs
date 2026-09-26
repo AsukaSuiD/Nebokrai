@@ -1,7 +1,8 @@
-//! Worker-вход `SaveThreadFunc` и RAII/trigger seam сохранения, перенесённые
-//! из `src/worldserver/worldserver/game.rs`. Источник контракта — та же точная
-//! пара, что у [`crate::persistence::savedb`] (`.exe/Nworldserver.exe` +
-//! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает; S_PUB32
+//! Worker-вход `SaveThreadFunc` и RAII/trigger seam сохранения.
+//! Источник контракта — та же точная пара, что у
+//! [`crate::persistence::savedb`] (`.exe/Nworldserver.exe` +
+//! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`; S_PUB32
 //! `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30`).
 //!
 //! Body выполняет start-лог, полный [`do_save_data_lifecycle`] через
@@ -10,10 +11,9 @@
 //! runtime-аналога: действующие DB-owner-ы используют Tiberius, поэтому COM
 //! apartment был заменяемым техническим механизмом, а не наблюдаемым серверным
 //! контрактом. Единственный внешний hook — `SendErrLog` в Login
-//! (`send_err_log_to_login`) — принадлежит Realm `app/worldserver` (волна
-//! monitoring-message завершена), поэтому волна C5-B свернула его вызов прямо
-//! в тело worker-входа; результат `CMessage::Send` исходно игнорировался и
-//! сохранён в `_legacy_result`, а generic-делегат старого пакета снят.
+//! (`send_err_log_to_login`) — принадлежит Realm `app/worldserver`, поэтому
+//! его вызов свёрнут прямо в тело worker-входа; результат `CMessage::Send`
+//! исходно игнорировался и сохранён в `_legacy_result`.
 //!
 //! Guards фиксируют точки исходных unlock: `release` замещает unlock успешного
 //! пути, `stop_outer_owner` — blocked-ветку, которая исходно не достигала
@@ -26,8 +26,7 @@
 //! [`crate::persistence::savedb`]; здесь динамическая граница
 //! [`WorldSaveRuntimeContext`] между game-триггером и process save-owner-ом.
 //! Триггер-отчёты `WorldRunSave*` живут наблюдаемостью ветвей `CGame::Run`
-//! в [`crate::app::world_save_reports`] (волна C5-A); старый пакет закрепляет
-//! их generic-формы alias-ами на `CGame` до её волны.
+//! в [`crate::app::world_save_reports`].
 
 use crate::activities::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,

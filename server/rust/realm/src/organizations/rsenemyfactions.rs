@@ -1,6 +1,5 @@
 //! World DB-владелец `CRsEnemyFactions` из `rsenemyfactions.cpp`,
 //! подтверждённый `worldserver.exe` и `worldserver.pdb`.
-//! Перенесена в Realm `organizations/`.
 //!
 //! Load очищает live-list до открытия отдельного соединения, читает
 //! `CSL_FactionWar` в recordset order и публикует каждую полную строку сразу.

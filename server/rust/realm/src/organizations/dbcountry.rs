@@ -13,10 +13,6 @@
 //! Send-соединение `&mut WorldTdsClient`, поэтому `load`/`save` помечены
 //! `+ Send`.
 //!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub`; старый `dbaccess/worlddb/dbcountry` остаётся glob-реэкспортом этого
-//! модуля.
-
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;

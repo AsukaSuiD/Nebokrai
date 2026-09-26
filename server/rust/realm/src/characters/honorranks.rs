@@ -1,5 +1,5 @@
-//! Почётные ранги `CHonorRanks` из WorldServer, перенесённые в Realm
-//! `characters/`, подтверждённые `worldserver.exe` и `worldserver.pdb`.
+//! Почётные ранги `CHonorRanks` из WorldServer,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Live и DB snapshots содержат history/current для day, week, month и total по
 //! четырём странам. Generator полностью заменяет каждую DB-копию, не меняя live
@@ -16,8 +16,9 @@
 //!
 //! Загрузка из World DB, игровой hub и данные игрока сужены до трёх узких
 //! трейтов-швов `HonorRanksDbOwner`, `HonorRanksGameView` и
-//! `HonorRankPlayerView`; реализации живут у старых владельцев и делегируют
-//! их inherent-методам.
+//! `HonorRankPlayerView`; реализации живут у `TiberiusRsPlayer`
+//! (`persistence/rsplayer`), `CGame` (`app/world_game`) и `CPlayer` и
+//! делегируют их inherent-методам.
 
 use std::error::Error;
 use std::fmt;

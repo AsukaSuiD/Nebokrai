@@ -1,6 +1,5 @@
 //! FIFO запросов загрузки игроков, подтверждённая `worldserver.exe` и
 //! `worldserver.pdb`.
-//! Перенесена в Realm `characters/`.
 //!
 //! Owner сохраняет first-match removal, head-to-tail pop, отдельные lock
 //! области и передачу владения batch-у. `Mutex<VecDeque<_>>` заменяет critical

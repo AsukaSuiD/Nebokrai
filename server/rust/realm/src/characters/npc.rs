@@ -1,6 +1,5 @@
 //! NPC `CNpc` из `npc.cpp/.h`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `characters/`.
 //!
 //! Владелец расширяет `CMoveShape`, задаёт object type `500` и создаёт пустой
 //! внутренний list. Текущий World-корпус не читает и не заполняет его, поэтому

@@ -1,6 +1,5 @@
 //! Монстр `CMonster` из `monster.cpp/.h`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `characters/`.
 //!
 //! Владелец расширяет `CMoveShape`, задаёт object type `600` и хранит original
 //! name, HP, leader fields, lifetime и died-remove. Scalar properties конструктор

@@ -1,5 +1,5 @@
 //! Параметры организаций `COrganizingParam` из `organizingparam.cpp/.h`,
-//! подтверждённые `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `organizations/`.
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
 //! `FactionParam.ini` — позиционный whitespace-формат: 12 header values и
 //! level records после `*`; labels и номер уровня не проверяются. Byte-строки

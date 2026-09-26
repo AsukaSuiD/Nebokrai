@@ -1,5 +1,5 @@
 //! World DB-владелец `CRsGenVar` из `rsgenvar.cpp`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `persistence/`.
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Load читает `CSL_GENVAR` в recordset order и сразу передаёт VarName/SValue/
 //! CValue в `CVariableList`; поздняя ошибка оставляет применённый префикс.

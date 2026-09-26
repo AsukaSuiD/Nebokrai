@@ -11,9 +11,9 @@
 //! границы останавливают только прежний выход за буфер; локальные quirks
 //! описаны возле соответствующих операций.
 //!
-//! Перенесён в Realm `organizations/`. Владелец игры достижим через
-//! `&dyn WorldGameView`; контекст-трейты membership/governance больше не
-//! получают game-параметр — реализация держит собственную ссылку на игру
+//! Владелец игры достижим через `&dyn WorldGameView`; контекст-трейты
+//! membership/governance больше не получают game-параметр — реализация
+//! держит собственную ссылку на игру
 //! (прецедент моста `WorldRegionOwnerOrganizingView`, см. `union.rs`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -5658,8 +5658,8 @@ impl CFaction {
         // хелпера `0x4B4890` (`SendInfoToAllMember(…, -1, K)`) аргумент
         // цвета мёртв — жёсткий push константы `0xFFDAEDFE`; в кадр
         // `0x7F804` всегда уходит `0xFFDAEDFE`. Машинный факт: тело
-        // `0x4B4890` в `Nworldserver.exe` + `WorldServer.pdb` (досверка
-        // CFaction, вердикт F1). См. `send_info_to_all_members_with_color`.
+        // `0x4B4890` в `Nworldserver.exe` + `WorldServer.pdb`.
+        // См. `send_info_to_all_members_with_color`.
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             &notice,
             legacy_c_string_visible_bytes(&second_text),
@@ -5779,9 +5779,7 @@ impl CFaction {
     /// оригинального хелпера `SendInfoToAllMember` (`0x4B4890`) мёртв: тело
     /// жёстко пушит константу `0xFFDAEDFE`, а передаваемый у части вызовов
     /// `K=0x87a238` на провод не попадает. Машинный факт по телу `0x4B4890`
-    /// в `Nworldserver.exe` + `WorldServer.pdb` (досверка CFaction, вердикт
-    /// F1); до неё декомпиляторский `K` в `Demise`/`SetContributor` был
-    /// перенесён как `0x0087_A238` — недокументированное wire-расхождение.
+    /// в `Nworldserver.exe` + `WorldServer.pdb`.
     pub fn send_info_to_all_members_with_color<'a, F>(
         &self,
         first_text: &'a [u8],

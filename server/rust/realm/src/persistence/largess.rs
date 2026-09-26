@@ -1,5 +1,5 @@
-//! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`,
-//! перенесённый в Realm `persistence/`: data-семья исходов очередей
+//! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`:
+//! data-семья исходов очередей
 //! transfer/cycle-load, настройки Cost DB, notice-семья сохранения, трейт
 //! `LargessOwner` и Tiberius-реализация `TiberiusLargess` с load-веткой
 //! `LoadLargess`/`AddOneLargess` и worker lifecycle (`StartWorkerThread`).
@@ -13,9 +13,9 @@
 //! records заменяют Win32/ADO/STL, сохраняя locks, partial success и shutdown.
 //!
 //! Load-ветка и worker разделяют очереди `m_mapLargess` и обе настройки Cost
-//! DB и поэтому переносятся одним структурным владельцем: `CPlayer`
-//! (`characters/player`), `CGoods` и фабрика товаров (`content/`) уже имеют
-//! realm-дома. Chrono заменяет локальное Win32-время, `std::thread` +
+//! DB и поэтому живут одним структурным владельцем; смежные типы — `CPlayer`
+//! (`characters/player`), `CGoods` и фабрика товаров (`content/`). Chrono
+//! заменяет локальное Win32-время, `std::thread` +
 //! `JoinHandle` — жизненный цикл worker-а.
 //!
 //! Async-методы трейта записаны в desugared-форме по ADR-0013. Реализация
@@ -26,10 +26,6 @@
 //! сохраняющего pipeline не требует Send и получает тот же `?Send`-контракт,
 //! что давал исходный `async fn` трейта.
 //!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub` (`TiberiusLargess`, исходы load-ветки и depot-вставки); старый
-//! `dbaccess/worlddb/largess` остаётся glob-реэкспортом этого модуля.
-
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;

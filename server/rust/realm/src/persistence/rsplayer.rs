@@ -1,6 +1,6 @@
 //! DB-владелец `CRsPlayer` WorldServer из `rsplayer.cpp`: трейт `RsPlayerOwner`
 //! и его data-семьи вместе с Tiberius-реализацией `TiberiusRsPlayer` и
-//! адаптером `TiberiusPlayerLoadData`, перенесёнными из старого пакета.
+//! адаптером `TiberiusPlayerLoadData`.
 //! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Owner охватывает create/open/load/save игрока, отдельные field codecs,
@@ -21,10 +21,6 @@
 //! strings и typed snapshots заменяют ADO/COM, globals и fixed buffers, не
 //! меняя схемы, provider-order, значения отказа или wire-контракты caller-а.
 //!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub` (`TiberiusRsPlayer`, адаптер загрузки и field codecs); старый
-//! `dbaccess/worlddb/rsplayer` остаётся glob-реэкспортом этого модуля.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::error::Error;

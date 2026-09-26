@@ -1,4 +1,4 @@
-//! Инициализация World DB из точной пары `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `persistence/`.
+//! Инициализация World DB из точной пары `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner открывает настроенные TDS-соединения и возвращает typed runtime
 //! handles. Tiberius заменяет ADO/COM; порядок открытия, обязательность баз и

@@ -1,4 +1,4 @@
-//! Рейтинг `CPlayerRanks` из WorldServer, перенесённый в Realm `characters/`,
+//! Рейтинг `CPlayerRanks` из WorldServer,
 //! подтверждённый `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Wire subtype `0x17` содержит signed count и insertion-order player records.

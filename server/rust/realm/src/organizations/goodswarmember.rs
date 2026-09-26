@@ -1,5 +1,5 @@
-//! Участники Goods War `CGoodsWarMember` из WorldServer, перенесённые в
-//! Realm `organizations/`, подтверждённые `worldserver.exe` и
+//! Участники Goods War `CGoodsWarMember` из WorldServer,
+//! подтверждённые `worldserver.exe` и
 //! `worldserver.pdb`.
 //!
 //! Player->faction map и faction set сохраняют signed order; count-list —

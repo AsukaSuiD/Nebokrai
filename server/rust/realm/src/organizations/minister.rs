@@ -1,5 +1,4 @@
-//! Номинальный minister owner исторического `WorldServer`, перенесённый в
-//! Realm `organizations/`.
+//! Номинальный minister owner исторического `WorldServer`.
 //!
 //! Constructor создаёт country identity и обнуляет четыре
 //! officer bytes; destructor не добавляет наблюдаемого эффекта поверх

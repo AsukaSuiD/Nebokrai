@@ -1,5 +1,4 @@
-//! Четыре officer-поля country owner-а исторического `WorldServer`,
-//! перенесённые в Realm `organizations/`.
+//! Четыре officer-поля country owner-а исторического `WorldServer`.
 //!
 //! `CKing::CKing` и `CMinister::CMinister` оба сначала
 //! создают `CCountryIdentity`, затем обнуляют ровно четыре bytes по `+0x20`;

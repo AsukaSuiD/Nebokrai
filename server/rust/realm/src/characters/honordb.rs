@@ -1,5 +1,5 @@
-//! Honor Ranks DB-типы (records/snapshots/sink/outcome), извлечённые
-//! из мирового `rsplayer`.
+//! Honor Ranks DB-типы (records/snapshots/sink/outcome) исходного
+//! мирового `CRsPlayer`.
 //!
 //! Источник — точная пара `Nworldserver.exe` + `WorldServer.pdb`.
 //! Layout `HonorRankDbEntry` 0x24 байт сохранён `repr(C)` и const-asserts.

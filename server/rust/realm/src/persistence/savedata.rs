@@ -1,8 +1,8 @@
 //! Data/handle-типы save-batch одного `DoSaveData` (`tagDBData` владельца
-//! `CGame`), перенесённые из `worldserver/worldserver/game.rs` в Realm
-//! `persistence/`. Источник контракта — та же точная пара, что у
-//! [`crate::app::world_server`] (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`,
-//! SHA-256 `F3AC454D…`, RSDS совпадает).
+//! `CGame`). Источник контракта — та же точная пара, что у
+//! [`crate::app::world_server`] (`.exe/Nworldserver.exe` +
+//! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Машинно подтверждённые точки (S_PUB32 `.exe/Nworldserver.exe`, первая
 //! секция): свободный `?DoSaveData@@YAXXZ` `1:0001b610` и worker-вход
@@ -11,8 +11,9 @@
 //! `??1tagDBData@CGame@@QAE@XZ` `1:0000e760`.
 //!
 //! Accumulator, session facade и отделённый batch owner остаются чистыми
-//! данными: generation-ветки и DB I/O save worker-а старого пакета наполняют
-//! и разбирают их за пределами библиотеки, поэтому поля публичны.
+//! данными: generation-ветки (`app/world_db_data_collect`) и DB I/O
+//! save worker-а (`persistence/saveworker`) наполняют и разбирают их,
+//! поэтому поля публичны.
 //! Frozen-вход worker-а `WorldSaveThreadJob` живёт в
 //! [`crate::persistence::savedb`] вместе с цитируемым им lifecycle-типом.
 

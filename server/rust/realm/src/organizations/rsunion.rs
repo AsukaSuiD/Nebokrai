@@ -1,5 +1,5 @@
-//! World DB-владелец `CRsUnion` из `rsunion.cpp`, перенесённый в Realm
-//! `organizations/`: трейт `RsUnionOwner`, его data-семья и Tiberius-реализация
+//! World DB-владелец `CRsUnion` из `rsunion.cpp`: трейт `RsUnionOwner`,
+//! его data-семья и Tiberius-реализация
 //! `TiberiusRsUnion`. Источник контракта — точная пара `Nworldserver.exe` и
 //! `WorldServer.pdb`.
 //!
@@ -13,10 +13,6 @@
 //! Send-соединение `&mut WorldTdsClient`, поэтому все методы помечены
 //! `+ Send`.
 //!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub`; старый `dbaccess/worlddb/rsunion` остаётся glob-реэкспортом этого
-//! модуля.
-
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;

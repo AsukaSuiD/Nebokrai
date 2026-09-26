@@ -1,6 +1,5 @@
 //! Государство `CCountry` из `country.cpp/.h`, подтверждённое точной парой
-//! `worldserver.exe` и `worldserver.pdb`. Владелец перенесён в Realm
-//! `organizations/`.
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Владелец хранит казну, силу, технологии, короля, министров, дневные лимиты
 //! и состояние country war. Административные операции сохраняют порядок
@@ -23,19 +22,17 @@
 //! owned-строки и ограниченное форматирование заменяют STL, сырые указатели и
 //! переполнение внутренних буферов, не меняя wire и БД.
 //!
-//! Data king points (`KingPointKind`, `KingPointUpdate`) перенесены из
-//! `appworld/country/king.rs`; сам `CKing`, его методы и free-функции лежат в
+//! Data king points (`KingPointKind`, `KingPointUpdate`) лежат здесь, рядом с
+//! использующей их `CCountry`; сам `CKing`, его методы и free-функции — в
 //! соседнем `organizations/king`.
 //!
 //! Контекстные трейты `CCountry` (`CountryNewTermContext`,
 //! `CountryVillageTaxContext`, `CountrySetNewDayContext`,
 //! `CountryExileResultContext`, `CountryHasJobContext`,
-//! `CountryPlayersListContext`) перенесены волной governance-ветвей
-//! `countrymessage`: они ссылаются только на data-типы этого файла,
+//! `CountryPlayersListContext`) ссылаются только на data-типы этого файла,
 //! `CMessage` и `SendMessageError` realm — сигнатуры и дефолтные impl
-//! сохранены буквально. Сама `CCountry` и её методы перенесены волной
-//! owner-а и работают с теми же трейтами напрямую; game-контакты
-//! `CCountryHandler::generate_save_data` выделены в mini-trait
+//! сохранены буквально. `CCountry` работает с теми же трейтами напрямую;
+//! game-контакты `CCountryHandler::generate_save_data` выделены в mini-trait
 //! [`CountrySaveSink`](crate::organizations::countryhandler::CountrySaveSink).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -952,12 +949,6 @@ pub struct CCountry {
     pub absolve_count: i32,
     pub exile_started_at_ms: BTreeMap<i32, i32>,
 }
-
-// Контекстные трейты `CCountry` (`CountryNewTermContext`,
-// `CountryVillageTaxContext`, `CountrySetNewDayContext`,
-// `CountryExileResultContext`, `CountryHasJobContext`,
-// `CountryPlayersListContext`) объявлены выше в этом же модуле волной
-// governance-ветвей `countrymessage`.
 
 enum DemiseTargetBlock {
     Rejected(CountryDemiseRejection, Vec<u8>),

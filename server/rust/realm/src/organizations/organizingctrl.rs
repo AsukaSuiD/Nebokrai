@@ -1,9 +1,7 @@
 //! Центральный `COrganizingCtrl` из `organizingctrl.cpp/.h`, подтверждённый
-//! точной парой `worldserver.exe` и `worldserver.pdb`. Владелец перенесён
-//! в Realm `organizations/` целиком: wire-контракты и отчёты жили здесь раньше,
-//! сам контроллер с session endpoints (`CNetSessionManager`), free-player
-//! scan и DB-загрузкой присоединён этой волной; старый
-//! `appworld/organizingsystem/organizingctrl.rs` теперь его реэкспорт.
+//! точной парой `worldserver.exe` и `worldserver.pdb`. Модуль объединяет сам
+//! контроллер (session endpoints `CNetSessionManager`, free-player scan,
+//! DB-загрузка) с wire-контрактами и отчётами операций.
 //!
 //! Controller владеет faction/union registries, free-player lookup, DB load,
 //! reservations, governance callbacks и city/war integrations. `Initialize`
@@ -18,10 +16,10 @@
 //! Игровые контакты impl-семьи передаются готовым `&dyn WorldGameView` без
 //! новых узких view-швов. Save-постановка `DoSaveData` выделена в mini-trait
 //! [`OrganizingSaveSink`] по прецеденту `CountrySaveSink`. Function-local
-//! static числителя top-info ID (`?lID@?1??GetTopInfoID`) перенесён в поле
+//! static числителя top-info ID (`?lID@?1??GetTopInfoID`) заменён полем
 //! `next_top_info_id` owner-а: pre-increment от нуля выдаёт ту же
 //! последовательность 1, 2, 3..., что `fetch_add` от единицы, и так же
-//! wrapping-переходит через `i32::MAX` — решение country owner-волны.
+//! wrapping-переходит через `i32::MAX`.
 
 use std::cell::Cell;
 use std::cmp::Ordering as CmpOrdering;
@@ -190,7 +188,7 @@ pub enum OrganizingDeleteRoleBlock {
 /// `&dyn WorldGameView` (его единственный игровой путь — refresh свойств
 /// фракции при отвязке от союза), поэтому gate реализуется на контроллере
 /// у владельца организаций и делегирует inherent-методу; игру в шов
-/// передаёт сам обработчик коротким перезаймом по форме handler-волны.
+/// передаёт сам обработчик коротким перезаймом.
 pub trait WorldDeleteRoleOrganizingGate {
     fn apply_delete_role(
         &mut self,

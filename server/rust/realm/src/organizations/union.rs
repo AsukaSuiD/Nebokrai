@@ -17,7 +17,7 @@
 //! но не меняют wire/DB/gameplay semantics. Malformed fixed strings и null map
 //! entries останавливаются typed-границей до UB.
 //!
-//! Перенесён в Realm `organizations/`. Game-параметры контекст-трейтов
+//! Game-параметры контекст-трейтов
 //! заменены bridge-адаптером при единственном исходном владельце (прецедент
 //! `WorldRegionOwnerOrganizingView`): контексты organizing больше не читают
 //! `&CGame`, реализация с game-доступом живёт в bridge-структуре старого

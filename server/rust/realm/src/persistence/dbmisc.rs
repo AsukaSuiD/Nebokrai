@@ -1,4 +1,4 @@
-//! DB-владелец аукционных очередей WorldServer из `dbmisc.cpp/.h`, перенесённый в Realm `persistence/`.
+//! DB-владелец аукционных очередей WorldServer из `dbmisc.cpp/.h`.
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Две очереди `DbNote` и player FIFO сохраняют раздельные locks, выбор

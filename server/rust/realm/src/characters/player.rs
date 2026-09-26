@@ -1,6 +1,5 @@
 //! Игрок `CPlayer` из `player.cpp/.h`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `characters/`.
 //!
 //! Owner объединяет identity, region/session, контейнеры, country/faction/
 //! union/JJC, DB snapshots и World wire. Load/clone/decode применяют вложенные
