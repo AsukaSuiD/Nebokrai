@@ -17,11 +17,13 @@
 | Регионы и страны | Снимки всех существующих объектов соответствующего обхода. |
 | Почётные рейтинги | Отдельные копии history/current и календарного времени. |
 
-Перед ними копируются счётчики ID игрока и сообщения организации. Порядок сборки задают `generate_db_data_player_prefix` и `generate_db_data` в [World CGame](../../server/rust/src/worldserver/worldserver/game.rs). Ветка `materialize_save_all_organizations_snapshot` не вызывает сборку персонажей и стран; её имя не означает принудительное сохранение всех организаций: она тоже передаёт `force_all = false`.
+Перед ними копируются счётчики ID игрока и сообщения организации. Порядок сборки задают `generate_db_data_player_prefix` и `generate_db_data` в [Realm world_db_data_collect](../../server/rust/realm/src/persistence/world_db_data_collect.rs). Ветка `materialize_save_all_organizations_snapshot` не вызывает сборку персонажей и стран; её имя не означает принудительное сохранение всех организаций: она тоже передаёт `force_all = false`.
 
 Для персонажа есть **две разные копии**. Сначала `clone_map_player` сериализует World `CPlayer` с дочерними данными и декодирует его в новый `CPlayer`. Сериализация попутно обновляет организационные и вычисляемые свойства исходного объекта. Позже, уже в save-потоке, `CPlayer::db_projection` и `PlayerDbProjection::save_snapshot` строят SQL-проекцию этой копии. Поэтому поле, добавленное только в DB-проекцию, может потеряться ещё при первом клонировании.
 
 Накопитель `WorldDbData` содержит разные структуры: карту персонажей по unsigned ID, FIFO копий организаций и списки отдельных операций. `append_db_player` заменяет прежнюю копию того же ID; `append_db_creation_player` удаляет первое совпадение и добавляет новую копию в хвост. Это объединяет обновления только внутри текущего накопителя, а не между всеми уже запущенными сохранениями.
+
+Первичное хранилище накопителя принадлежит `persistence`: [`WorldSaveDataAccumulator`](../../server/rust/realm/src/persistence/savedata.rs) владеет типом и append/swap/clear-примитивами, а переходный `CGame` хранит только composition handle и делегирующий facade до разборки остальных состояний агрегата.
 
 ## Когда данные передаются worker-у
 
