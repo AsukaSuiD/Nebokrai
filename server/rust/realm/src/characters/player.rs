@@ -465,9 +465,9 @@ struct PlayerThing {
     point: u16,
 }
 
-// LeiTing-типы игрока перенесены в Realm activities вместе с `CLeiTing`;
-// `PlayerCodecError` остаётся здесь: он оборачивает цепочку
-// containers/goods/shape и переносится в Realm вместе с `CPlayer`.
+// LeiTing-типы игрока живут в Realm activities рядом с владельцем
+// `CLeiTing`; `PlayerCodecError` остаётся здесь: он оборачивает цепочку
+// containers/goods/shape владельца `CPlayer`.
 pub use crate::activities::leiting::{
     PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
 };
@@ -1195,7 +1195,7 @@ impl CPlayer {
     fn base_equipment_fields(
         &self,
     ) -> Result<([u32; 11], [i32; 11]), PlayerDbProjectionBlock> {
- // `CGame::GetPlayerEquipID`,.
+        // `CGame::GetPlayerEquipID`,.
         const SQL_EQUIPMENT_ORDER: [u32; 11] = [0, 1, 3, 4, 2, 9, 10, 12, 13, 14, 15];
         let mut ids = [0; 11];
         let mut levels = [0; 11];
@@ -1889,7 +1889,7 @@ impl CPlayer {
         base.write_u32(BASE_PROPERTY_MAX_HP_OFFSET, scalar.base_max_hp);
         base.write_u32(BASE_PROPERTY_MAX_MP_OFFSET, scalar.base_max_mp);
         base.write_u16(BASE_PROPERTY_MAX_YP_OFFSET, scalar.base_max_yp);
- // `LoadPlayer` не читает BaseMaxRp: его сразу вычисляет `LoadData`.
+        // `LoadPlayer` не читает BaseMaxRp: его сразу вычисляет `LoadData`.
         base.write_u32(BASE_PROPERTY_STR_OFFSET, scalar.base_str);
         base.write_u32(BASE_PROPERTY_DEX_OFFSET, scalar.base_dex);
         base.write_u32(BASE_PROPERTY_CON_OFFSET, scalar.base_con);
@@ -2414,8 +2414,8 @@ impl CPlayer {
             runtime.create_union_operator = false;
             runtime.faction_war_operator = false;
             runtime.organizing.force = 0;
- // При faction ID `0` serializer не читает stale owned-region list;
- // очистка здесь не меняет наблюдаемый wire-контракт.
+            // При faction ID `0` serializer не читает stale owned-region list;
+            // очистка здесь не меняет наблюдаемый wire-контракт.
             runtime.organizing.clear_owned_regions();
         }
 
@@ -2625,8 +2625,8 @@ impl CPlayer {
         let occupation = self.base_property.read_u8(BASE_PROPERTY_OCCUPATION_OFFSET);
         let occupation = usize::from(occupation);
         if occupation >= 3 {
- // Оригинал индексировал соседнюю static
- // память за `float[3]`; safe Rust не назначает ей коэффициент.
+            // Оригинал индексировал соседнюю static
+            // память за `float[3]`; safe Rust не назначает ей коэффициент.
             return Err(
                 PlayerCodecError::OccupationOutsidePropertyCoefficientRange {
                     occupation: occupation as u8,
@@ -2826,9 +2826,9 @@ impl CPlayer {
 
         let ex_state_length = read_player_i32(source, cursor, "m_vExStates length")?;
         if ex_state_length < 0 {
- // Старый signed length уходил в pointer
- // arithmetic и `_AddToByteArray`; результат для high-bit wire не
- // определён согласованным оригинал.
+            // Старый signed length уходил в pointer
+            // arithmetic и `_AddToByteArray`; результат для high-bit wire
+            // поведением оригинала не определён.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_vExStates length",
                 value: ex_state_length,
@@ -3032,8 +3032,8 @@ impl CPlayer {
         self.variable_num = read_player_i32(source, cursor, "m_lVariableNum")?;
         self.variable_data_length = read_player_i32(source, cursor, "m_lVariableDataLength")?;
         if self.variable_data_length < 0 {
- // Оригинал передавал high-bit length в
- // `operator new` и безразмерный `_GetBufferFromByteArray`.
+            // Оригинал передавал high-bit length в
+            // `operator new` и безразмерный `_GetBufferFromByteArray`.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_lVariableDataLength",
                 value: self.variable_data_length,
@@ -3056,8 +3056,8 @@ impl CPlayer {
 
         let pet_count = read_player_i32(source, cursor, "m_vUncreatedPets count")?;
         if pet_count < 0 {
- // Исходный `for (count; count != 0; --count)`
- // для отрицательного значения уходит в signed overflow/overread.
+            // Исходный `for (count; count != 0; --count)`
+            // для отрицательного значения уходит в signed overflow/overread.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_vUncreatedPets count",
                 value: pet_count,
@@ -3796,8 +3796,8 @@ fn read_player_c_string(
         return Ok(bytes[..length].to_vec());
     }
 
- // Старый вспомогательный код писал до NUL в фиксированный стековый буфер.
- // Rust не воспроизводит ни переполнение, ни чтение за источником.
+    // Старый вспомогательный код писал до NUL в фиксированный стековый буфер.
+    // Rust не воспроизводит ни переполнение, ни чтение за источником.
     Err(PlayerCodecError::UnterminatedString {
         field,
         offset,
@@ -3850,8 +3850,8 @@ fn read_player_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый вспомогательный код не получал длину источника и продолжал
- // чтение. Rust останавливает только эту локальную операцию.
+        // Старый вспомогательный код не получал длину источника и продолжал
+        // чтение. Rust останавливает только эту локальную операцию.
         return Err(PlayerCodecError::UnexpectedEnd {
             field,
             offset,

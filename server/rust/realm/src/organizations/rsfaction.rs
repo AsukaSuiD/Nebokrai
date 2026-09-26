@@ -627,8 +627,8 @@ impl RsFactionOwner for TiberiusRsFaction {
             return FactionSaveOutcome::ReturnedFalse;
         };
 
- // читает mask один раз: property-нормализация может снова
- // поставить bit 1, но не должна менять набор ветвей текущего прохода.
+        // читает mask один раз: property-нормализация может снова
+        // поставить bit 1, но не должна менять набор ветвей текущего прохода.
         let change_data_type = snapshot.faction.change_data_type();
 
         if change_data_type & 1 != 0 {
@@ -701,8 +701,8 @@ impl RsFactionOwner for TiberiusRsFaction {
             return false;
         };
         let Some(property) = snapshot.property.as_ref() else {
- // Единственный caller вызывает owner только для dirty-bit 1, а
- // закрытый constructor не создаёт такой snapshot без property.
+            // Единственный caller вызывает owner только для dirty-bit 1, а
+            // закрытый constructor не создаёт такой snapshot без property.
             return false;
         };
 
@@ -1020,8 +1020,8 @@ fn read_faction_database_base_state(
         delete_remain_time: read_faction_i32(row, "DelRemainTime")?,
         country: read_faction_u8(row, "country")?,
         goods_war_count: read_faction_i32(row, "GoodsWarCount")?,
- // `_sprintf` использовал year/month/day/hour/minute/second без zero
- // padding и не переносил weekday/milliseconds из SYSTEMTIME.
+        // `_sprintf` использовал year/month/day/hour/minute/second без zero
+        // padding и не переносил weekday/milliseconds из SYSTEMTIME.
         goods_war_last_win_time: format!(
             "{}-{}-{} {}:{}:{}",
             goods_war_last_win_time.year,
@@ -1077,8 +1077,8 @@ async fn load_faction_members_rows(
             }
         };
         let Some(faction) = factions.get_mut(&faction_id) else {
- // Оригинал owner печатает `LoadGuildMembers: guild id not exist.` и
- // только MoveNext; остальные поля текущей строки он не читает.
+            // Оригинал owner печатает `LoadGuildMembers: guild id not exist.` и
+            // только MoveNext; остальные поля текущей строки он не читает.
             notices.push_back(RsFactionNotice {
                 operation: RsFactionOperation::LoadFactionMembers,
                 error: RsFactionSaveError::MissingFaction { faction_id },
@@ -1097,8 +1097,8 @@ async fn load_faction_members_rows(
         };
         let name_length = visible_legacy_text_len(&member.name);
         if name_length >= 32 {
- // `strcpy(local_120[32], Name)` выходил за стек. Нет точного
- // внешнего результата corrupted row, поэтому не дополняем/режем.
+            // `strcpy(local_120[32], Name)` выходил за стек. Нет точного
+            // внешнего результата corrupted row, поэтому не дополняем/режем.
             return FactionMembersLoadOutcome::BlockedMissingFact(FactionMemberLoadBlock {
                 visible_len: name_length,
                 capacity: 32,
@@ -1113,8 +1113,8 @@ fn read_faction_member(row: &Row) -> Result<FactionMemberDatabaseRow, FactionLoa
     let name = read_faction_text(row, "Name")?;
     let visible_name = visible_legacy_text(&name);
     if visible_name.len() >= 32 {
- // Возвращаем исходные bytes в row-промежутке, чтобы caller сохранил
- // prefix и выразил отдельную safe-границу без DB notice.
+        // Возвращаем исходные bytes в row-промежутке, чтобы caller сохранил
+        // prefix и выразил отдельную safe-границу без DB notice.
         return Ok(FactionMemberDatabaseRow {
             name,
             member: TagMemInfo::from_complete_fields(
@@ -1144,8 +1144,8 @@ fn read_faction_member(row: &Row) -> Result<FactionMemberDatabaseRow, FactionLoa
     member_name[..visible_name.len()].copy_from_slice(visible_name);
     let title = read_faction_text(row, "Title")?;
     let mut member_title = [0; 64];
- // Оригинал проверял ANSI `std::string::size() < 0x15`; long title оставлял
- // C-string пустой, а не обрезанный.
+    // Оригинал проверял ANSI `std::string::size() < 0x15`; long title оставлял
+    // C-string пустой, а не обрезанный.
     let visible_title = visible_legacy_text(&title);
     if visible_title.len() < 0x15 {
         member_title[..visible_title.len()].copy_from_slice(visible_title);
@@ -1189,8 +1189,8 @@ fn read_faction_member_purview(
             0 => EPurviewOwnState::No,
             1 => EPurviewOwnState::Forbid,
             2 => EPurviewOwnState::Permit,
- // C++ записывал arbitrary signed `long` в enum storage. Safe
- // Rust не materialize-ит invalid enum и не выдумывает его wire.
+            // C++ записывал arbitrary signed `long` в enum storage. Safe
+            // Rust не materialize-ит invalid enum и не выдумывает его wire.
             _ => return Err(FactionLoadReadError::MissingRequiredValue(column)),
         };
     }
@@ -1302,8 +1302,8 @@ fn read_faction_leave_word(row: &Row) -> Result<TagLeaveWord, FactionLoadReadErr
     let mut fixed_content = [0; 212];
     let visible_name = visible_legacy_text(&name);
     let visible_content = visible_legacy_text(&content);
- // Оригинал оставлял пустое Content при length >= 201; Name был ограничен
- // DB-схемой. Для corrupt Name >=20 owner не создаёт unsafe C-string.
+    // Оригинал оставлял пустое Content при length >= 201; Name был ограничен
+    // DB-схемой. Для corrupt Name >=20 owner не создаёт unsafe C-string.
     if visible_name.len() < fixed_name.len() {
         fixed_name[..visible_name.len()].copy_from_slice(visible_name);
     }
@@ -1435,8 +1435,8 @@ async fn load_faction_ability_rows(
                 );
             }
             Err(FactionAbilityReadError::Read(error)) => {
- // Оригинал LoadAbility считал false private helper-а, печатал
- // failure и переходил к следующему recordset row.
+                // Оригинал LoadAbility считал false private helper-а, печатал
+                // failure и переходил к следующему recordset row.
                 notices.push_back(RsFactionNotice {
                     operation: RsFactionOperation::LoadAbility,
                     error: error.into(),
@@ -1495,10 +1495,10 @@ fn build_faction_member_insert(
     let purview = member.purview.map(|state| state.wire_value());
     let contribute = if member.contribute { 1 } else { 0 };
 
- // Старый sprintf не экранировал Title. Сырой SQL сохраняет наблюдаемую
- // семантику SQL-парсера: кавычка могла дать ошибку либо изменить batch.
- // Tiberius заменяет только транспорт ADO. Даже при 63 ANSI-байтах Title и
- // максимальных i32/u16 нужно не более 536 байт исходного char[1024] с NUL.
+    // Старый sprintf не экранировал Title. Сырой SQL сохраняет наблюдаемую
+    // семантику SQL-парсера: кавычка могла дать ошибку либо изменить batch.
+    // Tiberius заменяет только транспорт ADO. Даже при 63 ANSI-байтах Title и
+    // максимальных i32/u16 нужно не более 536 байт исходного char[1024] с NUL.
     Ok(format!(
         "INSERT INTO CSL_FACTION_Members (FactionID,PlayerID,MemberLvl,Title,bControbute,LastOnlineTime, PV_Disband,PV_Exit,PV_DubJobLvl,PV_ConMem,PV_FireOut,PV_Pronounce,PV_LeaveWord, PV_EditLeaveWord,PV_ObtainTax,PV_OperCityGate,PV_EndueROR) VALUES ({},{},{},N'{}',{},'{}',{},{},{},{},{},{},{},{},{},{},{})",
         faction_id,

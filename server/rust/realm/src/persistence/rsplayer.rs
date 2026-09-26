@@ -1328,7 +1328,7 @@ pub fn player_ability_scalar_assignments<'a>(
             Field::DepotPassword,
             Value::BStr(visible_c_string(snapshot.depot_password)),
         ),
- // Исходные DWORD здесь намеренно попадали в signed VT_I4.
+        // Исходные DWORD здесь намеренно попадали в signed VT_I4.
         assignment(Field::Exploit, Value::I4(snapshot.exploit as i32)),
         assignment(Field::Kudos, Value::I4(snapshot.kudos as i32)),
         assignment(Field::Mode, Value::Ui4(snapshot.mode)),
@@ -1386,14 +1386,14 @@ pub fn player_ability_save_scalar_assignments<'a>(
     let mut save = Vec::with_capacity(92);
     save.push(create[0]);
     save.push(assignment(Field::SaveTime, Value::BStr(save_time)));
- // Save сохраняет Name..DisplayHeadPiece в том же порядке, что create.
+    // Save сохраняет Name..DisplayHeadPiece в том же порядке, что create.
     save.extend_from_slice(&create[1..59]);
     save.push(assignment(Field::Silence, Value::I4(snapshot.silence_time)));
- // Затем идут country..Kudos, но BattleFairy переставлен раньше Mode.
+    // Затем идут country..Kudos, но BattleFairy переставлен раньше Mode.
     save.extend_from_slice(&create[59..68]);
     save.push(create[72]);
     save.extend_from_slice(&create[68..72]);
- // FetchPower..dwAuctionSpace предшествуют шести save-only honor-полям.
+    // FetchPower..dwAuctionSpace предшествуют шести save-only honor-полям.
     save.extend_from_slice(&create[73..76]);
     save.push(assignment(
         Field::DaysHonorEliminateNum,
@@ -1419,7 +1419,7 @@ pub fn player_ability_save_scalar_assignments<'a>(
         Field::AppellationId,
         Value::Ui4(snapshot.appellation_id),
     ));
- // Хвост dwExalt..dwLT60Stamp снова совпадает с create.
+    // Хвост dwExalt..dwLT60Stamp снова совпадает с create.
     save.extend_from_slice(&create[76..]);
     debug_assert_eq!(save.len(), 92);
     save
@@ -2352,8 +2352,8 @@ impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
             }
         };
 
- // ADO GetRecordCount возвращался через `unsigned char`; `0xFF`
- // одновременно был sentinel-ом ошибки внешнего owner-а.
+        // ADO GetRecordCount возвращался через `unsigned char`; `0xFF`
+        // одновременно был sentinel-ом ошибки внешнего owner-а.
         let count = rows.len() as u8;
         (count != u8::MAX).then_some(count)
         }
@@ -2586,7 +2586,7 @@ impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
         let Some(local_midnight) = Local.from_local_datetime(&midnight).earliest() else {
             return 0;
         };
- // Оригинал `_mktime == -1` нормализовался в ноль до возврата.
+        // Оригинал `_mktime == -1` нормализовался в ноль до возврата.
         i32::try_from(local_midnight.timestamp()).unwrap_or(0)
         }
     }

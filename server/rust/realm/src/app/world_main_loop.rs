@@ -208,9 +208,9 @@ impl CGame {
             };
 
             let broadcast = &mut self.system_broadcasts[index];
- // DIFF-A1 (машинная досверка): оригинал записывает
- // `last_notify_time = now` до вызова `random(max-min)`; порядок —
- // контракт, сам по себе эффекта не даёт.
+            // DIFF-A1 (машинная досверка): оригинал записывает
+            // `last_notify_time = now` до вызова `random(max-min)`; порядок —
+            // контракт, сам по себе эффекта не даёт.
             broadcast.last_notify_time_seconds = now_seconds;
             let random_range = (max_time_seconds as i32).wrapping_sub(min_time_seconds as i32);
             let assigned_interval_seconds =
@@ -922,7 +922,7 @@ impl CGame {
             });
         };
 
- // CPlayer vtable +0x84 = `CShape::SetState(0)`.
+        // CPlayer vtable +0x84 = `CShape::SetState(0)`.
         player.set_state(0);
         let Some(game_server) = self
             .game_server(game_server_index)
@@ -1529,7 +1529,7 @@ impl CGame {
             }
 
             let Some(player) = self.map_player(login.player_id) else {
- // оставляет такой просроченный list-node на месте.
+                // оставляет такой просроченный list-node на месте.
                 entries.push(WorldLoginTimeoutEntryOutcome::ExpiredMissingPlayer {
                     player_id: login.player_id,
                     elapsed_ms,
@@ -1615,7 +1615,7 @@ impl CGame {
                 offline_inserted,
                 friend_outcomes,
             });
- // После erase сохранённый next node занимает тот же VecDeque index.
+        // После erase сохранённый next node занимает тот же VecDeque index.
         }
 
         WorldLoginTimeoutReport {
@@ -1683,8 +1683,8 @@ impl CGame {
         };
 
         let Some(release_interval_ms) = self.setup.release_login_player_time_ms else {
- // Конструктор не задавал это поле, а safe Rust
- // не выбирает значение для исходного чтения неинициализированного DWORD.
+            // Конструктор не задавал это поле, а safe Rust
+            // не выбирает значение для исходного чтения неинициализированного DWORD.
             return WorldMainLoopTailStageReport::BlockedMissingReleaseInterval { pacing };
         };
 
@@ -1725,10 +1725,10 @@ impl CGame {
         &mut self,
         configuration: WorldMainLoopConfiguration,
         state: &mut WorldMainLoopStateOwners<'_>,
- // Generic-связка Realm `app/world_main_loop_data` закрепляется конкретными
- // DB/game владельцами на этой границе: глубокие точки process_message/
- // process_world_message/route_loaded_player держат конкретную декларацию
- // на самой границе процесса.
+        // Generic-связка Realm `app/world_main_loop_data` закрепляется конкретными
+        // DB/game владельцами на этой границе: глубокие точки process_message/
+        // process_world_message/route_loaded_player держат конкретную декларацию
+        // на самой границе процесса.
         owners: &mut WorldMainLoopOwners<
             '_,
             TimerCallback,
@@ -2487,8 +2487,8 @@ impl CGame {
         state: &mut WorldMainLoopLargessState,
     ) -> WorldMainLoopLargessGateReport {
         let Some(load_interval_ms) = self.setup.load_largess_time_ms else {
- // Конструктор не задавал `dwLoadLargessTime`;
- // неизвестное C++-чтение не позволяет назначить последующий counter.
+            // Конструктор не задавал `dwLoadLargessTime`;
+            // неизвестное C++-чтение не позволяет назначить последующий counter.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwLoadLargessTime",
             };
@@ -2502,8 +2502,8 @@ impl CGame {
             };
         }
         if self.setup.world_number.is_none() {
- // TransferLargessThread форматировал `%d`
- // непосредственно из исходно неинициализированного dwNumber.
+            // TransferLargessThread форматировал `%d`
+            // непосредственно из исходно неинициализированного dwNumber.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwNumber",
             };

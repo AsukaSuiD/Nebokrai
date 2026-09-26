@@ -103,6 +103,12 @@ Realm-направления воспроизводят пять серверн�
 | ctor `CMyNetServer_World` | `0x46A9B0` | Базовый `CServer` ctor `0x46A480`, vtable `0x49D408`, поле `+0x120 = 0`, limits `+0x14C = 0x64` (100) и `+0x150 = 0x1000000` — точные константы component |
 | `CreateServerClient` (world) | `0x46A9F0` | `new` объекта `0xC8` байт, ctor принятого `CMyNetServerClient_World 0x46EC60` с владельцем `this` |
 
+Наблюдения по backup-наборам LoginServer (не по EXE; владелец — `realm::access::rscdkey`):
+
+- `LoginDB.bak` подтверждает `csl_cdkey`, `ip_allow`, `ip_forbid`, `ip_list` и их типы.
+- Ни `LoginDB.bak`, ни `Account.bak` не содержат `userinfo`: DB-schema двух account-функций (`FixPtAcc`, `ValidateLocalPassord`) — UNKNOWN; длина/тип `userid`, `originsdid`, `passwd` не утверждаются, контракт подтверждён EXE/PDB, собственная таблица в Rust не создаётся.
+- Во всех backup-наборах строки `matrix_card image` — `NULL`; `sp_bindCdkey` принимает blob любой ненулевой длины; исходный код не проверял индекс перед чтением `SAFEARRAY`.
+
 ## Billing: сообщение
 
 Реализация: `realm::app::billing_message`. Пара — BillingServer из блока идентификаторов.
@@ -232,6 +238,7 @@ UI-эффекты (`LB_DELETESTRING` здесь, `LB_ADDSTRING 0x181` в вет�
 | `ReConnectLoginServer` | `1:00002280` (VA `0x403280`) | Попытка восстановления соединения через process-global `g_pGame` | `loginreconnectworker` |
 | `?SendErrLog@@YAXDJJPBD@Z` | `1:00000f30` | Cdecl-функция кода процесса WorldServer, а не nets-класса `CMessage`; публикует Login wire `0x0001_FE08` | `worldserver` |
 | `?DoSaveData@@YAXXZ` | `1:0001b610` | Свободная save-оркестрация | `savedb` |
+| тело `CGame::GenerateDBData` | pub `1:11e50` | Материализация save-полей владельца игры (`GenerateDBData` + materialize/take/append/clear) | `world_db_data_collect` |
 | `?ShowSaveInfo@@YAXPBDZZ` (+ `?g_bShowSaveInfo@@3_NA`) | `1:00000720` | Variadic gate save-лога с глобальным флагом | `savedb` |
 | `?SaveThreadFunc@@YGIPAX@Z` | `1:00000e30` | Worker-вход сохранения; job собирается у process-owner-а | `savedb` / `saveworker` |
 | `??0tagDBData@CGame@@QAE@XZ` / `??1tagDBData@CGame@@QAE@XZ` | `1:00010f60` / `1:0000e760` | ctor/dtor действующего save accumulator-а `tagDBData` владельца `CGame` | `savedata` |
@@ -259,3 +266,72 @@ UI-эффекты (`LB_DELETESTRING` здесь, `LB_ADDSTRING 0x181` в вет�
 | `?ProcessPlayerDataQueue@CGame@@QAEXXZ` + `CPlayerDataQueue::{GetSize,PopPlayerData,PushPlayerData}` | pubs `?ProcessPlayerDataQueue@CGame@@QAEXXZ`, `?GetSize@CPlayerDataQueue@@QAEIXZ`, `?PopPlayerData@CPlayerDataQueue@@QAEPAUtagPlayerDataQueue@@XZ`, `?PushPlayerData@CPlayerDataQueue@@QAE_NPAUtagPlayerDataQueue@@@Z` | Стадия MainLoop обрабатывает за проход не более одной non-null записи начального snapshot: null-pop уменьшает snapshot и повторяет pop | `playerdataqueue` |
 | `CRsPlayer::OpenPlayerBase` (начало) | VA `0x0050F7E0..0x0050F845` | Байт успеха, account, 16-битный счётчик и повторный 16-битный ноль перед возвратом в ветке без строк; прежний Rust записывал там 32-битный ноль — исправлено | `player_base` |
 | `CRsPlayer::OpenPlayerBase` (запрос части) | VA `0x0050F85B..0x0050F8A3` | `OpenPlayerBaseInDB` вызывается перед `OpenPlayerBaseInMem`; счётчик складывается 8-битной арифметикой | `player_base` |
+
+## World: организации — purviews нового члена и цвет рассылки
+
+Реализация: `realm::organizations::faction` (`do_join`, `send_info_to_all_members_with_color`, broadcast-ветви `demise`/`set_contributor`), `realm::organizations::union` (пять рассылок add_faction WS0270, demise WS0281, fire_out WS0277, exit WS0273, disband WS0276). Пара — WorldServer из блока идентификаторов; аннотированные разборы — `.local/evidence/disasm/faction-recheck.ann.txt`, `.local/evidence/disasm/faction-dojoin-full.txt`.
+
+Досверка 2026-09-26 истинного тела `CFaction::DoJoin` (`0x4BEE40`; публичный PDB `1:000bde40` занижен на `0x1000`, как у соседних pub-ов CFaction-региона, истинные адреса через vftable `0x547A8C`):
+
+| Точка | Адрес | Суть факта |
+| --- | --- | --- |
+| purview Exit = 2 (idx1) | `0x4BF3A1` | Store в слот локального pair-blob `+0x74` |
+| purview LeaveWord = 2 (idx6) | `0x4BF3A8` | Store в слот `+0x88` |
+| девять нулей в остальные purview-слоты | `0x4BF3D2..0x4BF40A` | Каждый из одиннадцати слотов пишется ровно один раз; бывшие гипотезы «dead double-store» и «слоты idx1/idx6 не пишутся» — след ошибки учёта esp через промежуточный `push` |
+| `job_level = 99` | `0x4BF263` | Явная запись в blob `+0x2C`; `strcpy` title идёт в `+0x30` и её не перекрывает |
+| копия join tagTime | `0x4BF231` / `0x4BF23B` / `0x4BF245` / `0x4BF255` | `t+0→+0`, `t+4→+4`, `t+0xC→+0xC`; store `t+8` идёт после `push 0x547dbc` (`0x4BF24C`) и из-за сдвига esp попадает ровно в слот `+8`, не поверх `+0xC` — бывшая находка F2 («перезапись +0xC») опровергнута как артефакт esp-сдвига |
+| insert в members-map | `0x4BF601` | `operator[]` (`0x4BF5EE`) → `rep movsd 0x3C` уносит полный pair `{id; tagMemInfo}` со всеми 16 байтами tagTime в node до любой рассылки; далее `AddAllFactionInfo` (`0x434D00`) и `UpdateMemberInfoToClient` |
+
+Системный факт адресации CFaction-региона (истинные тела при заниженных на `0x1000` PDB publics): DoJoin `0x4BEE40`, UpdateMemberInfoToClient `0x4BA7C0`, CheckOperValidate `0x4C17F0`, RemoveApplyMember `0x4B9F50`, UpdatePlayerFactionInfo `0x4B5820`, SetChangeData `0x4B4C60`; vftable `0x547A8C`.
+
+Цвет рассылки общего кадра `0x7F804` (orga info `u32 player | cstr first | u32 color | u32 trailing | cstr second`):
+
+- Аргумент цвета K обоих классов мёртв: в конечном хелпере литерал `0xFFDAEDFE` пушится жёстко, поэтому на провод всегда уходит `0xFFDAEDFE`; передаваемый у части вызовов `K=0x87a238` до wire-поля не доходит.
+- `CUnion::SendInfoToAllMember` (`0x4C6290`) пробрасывает K через два уровня до `CFaction::SendInfoToAllMember` (`0x4B5890`), где литерал его убивает.
+- В faction-аннотации тот же конечный хелпер указан как `0x4B4890`; расхождение ровно `0x1000` совпадает с зафиксированным системным занижением PDB publics CFaction-региона, явного разрешения пары адресов в разборе нет.
+
+## World: king state layout
+
+Реализация: `realm::organizations::king`. Та же пара WorldServer.
+
+Layout `CKing` сохраняет `m_bRegister` по `+0x34`; constructor обнуляет только officer bytes `+0x24..+0x27` и три dword точек `+0x28..+0x30`, поле `m_bRegister` остаётся неинициализированным — внутренний UB-дефект оригинала, не контракт (safe Rust назначает `false` и не переносит случайное значение allocator-а).
+
+## World: upgrade экипировки (CGoods/CGoodsFactory)
+
+Реализация: `realm::content::cgoods` (`can_upgraded`), `realm::content::cgoodsfactory` (`upgrade`, `upgrade_equipment`, `adjust_first_addon_modifier`, `adjust_indexed_id_one_modifier`). Та же пара WorldServer; разборы — `.local/evidence/disasm/cgoods-*.txt`.
+
+| Функция | Адрес | Суть факта |
+| --- | --- | --- |
+| `CGoods::CanUpgraded` | RVA `0x4528e0` | True только когда base-properties по индексу найдены, goods type == `GOODS_TYPE_EQUIPMENT` и addon values `GAP_WEAPON_LEVEL` (`0x30`) непусты; иначе false. Машинные шаги: индекс `+0x6c` передаётся в map-lookup global-реестра (`0x4528fc-0x45290a` → `0x455db0`); промах (NULL) → ret 0 (`0x45290c`); `GetGoodsType() != 2` (`0x4dea40`, compare `0x452919: cmp eax, 2; jne`) → ret 0; `GetAddonValues(0x30, out)` (`0x45293b` → `0x452760`) при пустом result-векторе → ret 0 (`0x452944`/`0x452966`); иначе ret 1 (`0x45297f-0x45298d`); ctor-неназначенный индекс соответствует промаху lookup |
+| private `CGoodsFactory::Upgrade` | RVA `0x455f20` | `v1 = GetAddonPropertyValue(src, 1)`, `v2 = (src, 2)`; `v1 <= 0` → ret 0 (`0x455f4c: jle`); `v2 > 0` → `delta = random(v2 − v1) + v1` (`0x455f54-0x455f65`), иначе `delta = v1` (`0x455f6b`); signed wrapping; вызов general-random `0x453560` с сырым signed bound, включая ноль и отрицательный; мутация destination — first-match скан без clamp; вызывающий `UpgradeEquipment` результат игнорирует |
+| `CGoodsFactory::UpgradeEquipment` | RVA `0x4561c0` | NULL goods → 0 (`0x4561cb-0x4561cd` → `0x456553`); gate `CanUpgraded` eax==0 → 0 (`0x4561d3-0x4561dc`); current = `(GAP 0x30, 1)`, current < 0 → 0 (signed `jl`, `0x4561e8-0x4561ef`); `increase = target >= current` (`0x4561fa-0x456204`); свежее current == target → ret 1 до мутаций (`0x456206-0x456217`); проходы по addon-вектору в index-порядке шагом `0x1c` (`0x456230`), jump-table `0x45655c` на gapType `0x30..0x49` — только диспетчеризация, порядок обхода задаёт сам вектор (`0x45621d-0x45627e`); 18 case зовут private `Upgrade` (`0x456285-0x45629d` и далее по телам), результат игнорируется; конец прохода: changed == 0 → ret 0 (`0x456516-0x45653f`), достигнутый target → ret 1 (`0x45651d-0x45653a`), иначе новый проход (`0x45652c` → `0x456220`) |
+| DIRECT-case `0x30` тела | `0x45648c` | У property по индексу addon-вектора ищется первое value с id == 1 (`0x456492-0x4564c6`, compare `0x4564b9: cmp dword ptr [eax], 1; je`) и его modifier меняется на ±1 обычным x86 wrapping без clamp (`0x4564d7: add …,+1` / `0x4564f7: add …,-1`); changed-флаг цикла взводится только при найденном value (`0x4564e4`/`0x4564ff`) |
+| jump-table (18 case-звеньев) | `0x45655c` | Пары source → destination gapType собраны из machine-байт таблицы; immediates взяты из push-последовательностей case-тел (`0x456285`-`0x45647a`); слоты `0x31..0x34` и `0x46..0x48` указывают на default `0x456507` (пропуск), как и всё вне `0x30..0x49` |
+
+## World: каталоги quest и script
+
+Реализация: `realm::content::quests` (порядок чтения и публикация; формат задан Shared `CQuestSystem`), `realm::content::scripts` (порядок-владелец Realm по `worldserver/game.cpp/.h`; проверенные ветви — [scripting.md](../gameplay/scripting.md)).
+
+| Точка | Адрес | Суть факта |
+| --- | --- | --- |
+| `CQuestSystem::Load` | RVA `0x67aa0` | Загрузка каталога заданий |
+| `CQuestSystem::Initialize` | RVA `0x68be0` | Инициализация каталога |
+| `LoadScriptFileData` / `LoadOneScript` / `GetScriptFileData` | RVA `0x14450` / `0x13440` / `0x132e0` | Триада script-loading WorldServer |
+
+## World: auction DB (CDbMisc)
+
+Реализация: `realm::persistence::dbmisc` (`OperatorType`, `TiberiusAuctionWriteOwner`, read-ветки). Та же пара WorldServer.
+
+Discriminant исходного `CDbMisc::OperatorType` по машинным записям: входная запись ModifyState A2B пишется константой `7` в обоих auction-диспетчерах (server-auction `0xA5857`, misc-auction `0xA52BF` — VERIFIED), входная `OT_IN_MODIFY_STATE_A2S` — `4`, входная `OT_IN_INSERT_NEW_ITEM` — `1`. Между `OT_OUT_MODIFY_STATE_A2S_OK` (5) и 7 у исходного MSVC-enum объявлен мёртвый член 6 без машинной записи значения; имя `OT_OUT_MODIFY_STATE_A2S_ERROR` — INFERRED по симметрии семьи (живой отказ A2S в `DoneListIn` публикует чужой `OT_OUT_INSERT_NEW_ITEM_ERROR`). Хвост enum: 10 = delete-item-успех (producer `0xF2B1D`, consumer → `DelItemFromDb` `0xF364E`), 13 = delete-item-back (consumer-ветвь `0xF36D7`; producer не наблюдается — имя INFERRED), 16 = read-auction-result (producers `0xF53D9`/`0xF1FC1`, consumer — ветвь idx14 bytemap `0xF2BF8`), 19 = modify-money (producer `0xF2B28`, consumer → `DelMoneyFromDb` `0xF375D`; поля note player/money подтверждены). Членов 11/12/14/15/17/18 машинная запись не знает — UNKNOWN и не объявляются. Фантомный член «read auction» (прежнее значение 10) удалён: машинного note-входа у этой операции нет (обработчик вызывается напрямую), значение 10 занято delete-item.
+
+Write-переходы по аргументам format strings машинного кода: `MondifyMoney(money, player_id)`, `BuyGoods(guid, buyer_id, buyer_name, buyer_id)`, `TransferMoney(seller_id, payout)`, `UpdateGoodsState(guid, state)`; первое удаление сохраняет самостоятельное соединение, четыре прочие команды используют `m_NormalCn`. Money-split по `0x4F1F3E`: note получает остаток сверх лимита, вложенный `CGoods` — ровно запрошенную порцию; странность наблюдаема через последующий `OT_IN_MODIFY_MONEY` и сохранена. В read `Auction/AuctionGoods` строка с новым GUID после достижения лимита записей не превращается в note (машинное условие `size <= limit`-формы); неположительный legacy-limit даёт пустую страницу после того же DB-запроса.
+
+## World: session factory — plug/unserialize границы
+
+Реализация: `realm::sessions::csessionfactory` (`unserialize_session`, доставка change-state, `serialize_team`). Та же пара WorldServer; статусы закрытия находок F1/F2/F3 — в [состоянии проекта](../status/audit.md).
+
+| Граница | Адрес | Суть факта |
+| --- | --- | --- |
+| F1: обрыв plug-цикла `CTeam::Unserialize` | тело `0x4DE103-0x4DE12B` | Отказ `UnserializePlug` валит весь unserialize: `test eax, eax; je` (`0x4DE10D-0x4DE10F`) = return 0 из virtual body; `UnserializeSession` разрушает созданную сессию deleting dtor + hash erase (`0x47C610-0x47C62F`); вставленные до отказа plug-и гибнут вместе с сессией; запись `team_id → session_id` карты `CGame` не откатывается (`Start`/`OnSessionStarted` выполнены до plug-цикла) — зомби-запись сохранена намеренно |
+| F2: доставка change-state | `CTeam::OnPlugChangeState` `0x4DE3C0`, `CSession::OnPlugChangeState` `0x4DD810` | Ветви state 0/1/2/6/8/9 применяют сеансовый `QueryPlugByID` (`0x4DD910`) + RTTI-guard; state 5 (`0x7FD0A` SetAllocationScheme) — исключение: ветвь `0x4DE417` довольствуется base-guard `0x4DE3F2` → базовым handler (только глобальный QueryPlug + IsPlugAvailable) и членства не требует — quirk leader_id-as-plug-id при числовом совпадении с чужим plug ID доставляет |
+| F3: serialize-граница arm `0x60008` | `0x4AB25A` | Результат virtual Serialize игнорируется (eax не тестируется): машина отправляет `0x7FD08` даже с частично заполненным буфером; через перенесённые потоки отказ недостижим (GC всегда идёт с unlink) — задокументированная граница у `serialize_team`, намеренно не чинится |

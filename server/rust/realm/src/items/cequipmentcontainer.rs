@@ -488,8 +488,8 @@ fn read_volume_u32(
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый вспомогательный код не получал длину источника. При коротком
- // буфере он выходил за его границы; Rust не воспроизводит это UB.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,
@@ -522,8 +522,8 @@ fn read_equipment_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый вспомогательный код не получал длину источника. При коротком
- // буфере он выходил за его границы; Rust не воспроизводит это UB.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(EquipmentContainerCodecError::UnexpectedEnd {
             field,
             offset,

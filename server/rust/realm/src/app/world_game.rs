@@ -3718,8 +3718,8 @@ impl CGame {
             .filter_map(|assignment| match assignment.region.as_ref() {
                 Some(region) => Some(region.base().get_id()),
                 None => {
- // Старый код разыменовывал повреждённый null pRegion. Такой
- // внутренний UB не является compatibility-поведением.
+                    // Старый код разыменовывал повреждённый null pRegion. Такой
+                    // внутренний UB не является compatibility-поведением.
                     skipped_null_region_owners += 1;
                     None
                 }
@@ -3867,7 +3867,7 @@ impl CGame {
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
         for player in self.players.values() {
- // lower-case-ит player-buffer раньше requested-buffer.
+            // lower-case-ит player-buffer раньше requested-buffer.
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
             let requested_name = copy_name_for_legacy_lowercase(name);
             if player_name == requested_name {
@@ -3882,7 +3882,7 @@ impl CGame {
         name: &[u8],
     ) -> Result<Option<&CPlayer>, WorldPlayerNameLookupError> {
         for (&player_id, player) in &self.players {
- // сохраняет обратный порядок двух ToStrlwr-вызовов.
+            // сохраняет обратный порядок двух ToStrlwr-вызовов.
             let requested_name = copy_name_for_legacy_lowercase(name);
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
             if player_name == requested_name && self.creation_players.contains(&(player_id as i32))
@@ -4096,9 +4096,9 @@ impl CGame {
         let player_id = signed_player_id as u32;
         if self.creation_players.contains(&signed_player_id) {
             add_log_text(WorldCreationPlayerAppendLog::Duplicate { player_id });
- // удаляет incoming до исходного UAF.
- // Box::drop сохраняет destruction; typed outcome запрещает caller-у
- // продолжить с уже уничтоженным non-owning alias.
+            // удаляет incoming до исходного UAF.
+            // Box::drop сохраняет destruction; typed outcome запрещает caller-у
+            // продолжить с уже уничтоженным non-owning alias.
             drop(incoming);
             return WorldCreationPlayerAppendOutcome::DuplicateReleased { player_id };
         }
@@ -4106,9 +4106,9 @@ impl CGame {
         self.creation_players.push_back(signed_player_id);
         if self.players.contains_key(&player_id) {
             add_log_text(WorldCreationPlayerAppendLog::ExistingMapOwner);
- // Original уже добавил list-ID, оставил старый map-owner и вернул
- // incoming pointer caller-у. Box выражает именно это непринятое
- // владение; дальнейшая судьба объекта принадлежит OnLogMessage.
+            // Original уже добавил list-ID, оставил старый map-owner и вернул
+            // incoming pointer caller-у. Box выражает именно это непринятое
+            // владение; дальнейшая судьба объекта принадлежит OnLogMessage.
             return WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept {
                 player_id,
                 incoming,
@@ -4427,8 +4427,8 @@ impl CGame {
         let mut skipped_null_owners = 0;
         for assignment in self.regions.values() {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
- // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
- // внутренний UB повреждённого состояния, а не wire-контракт.
+                // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
+                // внутренний UB повреждённого состояния, а не wire-контракт.
                 skipped_null_owners += 1;
                 continue;
             };
@@ -4634,9 +4634,9 @@ impl CGame {
     ) -> Result<(), WorldLocalMessageQueueBlock> {
         let message_type = message.message_type();
         let Some(net_server) = self.net_server.as_ref() else {
- // Исходный владелец безусловно разыменовывал
- // обязательный s_pNetServer. Safe Rust не подменяет этот путь
- // прямым вызовом handler-а и сохраняет границу FIFO.
+            // Исходный владелец безусловно разыменовывал
+            // обязательный s_pNetServer. Safe Rust не подменяет этот путь
+            // прямым вызовом handler-а и сохраняет границу FIFO.
             return Err(WorldLocalMessageQueueBlock { message_type });
         };
         net_server.publish_local_message(message);

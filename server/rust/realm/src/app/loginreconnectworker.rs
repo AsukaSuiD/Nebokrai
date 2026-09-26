@@ -170,7 +170,7 @@ impl WorldLoginReconnectSpec {
     /// World FIFO, где связанная обработка выполнит замену и control-send в
     /// исходной позиции `0x3FC03`.
     pub async fn reconnect_once(&self) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
- // держал новый CMyNetClient только в локальном pointer.
+        // держал новый CMyNetClient только в локальном pointer.
         let mut client = CMyNetClient::new();
         let socket = match bind_tcp_ipv4(None, 0) {
             Ok(socket) => socket,
@@ -182,8 +182,8 @@ impl WorldLoginReconnectSpec {
         let login_port = match self.login_port {
             Some(port) => port,
             None => {
- // Старый dwLoginPort здесь был
- // неинициализирован; неизвестное значение не выбираем.
+                // Старый dwLoginPort здесь был
+                // неинициализирован; неизвестное значение не выбираем.
                 let _legacy_result = client.close();
                 return Err(WorldLoginReconnectError::MissingSetupField("dwLoginPort"));
             }
@@ -204,9 +204,9 @@ impl WorldLoginReconnectSpec {
         let event_sender = match self.event_sender.as_ref() {
             Some(server) => server,
             None => {
- // Исходник после успешного connect
- // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
- // закрывает ещё не опубликованный owner и не имитирует UB.
+                // Исходник после успешного connect
+                // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
+                // закрывает ещё не опубликованный owner и не имитирует UB.
                 let _legacy_result = client.close();
                 return Err(WorldLoginReconnectError::MissingNetworkServerOwner);
             }

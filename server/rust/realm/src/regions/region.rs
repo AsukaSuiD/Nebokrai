@@ -348,9 +348,9 @@ impl CRegion {
         R: FnMut(i32) -> i32,
     {
         if self.width < 0 || self.height < 0 {
- // Исходный владелец передавал отрицательный размер в
- // `random(long)` и знаковую арифметику. Достижимость и
- // реакция старого helper-а для такого region-state не определены.
+            // Исходный владелец передавал отрицательный размер в
+            // `random(long)` и знаковую арифметику. Достижимость и
+            // реакция старого helper-а для такого region-state не определены.
             return Err(RegionRandomPositionBlock::InvalidRegionDimensions {
                 width: self.width,
                 height: self.height,
@@ -434,9 +434,9 @@ impl CRegion {
                 });
             }
 
- // Исходные signed операции при overflow дают
- // неопределённое C++-поведение; безопасный owner не назначает ему
- // wrap либо fail-closed результат без доказательства достижимости.
+            // Исходные signed операции при overflow дают
+            // неопределённое C++-поведение; безопасный owner не назначает ему
+            // wrap либо fail-closed результат без доказательства достижимости.
             left = checked_region_sub(left, 10, "left - 10")?;
             top = checked_region_sub(top, 10, "top - 10")?;
             span_x = checked_region_add(span_x, 20, "span_x + 20")?;
@@ -472,9 +472,9 @@ impl CRegion {
         self.switches.clear();
         let (Ok(width), Ok(height)) = (usize::try_from(self.width), usize::try_from(self.height))
         else {
- // Исходный владелец перемножал знаковые размеры с
- // переполнением и передавал результат allocator-у. Реакция CRT на
- // такой размер не задаёт безопасное серверное поведение.
+            // Исходный владелец перемножал знаковые размеры с
+            // переполнением и передавал результат allocator-у. Реакция CRT на
+            // такой размер не задаёт безопасное серверное поведение.
             return Err(RegionLoadError::InvalidDimensions {
                 width: self.width,
                 height: self.height,
@@ -544,8 +544,8 @@ fn read_region_bytes<'a>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Результат `CRFile::ReadData` игнорировался. Safe Rust не может
- // воспроизвести содержимое старого буфера после короткого чтения.
+        // Результат `CRFile::ReadData` игнорировался. Safe Rust не может
+        // воспроизвести содержимое старого буфера после короткого чтения.
         return Err(RegionLoadError::UnexpectedEnd {
             field,
             offset,

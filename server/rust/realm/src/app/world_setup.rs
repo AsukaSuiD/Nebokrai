@@ -130,7 +130,7 @@ impl WorldSetup {
         &self,
     ) -> Result<WorldNetworkConfig, WorldNetworkInitializationError> {
         Ok(WorldNetworkConfig {
- // Порядок чтения повторяет локальные значения.
+            // Порядок чтения повторяет локальные значения.
             ban_ip_time_ms: self.ban_ip_time_ms.ok_or(
                 WorldNetworkInitializationError::MissingSetupField("dwBanIPTime"),
             )?,
@@ -169,9 +169,9 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
- // Для лексически неверного числового или логического token
- // не определена мутация destination старым MSVC iostream.
- // Найденный setup содержит только корректные такие значения.
+                    // Для лексически неверного числового или логического token
+                    // не определена мутация destination старым MSVC iostream.
+                    // Найденный setup содержит только корректные такие значения.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -258,8 +258,8 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
- // Некорректный числовой или логический token не встречается
- // в найденном oracle; MSVC destination не угадываем.
+                    // Некорректный числовой или логический token не встречается
+                    // в найденном oracle; MSVC destination не угадываем.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -315,7 +315,7 @@ impl WorldSetup {
         read_number!(release_login_player_time_ms, u32);
         read_bool!(use_log_system);
 
- // Точный старый DAT-порядок: provider не назначается.
+        // Точный старый DAT-порядок: provider не назначается.
         read_bytes!(log_system_server);
         read_bytes!(log_system_database);
         read_bytes!(log_system_user);
@@ -420,8 +420,8 @@ impl<'a> WorldServerSetupTokens<'a> {
         let mut iterator = remaining.iter().copied();
         let found = read_to_marker(&mut iterator, expected);
         let consumed = remaining.len() - iterator.len();
- // Общий ReadTo возвращал false на успешно прочитанном `<end>`, не
- // переводя сам formatted stream в fail-state.
+        // Общий ReadTo возвращал false на успешно прочитанном `<end>`, не
+        // переводя сам formatted stream в fail-state.
         let stopped_at_end =
             !found && consumed != 0 && self.tokens[self.next + consumed - 1] == b"<end>";
         self.next += consumed;

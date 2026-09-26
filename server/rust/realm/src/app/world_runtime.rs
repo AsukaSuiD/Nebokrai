@@ -781,8 +781,8 @@ pub fn create_game<Game>(
     new_game: fn() -> Box<Game>,
 ) -> Result<WorldCreateGameReport, WorldCreateGameBlock> {
     if game.is_some() {
- // Повторный CreateGame перезаписывал бы global pointer и терял прежний
- // owner. Такой caller не определён, поэтому safe API не создаёт утечку.
+        // Повторный CreateGame перезаписывал бы global pointer и терял прежний
+        // owner. Такой caller не определён, поэтому safe API не создаёт утечку.
         return Err(WorldCreateGameBlock);
     }
     *game = Some(new_game());

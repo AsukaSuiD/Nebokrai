@@ -383,12 +383,12 @@ impl BaseObjectTreeNode {
 
 impl Drop for BaseObjectTreeNode {
     fn drop(&mut self) {
- // `CBaseObject::~CBaseObject` сперва удаляет children через
- // `DeleteAllChildObject(nullptr)`, затем освобождает base storage.
- // Клон list здесь играет его не-владеющий snapshot: до drop каждого
- // child все его equal entries убираются из parent-list. Повтор одного
- // оригинал pointer в original-е приводил бы к dangling delete; `Rc` оставляет
- // это внутреннее повреждение безопасным и освобождает alias один раз.
+        // `CBaseObject::~CBaseObject` сперва удаляет children через
+        // `DeleteAllChildObject(nullptr)`, затем освобождает base storage.
+        // Клон list здесь играет его не-владеющий snapshot: до drop каждого
+        // child все его equal entries убираются из parent-list. Повтор одного
+        // оригинал pointer в original-е приводил бы к dangling delete; `Rc` оставляет
+        // это внутреннее повреждение безопасным и освобождает alias один раз.
         let children = self.children.clone();
         for child in children {
             self.children
@@ -669,9 +669,9 @@ fn read_legacy_i32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Оригинал сначала сдвигал `long&`, затем читал
- // безразмерный pointer. Результат за концом источника неизвестен;
- // безопасный Rust не проходит через несуществующие байты.
+        // Оригинал сначала сдвигал `long&`, затем читал
+        // безразмерный pointer. Результат за концом источника неизвестен;
+        // безопасный Rust не проходит через несуществующие байты.
         return Err(BaseObjectDecodeError::UnexpectedEnd {
             field,
             offset,
@@ -690,10 +690,10 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
     loop {
         let offset = *cursor;
         let Some(byte) = source.get(offset).copied() else {
- // Вспомогательная функция World не знала длину
- // источника и продолжала чтение до NUL. Реакция при
- // отсутствующем terminator неизвестна, поэтому байт и cursor не
- // придумываются.
+            // Вспомогательная функция World не знала длину
+            // источника и продолжала чтение до NUL. Реакция при
+            // отсутствующем terminator неизвестна, поэтому байт и cursor не
+            // придумываются.
             return Err(BaseObjectDecodeError::UnexpectedEnd {
                 field: "m_strName",
                 offset,
@@ -704,9 +704,9 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
         *cursor = offset + 1;
 
         if name.len() == LEGACY_NAME_CAPACITY {
- // Вспомогательная функция уже потребила этот байт перед записью за
- // границей локального `char[256]`; достижимость и результат такого
- // повреждения stack не определены.
+            // Вспомогательная функция уже потребила этот байт перед записью за
+            // границей локального `char[256]`; достижимость и результат такого
+            // повреждения stack не определены.
             return Err(BaseObjectDecodeError::LegacyNameOverflow {
                 first_out_of_bounds_offset: offset,
             });

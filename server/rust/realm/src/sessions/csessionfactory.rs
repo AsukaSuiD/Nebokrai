@@ -508,17 +508,15 @@ impl CSessionFactory {
                     .collect()
             })
             .unwrap_or_default();
-        // Членство source в списке сессии моделирует сеансовый `QueryPlugByID`
-        // (`0x4DD910`) + RTTI-guard, которые `CTeam::OnPlugChangeState`
-        // (`0x4DE3C0`) применяет в ветвях state 0/1/2/6/8/9. State 5
-        // (`0x7FD0A`, SetAllocationScheme) — исключение: ветвь `0x4DE417`
-        // довольствуется base-guard `0x4DE3F2` → `CSession::OnPlugChangeState`
-        // (`0x4DD810`: только глобальный QueryPlug + IsPlugAvailable) и
-        // членства не требует, поэтому при числовом совпадении quirk-ового
-        // player leader ID с чужим plug ID машина доставляет; ниже guard
-        // global-exists + available сохраняется, exclusion по source map тоже.
-        // Машинное основание: точная пара `Nworldserver.exe` (`F3AC454D…`) +
-        // `WorldServer.pdb` (RSDS match).
+        // Членство source в списке сессии моделирует сеансовый QueryPlug +
+        // RTTI-guard, которые командный `OnPlugChangeState` применяет в ветвях
+        // state 0/1/2/6/8/9. State 5 (`0x7FD0A`, SetAllocationScheme) —
+        // исключение: его ветвь довольствуется base-guard (только глобальный
+        // QueryPlug + IsPlugAvailable) и членства не требует, поэтому при
+        // числовом совпадении quirk-ового player leader ID с чужим plug ID
+        // машина доставляет; ниже guard global-exists + available сохраняется,
+        // exclusion по source map тоже. Машинное основание —
+        // docs/reconstruction/realm-services.md.
         if state != 5 && !plug_ids.contains(&plug_id) {
             return;
         }
@@ -1033,19 +1031,16 @@ impl CSessionFactory {
                     }
                 };
                 if plug_id == 0 {
-                    // Машинный контракт (точная пара `Nworldserver.exe`
-                    // `F3AC454D…` + `WorldServer.pdb`): plug-цикл тела
-                    // `CTeam::Unserialize` (`0x4DE103-0x4DE12B`) при отказе
-                    // UnserializePlug — например чужой plug_type ≠ 5 — валит
-                    // весь unserialize: `test eax, eax; je` (`0x4DE10D-0x4DE10F`)
-                    // = return 0 из virtual body. UnserializeSession тогда
-                    // разрушает созданную сессию deleting dtor + hash erase
-                    // (`0x47C610-0x47C62F`) и возвращает 0; plug-и, вставленные
-                    // до отказа, погибают вместе с сессией. Запись
+                    // Машинный контракт plug-цикла `CTeam::Unserialize` при
+                    // отказе — например чужой plug_type ≠ 5 — валит весь
+                    // unserialize: virtual body возвращает 0, созданная
+                    // сессия разрушается removing-erase, а plug-и, вставленные
+                    // до отказа, погибают вместе с ней. Запись
                     // `team_id → session_id` в карте CGame НЕ откатывается:
                     // Start/OnSessionStarted выполнен до plug-цикла (здесь —
                     // дренирован выше), запись остаётся зомби навсегда.
-                    // Особенность оригинала, исправлять нельзя.
+                    // Особенность оригинала, исправлять нельзя. Машинное
+                    // основание — docs/reconstruction/realm-services.md.
                     let _ = self.garbage_collect(TYPE_SESSION, session_id);
                     return Ok(0);
                 }

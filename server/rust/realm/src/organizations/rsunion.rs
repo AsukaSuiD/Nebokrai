@@ -328,9 +328,9 @@ impl RsUnionOwner for TiberiusRsUnion {
         let mut records = Vec::with_capacity(rows.len());
         let mut reported_count = 0_i32;
         for row in &rows {
- // Счётчик увеличивается до чтения ID.
- // Saturation заменяет только недостижимое переполнение signed
- // `int`: старый overflow не является игровым контрактом.
+            // Счётчик увеличивается до чтения ID.
+            // Saturation заменяет только недостижимое переполнение signed
+            // `int`: старый overflow не является игровым контрактом.
             reported_count = reported_count.saturating_add(1);
             let union_id = match read_legacy_i32(row, "ID") {
                 Ok(value) => value,
@@ -369,8 +369,8 @@ impl RsUnionOwner for TiberiusRsUnion {
             return UnionSaveOutcome::ReturnedFalse;
         };
         let Some(snapshot) = snapshot else {
- // typed boundary: оригинал сразу загружает vtable из
- // CUnion*. Access violation не является исходным bool `false`.
+            // typed boundary: оригинал сразу загружает vtable из
+            // CUnion*. Access violation не является исходным bool `false`.
             return UnionSaveOutcome::BlockedMissingFact(UnionSaveBlock::NullUnionPointer);
         };
 
@@ -554,8 +554,8 @@ async fn load_confe_members(
     union_id: i32,
     notices: &mut VecDeque<RsUnionNotice>,
 ) -> Result<BTreeMap<i32, TagMemInfo>, UnionLoadReadError> {
- // Literal сохраняет исходный пробел перед signed `%d`; значение заведомо
- // вмещалось в `char[512]` старого owner-а.
+    // Literal сохраняет исходный пробел перед signed `%d`; значение заведомо
+    // вмещалось в `char[512]` старого owner-а.
     let sql = format!("SELECT * FROM CSL_UNION_Members WHERE UnionID= {union_id}");
     let rows = connection
         .simple_query(sql)
@@ -575,9 +575,9 @@ async fn load_confe_members(
         let name = match load_union_member_name(connection, faction_id).await {
             Ok(name) => name,
             Err(error) => {
- // Оригинал `LoadConfeMembers` не проверяет false
- // `GetUnionMemInfo`: его собственный PrintErr уже случился,
- // current member не вставляется, следующий record читается.
+                // Оригинал `LoadConfeMembers` не проверяет false
+                // `GetUnionMemInfo`: его собственный PrintErr уже случился,
+                // current member не вставляется, следующий record читается.
                 notices.push_back(RsUnionNotice {
                     operation: RsUnionOperation::LoadUnionMemberInfo,
                     error: error.into(),
@@ -597,7 +597,7 @@ async fn load_confe_members(
             member_time,
             contribute,
         );
- // `map::operator[]` перезаписывал duplicate key последней строкой.
+        // `map::operator[]` перезаписывал duplicate key последней строкой.
         members.insert(faction_id, member);
     }
     Ok(members)
@@ -656,7 +656,7 @@ fn copy_legacy_short_field<const CAPACITY: usize>(source: &[u8]) -> [u8; CAPACIT
         .position(|byte| *byte == 0)
         .map_or(source, |end| &source[..end]);
     let mut output = [0; CAPACITY];
- // Оригинал сравнивал длину с 0x15, хотя destination Title/Name больше.
+    // Оригинал сравнивал длину с 0x15, хотя destination Title/Name больше.
     if visible.len() < 0x15 && visible.len() < CAPACITY {
         output[..visible.len()].copy_from_slice(visible);
     }
@@ -709,8 +709,8 @@ fn build_union_member_insert(
         .as_bytes(),
     );
 
- // При 63 title bytes, любых i32 и завершающем NUL оригинал format требует не
- // более 480 байт старого `char[500]`; отдельной runtime-границы здесь нет.
+    // При 63 title bytes, любых i32 и завершающем NUL оригинал format требует не
+    // более 480 байт старого `char[500]`; отдельной runtime-границы здесь нет.
     debug_assert!(sql.len() < UNION_MEMBER_INSERT_CAPACITY);
     Ok(sql)
 }

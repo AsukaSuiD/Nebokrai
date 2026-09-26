@@ -1,9 +1,5 @@
 //! Worker-вход `SaveThreadFunc` и RAII/trigger seam сохранения.
-//! Источник контракта — та же точная пара, что у
-//! [`crate::persistence::savedb`] (`.exe/Nworldserver.exe` +
-//! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
-//! `server/rust/src/manifest/_worldserver_export_manifest.toml`; S_PUB32
-//! `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30`).
+//! Источник контракта — та же точная пара, что у [`crate::persistence::savedb`].
 //!
 //! Body выполняет start-лог, полный [`do_save_data_lifecycle`] через
 //! [`WorldDbDataSaveSession`], точку исходных `CoUninitialize`/unlock и end-лог
@@ -213,8 +209,8 @@ where
         disposition => disposition,
     };
 
- // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
- // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
+    // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
+    // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
     let login_sender = guard.save.login_sender.as_deref();
     let lifecycle = {
         let mut session = WorldDbDataSaveSession {
@@ -266,7 +262,7 @@ where
         };
     }
 
- // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
+    // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
     guard.release();
     release_serialization();
     let end_log = match log_sink.publish(&save_thread_log_event(b"SaveThread end...")) {

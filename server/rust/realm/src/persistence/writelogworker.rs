@@ -732,9 +732,9 @@ pub async fn execute_world_write_log_command(
             Ok(())
         }
         WorldWriteLogCommand::AuctionNoticeSql(sql) => {
- // `CollectNoNotice` кладёт в общий FIFO уже собранный точный
- // UPDATE. Строка создаётся только owner-ом из CGuid/opttype, а
- // worker сохраняет его отдельный порядок и failure contract.
+            // `CollectNoNotice` кладёт в общий FIFO уже собранный точный
+            // UPDATE. Строка создаётся только owner-ом из CGuid/opttype, а
+            // worker сохраняет его отдельный порядок и failure contract.
             Query::new(sql.as_str()).execute(connection).await?;
             Ok(())
         }
@@ -806,7 +806,7 @@ pub async fn execute_world_write_log_command(
                     query.bind(write.second_player_id);
                     query.bind(decode_legacy_text(&write.second_player_name));
                     query.bind(*map_id);
- // `_sprintf` передавал последний long для обеих координат.
+                    // `_sprintf` передавал последний long для обеих координат.
                     query.bind(*position_y);
                     query.bind(*position_y);
                     query.bind(i32::from(*log_type));
@@ -969,9 +969,9 @@ pub async fn execute_world_write_log_command(
             Ok(())
         }
         WorldWriteLogCommand::LegacyEmptyChatSql { log_type: _ } => {
- // jump-table ставил очищенный `_Dest` в FIFO; ExecuteCn затем
- // исполнял именно пустую строку. Query сохраняет тот же DB-запрос,
- // оставляя transport-specific success/failure самому SQL Server.
+            // jump-table ставил очищенный `_Dest` в FIFO; ExecuteCn затем
+            // исполнял именно пустую строку. Query сохраняет тот же DB-запрос,
+            // оставляя transport-specific success/failure самому SQL Server.
             Query::new("").execute(connection).await?;
             Ok(())
         }

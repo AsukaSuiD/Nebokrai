@@ -1697,9 +1697,9 @@ impl CUnion {
             ));
         }
 
- // caller передаёт сюда faction ID, хотя validation owner
- // интерпретирует аргумент как master-player ID. Наблюдаемый gate
- // сохраняется без подмены исходным player ID ingress-а.
+        // caller передаёт сюда faction ID, хотя validation owner
+        // интерпретирует аргумент как master-player ID. Наблюдаемый gate
+        // сохраняется без подмены исходным player ID ingress-а.
         let permitted = self
             .check_operator_validate(inviter_faction_id, EPurview::ConMem as i32, context)
             .map_err(UnionInviteBlock::Operator)?;
@@ -1936,10 +1936,8 @@ impl CUnion {
         let information = legacy_c_string_visible_bytes(&information);
         let information_title = effects.world_string(b"WS0188");
         let information_title = legacy_c_string_visible_bytes(&information_title);
- // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
- // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
- // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
- // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
+        // Цвет кадра `0x7F804` всегда `0xFFDAEDFE`: аргумент K мёртв в обоих
+        // классах. Машинное основание — docs/reconstruction/realm-services.md.
         let member_information = self.send_info_to_all_members(
             information,
             information_title,
@@ -2120,8 +2118,8 @@ impl CUnion {
                 },
             ));
         }
- // сравнивает player ID с faction ID. Разные домены здесь
- // намеренно не "исправляются": результат наблюдаем клиентом.
+        // сравнивает player ID с faction ID. Разные домены здесь
+        // намеренно не "исправляются": результат наблюдаем клиентом.
         if old_master_player_id == new_master_faction_id {
             return Ok(UnionDemiseOutcome::Rejected(
                 UnionDemiseRejection::LegacyIdentifiersEqual,
@@ -2207,9 +2205,9 @@ impl CUnion {
             ));
         }
 
- // `IsMaster(old)` не гарантирует наличие повреждённого master-key в
- // map. Старый operator[] тогда создавал частично неинициализированный
- // tagMemInfo; safe owner останавливает этот внутренний UB.
+        // `IsMaster(old)` не гарантирует наличие повреждённого master-key в
+        // map. Старый operator[] тогда создавал частично неинициализированный
+        // tagMemInfo; safe owner останавливает этот внутренний UB.
         let Some(old_member) = self.members.get(&old_faction_id) else {
             return Ok(UnionDemiseOutcome::Rejected(
                 UnionDemiseRejection::OldMemberNotFound { old_faction_id },
@@ -2341,10 +2339,8 @@ impl CUnion {
         );
         let information = legacy_c_string_visible_bytes(&information);
         let title = effects.world_string(b"WS0188");
- // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
- // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
- // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
- // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
+        // Цвет кадра `0x7F804` всегда `0xFFDAEDFE`: аргумент K мёртв в обоих
+        // классах. Машинное основание — docs/reconstruction/realm-services.md.
         let member_information = self.send_info_to_all_members(
             information,
             legacy_c_string_visible_bytes(&title),
@@ -2355,8 +2351,8 @@ impl CUnion {
         );
         let player_refresh = self.update_player_faction_info(0, context, update_player);
 
- // EXE после player refresh дважды повторяет nullable faction lookup.
- // После назначения master оба lookup относятся к одной new faction.
+        // EXE после player refresh дважды повторяет nullable faction lookup.
+        // После назначения master оба lookup относятся к одной new faction.
         let war_log = if context.faction_name(new_master_faction_id).is_some()
             && context.faction_name(self.master_id).is_some()
         {
@@ -2469,10 +2465,8 @@ impl CUnion {
             ],
         );
         let title = effects.world_string(b"WS0188");
- // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
- // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
- // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
- // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
+        // Цвет кадра `0x7F804` всегда `0xFFDAEDFE`: аргумент K мёртв в обоих
+        // классах. Машинное основание — docs/reconstruction/realm-services.md.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),
@@ -2604,7 +2598,7 @@ impl CUnion {
             ));
         }
 
- // Оригинал повторно вызывал IsFactionMaster после validation.
+        // Оригинал повторно вызывал IsFactionMaster после validation.
         let leaving_faction_id = context
             .faction_id_by_master_player(player_id)
             .map_err(UnionExitBlock::MasterLookup)?;
@@ -2628,10 +2622,8 @@ impl CUnion {
             &[UnionFormatArgument::Text(&leaving_name)],
         );
         let title = effects.world_string(b"WS0188");
- // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
- // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
- // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
- // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
+        // Цвет кадра `0x7F804` всегда `0xFFDAEDFE`: аргумент K мёртв в обоих
+        // классах. Машинное основание — docs/reconstruction/realm-services.md.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),
@@ -2757,10 +2749,8 @@ impl CUnion {
             ))],
         );
         let title = effects.world_string(b"WS0188");
- // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
- // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
- // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
- // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
+        // Цвет кадра `0x7F804` всегда `0xFFDAEDFE`: аргумент K мёртв в обоих
+        // классах. Машинное основание — docs/reconstruction/realm-services.md.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),

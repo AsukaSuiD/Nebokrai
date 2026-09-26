@@ -765,9 +765,9 @@ impl CJJcSystem {
                 {
                     self.queue.remove(&candidate_id);
                     removed_unroutable_players.push(candidate_id);
- // `GetOneOpponent` увеличивал iterator до erase, затем
- // запускал общий increment loop-а. Сохраняем наблюдаемый
- // пропуск successor без alias на удалённую BTreeMap entry.
+                    // `GetOneOpponent` увеличивал iterator до erase, затем
+                    // запускал общий increment loop-а. Сохраняем наблюдаемый
+                    // пропуск successor без alias на удалённую BTreeMap entry.
                     candidate_index += 2;
                     continue;
                 }

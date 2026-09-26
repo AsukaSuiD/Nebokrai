@@ -1065,9 +1065,9 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
             ],
         );
         let visible = legacy_c_string_prefix(&formatted);
- // Нормальный output сохраняется byte-; переполнение старого
- // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
- // оставляет место под C-string NUL вместо чтения за stack-buffer.
+        // Нормальный output сохраняется byte-; переполнение старого
+        // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
+        // оставляет место под C-string NUL вместо чтения за stack-buffer.
         Ok(visible[..visible.len().min(0xff)].to_vec())
     }
 
@@ -4107,8 +4107,8 @@ impl UnionApplyForJoinEffects for WorldUnionApplicationEffects<'_> {
         &mut self,
         request: UnionApplicationSessionRequest,
     ) -> Result<Self::SessionReport, Self::SessionBlock> {
- // `Beging` вызывает `DoAsyncCall` синхронно; route и клонируемый
- // transport handle снимаются непосредственно перед session creation.
+        // `Beging` вызывает `DoAsyncCall` синхронно; route и клонируемый
+        // transport handle снимаются непосредственно перед session creation.
         let game_server_id = self
             .game
             .game_server_number_by_player_id(request.recipient_player_id);

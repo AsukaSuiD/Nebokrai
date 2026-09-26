@@ -921,8 +921,8 @@ fn finish_chat_log(
         return WorldOtherChatLogOutcome::Disabled;
     }
 
- // `_sprintf` вычислял Y до X; первая невозможная x87-конверсия
- // остаётся наблюдаемой typed safe-границей в том же порядке.
+    // `_sprintf` вычислял Y до X; первая невозможная x87-конверсия
+    // остаётся наблюдаемой typed safe-границей в том же порядке.
     let position_y = match sender.get_tile_y() {
         Ok(value) => value,
         Err(source) => {

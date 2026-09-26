@@ -310,9 +310,9 @@ impl CWorldCityRegion {
         if state != ECityState::Fight && state != ECityState::Mass {
             return Ok(());
         }
- // Исходный владелец разыменовывает `pPlayer` без
- // проверки только в активном состоянии; достижимая реакция null
- // неизвестна.
+        // Исходный владелец разыменовывает `pPlayer` без
+        // проверки только в активном состоянии; достижимая реакция null
+        // неизвестна.
         let player = player.ok_or(WorldCityRegionEnterBlock::ActiveStateMissingPlayer)?;
         let mut tile_x = player
             .get_tile_x()
@@ -351,8 +351,8 @@ impl CWorldCityRegion {
                     .base()
                     .get_return_point(Some(&*player), country_param)
                     .map_err(WorldCityRegionEnterBlock::BaseReturnPoint)?;
- // оставляет оба span-регистра нулевыми в attacker
- // branch; это наблюдаемая странность, а не сокращение RECT.
+                // оставляет оба span-регистра нулевыми в attacker
+                // branch; это наблюдаемая странность, а не сокращение RECT.
                 (point.region_id, point.left, point.top, 0, 0)
             };
 

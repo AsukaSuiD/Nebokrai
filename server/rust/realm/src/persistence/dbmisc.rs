@@ -49,32 +49,16 @@ const LOAD_AUCTION_LIMIT: i32 = 100_000;
 
 /// Внутренний discriminant исходного `CDbMisc::OperatorType`.
 ///
-/// Значения зафиксированы по машинным записям `Nworldserver.exe`: входная
-/// запись ModifyState A2B пишется константой `7` в обоих auction-диспетчерах
-/// (RVA `0xA5857` — server-auction, RVA `0xA52BF` — misc-auction), входная
-/// `OT_IN_MODIFY_STATE_A2S` — `4`, входная `OT_IN_INSERT_NEW_ITEM` — `1`
-/// (VERIFIED досверкой диспетчеров той же точной пары). При последовательной
-/// семантике MSVC-enum между `OT_OUT_MODIFY_STATE_A2S_OK` (5) и
-/// `OT_IN_MODIFY_STATE_A2B` (7) у исходного enum объявлен член 6, которому ни
-/// одна машинная запись значения не известна. Имя — INFERRED по симметрии
-/// семьи (`OT_OUT_MODIFY_STATE_A2S_ERROR` между двумя triad-группами
-/// INSERT 1..3 и A2B 7..9): живой отказ A2S в `DoneListIn` вместо него
+/// Между `OT_OUT_MODIFY_STATE_A2S_OK` (5) и `OT_IN_MODIFY_STATE_A2B` (7) у
+/// исходного enum объявлен мёртвый член 6: живой отказ A2S в `DoneListIn`
 /// публикует чужой `OT_OUT_INSERT_NEW_ITEM_ERROR` (ветка ниже в этом файле),
-/// поэтому член 6 — мёртвый объявленный discriminant без наблюдаемой записи.
-/// Хвост enum (после машинной точки 7) снят досверкой писателей и потребителей
-/// `Nworldserver.exe` той же точной пары: 10 = delete-item-успех (producer RVA
-/// `0xF2B1D`, consumer → DelItemFromDb `0xF364E`), 13 = delete-item-back
-/// (consumer-ветвь `0xF36D7`; producer не наблюдается — имя INFERRED), 16 =
-/// read-auction-result (producers `0xF53D9`/`0xF1FC1`, consumer — ветвь idx14
-/// bytemap `0xF2BF8`), 19 = modify-money (producer `0xF2B28`, consumer →
-/// DelMoneyFromDb `0xF375D`; поля note player/money подтверждены). Членов
-/// 11/12/14/15/17/18 машинная запись не знает — UNKNOWN и не объявляются.
-/// Фантомный член «read auction» (прежнее значение 10) удалён: машинного
-/// note-входа у этой операции нет (обработчик вызывается напрямую), живых
-/// write-site в Rust не было; значение 10 занято delete-item.
+/// поэтому член 6 не имеет наблюдаемой записи. Фантомный член «read auction»
+/// не объявляется: у этой операции нет note-входа (обработчик вызывается
+/// напрямую), а значение 10 занято delete-item.
 ///
 /// Число не выходит в wire и здесь намеренно не переиспользуется как protocol
 /// ID: наблюдаемым контрактом являются названные переходы между очередями.
+/// Машинные точки и статусы имён — docs/reconstruction/realm-services.md.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorType {
@@ -84,19 +68,19 @@ pub enum OperatorType {
     OT_OUT_INSERT_NEW_ITEM_ERROR = 3,
     OT_IN_MODIFY_STATE_A2S = 4,
     OT_OUT_MODIFY_STATE_A2S_OK = 5,
- /// Мёртвый член 6 исходного enum; имя — INFERRED (см. doc enum выше).
+    /// Мёртвый член 6 исходного enum; имя восстановлено по симметрии семьи.
     OT_OUT_MODIFY_STATE_A2S_ERROR = 6,
- /// Машинная точка 7 исходного enum: RVA `0xA5857`/`0xA52BF` (VERIFIED).
+    /// Машинно подтверждённая точка исходного enum.
     OT_IN_MODIFY_STATE_A2B = 7,
     OT_OUT_MODIFY_STATE_A2B_OK = 8,
     OT_OUT_MODIFY_STATE_A2B_ERROR = 9,
- /// Машинная точка 10: producer RVA `0xF2B1D`; consumer → DelItemFromDb `0xF364E`.
+    /// Машинно подтверждённая точка исходного enum.
     OT_IN_DELETE_ITEM_SUCESS = 10,
- /// Число 13 MATCH (consumer-ветвь `0xF36D7`); имя — INFERRED (producer не наблюдается).
+    /// Число машинно совпадает; имя восстановлено (producer не наблюдается).
     OT_IN_DELETE_ITEM_BACK = 13,
- /// Машинная точка 16: producers `0xF53D9`/`0xF1FC1`; consumer — ветвь bytemap `0xF2BF8`.
+    /// Машинно подтверждённая точка исходного enum.
     OT_OUT_READ_AUCTION_RESULT = 16,
- /// Машинная точка 19: producer `0xF2B28`; consumer → DelMoneyFromDb `0xF375D`.
+    /// Машинно подтверждённая точка исходного enum.
     OT_IN_MODIFY_MONEY = 19,
 }
 
@@ -339,7 +323,7 @@ impl CDbMisc {
                     note.e_type = if succeeded {
                         OperatorType::OT_OUT_MODIFY_STATE_A2S_OK
                     } else {
- // World действительно использует чужой
+                    // World действительно использует чужой
                     // ветку ошибки INSERT: собственный член 6
                     // (`OT_OUT_MODIFY_STATE_A2S_ERROR`) при этом объявлен
                     // в исходном enum, но нигде не записывается (см. doc enum).
@@ -368,7 +352,7 @@ impl CDbMisc {
                     report.modified_money += 1;
                 }
                 _ => {
- // Неизвестный discriminant сразу переходит к общей итерации.
+                    // Неизвестный discriminant сразу переходит к общей итерации.
                     report.unhandled_notes += 1;
                 }
             }
@@ -765,14 +749,11 @@ impl AuctionWriteOutcome {
 
 /// Linux/TDS-владелец пяти точных DB-переходов записи `CDbMisc`.
 ///
-/// Проверка машинного кода World EXE фиксирует аргументы format strings:
-/// `MondifyMoney(money, player_id)` в..,
-/// `BuyGoods(guid, buyer_id, buyer_name, buyer_id)` в
-///.., `TransferMoney(seller_id, payout)` в
-///.. и `UpdateGoodsState(guid, state)` в
-///... Первое удаление сохраняет самостоятельное
-/// соединение..; четыре прочие команды используют
-/// `m_NormalCn`. Параметризованный TDS заменяет только небезопасный `_sprintf` и
+/// Аргументы исходных format strings: `MondifyMoney(money, player_id)`,
+/// `BuyGoods(guid, buyer_id, buyer_name, buyer_id)`, `TransferMoney(seller_id,
+/// payout)` и `UpdateGoodsState(guid, state)`; исходное удаление использовало
+/// самостоятельное соединение, четыре прочие команды — общее `m_NormalCn`.
+/// Параметризованный TDS заменяет только небезопасный `_sprintf` и
 /// не объединяет последовательные BuyGoods/TransferMoney в транзакцию.
 pub struct TiberiusAuctionWriteOwner {
     settings: WorldDatabaseSettings,
@@ -1413,9 +1394,10 @@ impl TiberiusAuctionGoodsReader {
             };
 
             if !pending.contains_key(&record.guid) {
-                // `if (param_3 <= map._Mysize) break`: строка с новым GUID не
-                // превращается в note после достижения лимита. Неположительный
-                // legacy-limit даёт пустую страницу после того же DB-запроса.
+                // Строка с новым GUID не превращается в note после достижения
+                // лимита: машинное условие сравнивает limit с текущим размером
+                // map. Неположительный legacy-limit даёт пустую страницу после
+                // того же DB-запроса.
                 if limit <= i32::try_from(pending.len()).unwrap_or(i32::MAX) {
                     break;
                 }
@@ -1555,16 +1537,17 @@ impl TiberiusAuctionGoodsReader {
                 }
             };
 
- // В оригинал EXE `CreateGoods` расположен перед `dwmoney != 0`.
+            // В исходном теле `CreateGoods` расположен перед проверкой `dwmoney != 0`.
             let created_goods = create_goods(registry, gold_coin_index, random);
             if let Some(mut goods) = created_goods
                 && money != 0
             {
                 let limit_as_u64 = (money_limit as i64) as u64;
                 let (note_amount, goods_amount) = if limit_as_u64 < money {
- // 004F1F3E: note получает остаток, а вложенный CGoods —
- // именно запрошенную порцию. Эта странность наблюдаема
- // через последующий `OT_IN_MODIFY_MONEY` и сохранена.
+                    // Машинная точка `0x4F1F3E`: note получает остаток, а
+                    // вложенный CGoods — ровно запрошенную порцию. Странность
+                    // наблюдаема через последующий `OT_IN_MODIFY_MONEY` и
+                    // сохранена.
                     (money.wrapping_sub(limit_as_u64) as i32, money_limit as u32)
                 } else {
                     (0, money as u32)

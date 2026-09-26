@@ -26,15 +26,14 @@
 //! `varchar(200)` и output `int @Result`, не меняя доказанный безусловный
 //! `false` вызывающего `CGame::ExecuteProce`.
 //!
-//! `LoginDB.bak` подтверждает `csl_cdkey`, `ip_allow`, `ip_forbid`, `ip_list`
-//! и их типы, но ни он, ни `Account.bak` не содержат `userinfo`: контракт двух
-//! account-функций подтверждён EXE/PDB, а их DB-schema — UNKNOWN (длина/тип
-//! `userid`, `originsdid`, `passwd` не утверждаются, собственная таблица не
-//! создаётся). Во всех backup-наборах строки `matrix_card image` — `NULL`;
-//! `sp_bindCdkey` принимает blob любой ненулевой длины, а оригинал не проверял
-//! индекс перед чтением `SAFEARRAY`: для покрывающего три позиции blob
-//! сохраняется исходный `bool`, выход за длину — явно неразрешённая граница
-//! без `unsafe`.
+//! Backup-подтверждённые таблицы — `csl_cdkey`, `ip_allow`, `ip_forbid`,
+//! `ip_list`; `userinfo` среди них нет: контракт двух account-функций
+//! подтверждён EXE/PDB, а их DB-schema — UNKNOWN (длина/тип `userid`,
+//! `originsdid`, `passwd` не утверждаются, собственная таблица не создаётся).
+//! `sp_bindCdkey` принимает blob любой ненулевой длины, а оригинал не
+//! проверял индекс перед чтением `SAFEARRAY`: для покрывающего три позиции
+//! blob сохраняется исходный `bool`, выход за длину — явно неразрешённая
+//! граница без `unsafe`.
 //!
 //! Техническая функция `connect_login_database` переиспользуется соседним
 //! `game.cpp::UpdateOnlineUser2DB`; её SQL и порядок остаются в том owner-файле.

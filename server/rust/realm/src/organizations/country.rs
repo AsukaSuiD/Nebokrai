@@ -1505,8 +1505,8 @@ impl CCountry {
         let initial_log = legacy_country_text(initial_log);
         context.put_king_log(&initial_log);
 
- // проверка multimap traversal: level по убыванию, равные ключи в
- // обратном порядке исходного online-list.
+        // проверка multimap traversal: level по убыванию, равные ключи в
+        // обратном порядке исходного online-list.
         sorted_players.sort_by(|(left_index, left), (right_index, right)| {
             right
                 .level
@@ -1860,7 +1860,7 @@ impl CCountry {
             ));
         };
         if !self.demise_faction && !faction.owned_cities.is_empty() {
- // В EXE сюда ошибочно передаётся player ID короля, а не faction ID.
+            // В EXE сюда ошибочно передаётся player ID короля, а не faction ID.
             let old_king_union = context
                 .union_id_for_faction(self.king.id)
                 .map_err(DemiseTargetBlock::Context)?;
@@ -3320,7 +3320,7 @@ impl CCountry {
             };
         }
 
- // EXE вычисляет маршрут короля до чтения country-параметров.
+        // EXE вычисляет маршрут короля до чтения country-параметров.
         let king_map_id = context.game_server_number_by_player_id(self.king.id);
         let Some(control_point_cost) = parameters.exile_control_point_cost() else {
             return CountrySuccessExiledReport {
@@ -3385,8 +3385,8 @@ impl CCountry {
             };
         };
 
- // Исходный timeGetTime здесь вызывался, но результат не сохранялся и
- // `ExileMap` не менялся. Чисто технический пустой вызов Rust не имитирует.
+        // Исходный timeGetTime здесь вызывался, но результат не сохранялся и
+        // `ExileMap` не менялся. Чисто технический пустой вызов Rust не имитирует.
         let previous_exile_count = self.exile_count;
         self.exile_count = self.exile_count.wrapping_add(1);
         let country_name = context.country_name(self.country_id);
@@ -3765,8 +3765,8 @@ impl CCountry {
             cloned_ministers.remove(&id_type)
         });
 
- // CloneCountryData копировал это поле, хотя единственный следующий
- // consumer CDBCountry::Save его не читал.
+        // CloneCountryData копировал это поле, хотя единственный следующий
+        // consumer CDBCountry::Save его не читал.
         let _tech_level_up_exp = self.tech_level_up_exp;
 
         CountrySaveSnapshot {
@@ -3801,8 +3801,8 @@ fn legacy_country_text(mut text: Vec<u8>) -> Vec<u8> {
     if let Some(terminator) = text.iter().position(|byte| *byte == 0) {
         text.truncate(terminator);
     }
- // Старый `_sprintf` писал в `char[260]`; переполнение и последующий
- // overread были внутренним UB, а не Miracle wire-контрактом.
+    // Старый `_sprintf` писал в `char[260]`; переполнение и последующий
+    // overread были внутренним UB, а не Miracle wire-контрактом.
     text.truncate(259);
     text
 }

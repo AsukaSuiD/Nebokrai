@@ -297,14 +297,14 @@ where
                 });
                 Ok(0)
             } else if action.reload_profile == b"Broadcast" {
- // DIFF-5 (машинная досверка той же точной пары): при отсутствии
- // `setup/sysboardcast.ini` оригинал формирует
- // "file '%s' can't found!" и показывает MessageBox, после чего
- // возвращает 0 без записи в conf-log. Этот MessageBox — единственный
- // UI-side-effect ветки, без wire/DB-эффекта, поэтому в headless-сервисе
- // он осознанно не воспроизводится (ни диалогом, ни operator-notice).
- // При наличии файла оригинал пишет `Load System Broadcast List...OK!`,
- // result остаётся 0 в обеих ветвях.
+                // DIFF-5 (машинная досверка той же точной пары): при отсутствии
+                // `setup/sysboardcast.ini` оригинал формирует
+                // "file '%s' can't found!" и показывает MessageBox, после чего
+                // возвращает 0 без записи в conf-log. Этот MessageBox — единственный
+                // UI-side-effect ветки, без wire/DB-эффекта, поэтому в headless-сервисе
+                // он осознанно не воспроизводится (ни диалогом, ни operator-notice).
+                // При наличии файла оригинал пишет `Load System Broadcast List...OK!`,
+                // result остаётся 0 в обеих ветвях.
                 let Some(source) = context.read_resource(b"setup/sysboardcast.ini") else {
                     events.push(WorldReloadProfileEvent {
                         half: action.half,
@@ -691,9 +691,9 @@ impl CGame {
         context.add_log_text(&log);
 
         let Some(data) = self.get_script_file_data(path).map(legacy_c_string_prefix) else {
- // Исходный владелец передаёт исходный path в
- // `GetScriptFileData` после того, как `LoadOneScript` нормализовал
- // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
+            // Исходный владелец передаёт исходный path в
+            // `GetScriptFileData` после того, как `LoadOneScript` нормализовал
+            // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
             return Err(WorldReloadOneScriptBlock {
                 requested_path: path.to_vec(),
                 normalized_map_key: normalize_script_path(path),
@@ -764,7 +764,7 @@ impl CGame {
                 Ok(WorldRegionMaterialization::Direct {
                     owner: WorldRegionOwner::Village(region),
                     counts,
- // игнорирует base-result и возвращает `1`.
+                    // игнорирует base-result и возвращает `1`.
                     loaded: true,
                 })
             }
@@ -893,8 +893,8 @@ impl CGame {
             context.add_log_text(&log);
             previous_monsters = total_monster_count;
             previous_npcs = total_npc_count;
- // содержит 549 записей и 549 уникальных ID; поэтому Rust Drop
- // заменённого Box не достигается в baseline и не подменяет утечку.
+            // содержит 549 записей и 549 уникальных ID; поэтому Rust Drop
+            // заменённого Box не достигается в baseline и не подменяет утечку.
             self.regions.insert(
                 region_id,
                 WorldRegionAssignment {
@@ -1096,8 +1096,8 @@ impl CGame {
             }
             Err(source) => return Err(WorldReloadBlock::TimeToReturnLoad(source)),
         }
- // и caller:
- // missing-файл тоже даёт bool `1`, который становится ReLoad result.
+        // и caller:
+        // missing-файл тоже даёт bool `1`, который становится ReLoad result.
         context.add_log_text(b"Load TimeToReturn...OK!");
         Ok(1)
     }
@@ -1185,8 +1185,8 @@ impl CGame {
             update_player,
         ) {
             Ok(_) => {}
- // `CAttackCitySys::Reload` буквально возвращает Initialize bool.
- // Ошибка parse/open представляет его ложный результат, не block.
+            // `CAttackCitySys::Reload` буквально возвращает Initialize bool.
+            // Ошибка parse/open представляет его ложный результат, не block.
             Err(AttackCityReloadBlock::Load(_)) => return Ok(0),
             Err(block) => return Err(WorldReloadBlock::AttackCity(block)),
         };
@@ -1506,8 +1506,8 @@ impl CGame {
                 const EXPERIENCE_PATH: &[u8] = b"data/playerExp.ini";
                 const UPGRADES_PATH: &[u8] = b"data/playerPropertiesUpgrade.ini";
 
- // `LoadPlayerList` открывает второй файл только после успешного
- // первого. Каждая missing-file ветвь сохраняет clear scope.
+                // `LoadPlayerList` открывает второй файл только после успешного
+                // первого. Каждая missing-file ветвь сохраняет clear scope.
                 let player = match context.read_resource(PLAYER_LIST_PATH) {
                     Some(source) => {
                         context
@@ -2298,7 +2298,7 @@ impl CGame {
             WorldReloadProfile::PreciousBox => {
                 const PATH: &[u8] = b"data/preciousboxconf.xml";
                 let source = context.read_resource(PATH);
- // Убираем Rust-only mutable aliasing, не создавая копию owner state.
+                // Убираем Rust-only mutable aliasing, не создавая копию owner state.
                 let mut owner = std::mem::take(context.precious_box_conf());
                 let load_result = owner.load_from_bytes(source.as_deref(), |original_name| {
                     context.query_goods_id_by_original_name(original_name)
@@ -2469,13 +2469,13 @@ impl CGame {
             }
             WorldReloadProfile::Synthesis => {
                 const PATH: &[u8] = b"data/synthesis.xml";
- // EXE очищает recipe-vector до rfOpen, но broadcast-map остаётся static.
+                // EXE очищает recipe-vector до rfOpen, но broadcast-map остаётся static.
                 context.synthesis().clear_recipes();
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
- // На время goods lookup owner извлечён безопасно: lookup идёт в
- // тот же `WorldReloadContext`, а после точного loader-а state
- // возвращается в его единственный runtime slot.
+                        // На время goods lookup owner извлечён безопасно: lookup идёт в
+                        // тот же `WorldReloadContext`, а после точного loader-а state
+                        // возвращается в его единственный runtime slot.
                         let mut synthesis = std::mem::take(context.synthesis());
                         let result = synthesis.load_from_bytes(
                             &source,
@@ -2600,7 +2600,7 @@ impl CGame {
                         .goods_destroy_setup()
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::GoodsDestroySerialization)?;
- // Dispatcher не переписывал legacy result для GoodsDestroy.
+                    // Dispatcher не переписывал legacy result для GoodsDestroy.
                     self.send_reload_payload(0x23, &payload);
                 }
             }
@@ -2737,7 +2737,7 @@ impl CGame {
                     context.notify_reload_operator(title, message);
                 }
  //: LoadFile устанавливает EAX=1
- // и после missing-file notice тоже приходит в этот epilogue.
+                // и после missing-file notice тоже приходит в этот epilogue.
                 legacy_result = 1;
                 context.add_log_text(b"Load Gods-Battle...ok!");
 

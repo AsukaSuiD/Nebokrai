@@ -104,8 +104,8 @@ impl CVariableList {
                     }
                 }
                 None if value.first() == Some(&b'\"') => {
- // EXE копировал всё между первым символом и последней
- // позицией строки, не требуя парной closing quote.
+                    // EXE копировал всё между первым символом и последней
+                    // позицией строки, не требуя парной closing quote.
                     let string = value
                         .get(1..value.len().saturating_sub(1))
                         .unwrap_or_default()

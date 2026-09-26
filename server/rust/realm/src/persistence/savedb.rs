@@ -4074,8 +4074,8 @@ where
         world_number_bits: monitoring_snapshot.world_number_bits,
         text,
     };
- // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
- // сбросу флага, независимо от результата внутреннего CMessage::Send.
+    // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
+    // сбросу флага, независимо от результата внутреннего CMessage::Send.
     send_monitoring(&monitoring);
     state.is_saving_data = false;
     let disposition = SaveDataFinalDisposition::Complete(monitoring);
@@ -4207,9 +4207,9 @@ where
                 started_at_tick_ms,
             };
 
- // `Client::close(self)` одновременно завершает TDS transport и
- // потребляет Rust-owner. Это совместимая замена первого CloseCn;
- // исходный повторный CloseCn внутри ReleaseCn был idempotent.
+            // `Client::close(self)` одновременно завершает TDS transport и
+            // потребляет Rust-owner. Это совместимая замена первого CloseCn;
+            // исходный повторный CloseCn внутри ReleaseCn был idempotent.
             let close_error = connection.close().await.err();
             let evidence = SaveDataLifecycleEvidence {
                 phases: Some(phases),
@@ -4226,8 +4226,8 @@ where
                     block,
                 };
             }
- // Здесь находится исходная ReleaseCn-граница; Tiberius owner уже
- // потреблён первым close, поэтому второго observable вызова нет.
+            // Здесь находится исходная ReleaseCn-граница; Tiberius owner уже
+            // потреблён первым close, поэтому второго observable вызова нет.
             (evidence, final_snapshot)
         }
         DoSaveDataStart::ConnectionOpenFailed {
@@ -4249,8 +4249,8 @@ where
                     block,
                 };
             }
- // Неуспешный Tiberius connect уже освободил transport-owner; эта
- // точка сохраняет исходную логическую ReleaseCn-границу после log.
+            // Неуспешный Tiberius connect уже освободил transport-owner; эта
+            // точка сохраняет исходную логическую ReleaseCn-границу после log.
             (evidence, final_snapshot)
         }
     };

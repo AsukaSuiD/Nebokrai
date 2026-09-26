@@ -611,9 +611,9 @@ impl CWorldRegion {
                 let id = tokens.next_i32_field("tagMonsterList.id")?;
                 current = monsters.iter().position(|monster| monster.index == id);
                 if current.is_none() {
- // Исходная странность поставки: если `id` не найден,
- // остаётся во внешнем scanner-е, пропускает
- // эту секцию до `<end>` и завершает весь variant-phase.
+                    // Исходная странность поставки: если `id` не найден,
+                    // остаётся во внешнем scanner-е, пропускает
+                    // эту секцию до `<end>` и завершает весь variant-phase.
                     while let Some(token) = tokens.next_bytes_optional() {
                         if token == b"<end>" {
                             break;
@@ -835,8 +835,8 @@ impl CWorldRegion {
             });
         };
         let Some(param) = source.get(offset..end) else {
- // Старый безразмерный helper читал 0x24
- // байта за caller-pointer; реакция на короткий источник неизвестна.
+            // Старый безразмерный helper читал 0x24
+            // байта за caller-pointer; реакция на короткий источник неизвестна.
             return Err(WorldRegionParamDecodeError::UnexpectedEnd {
                 offset,
                 needed: 0x24,
@@ -1131,9 +1131,9 @@ fn legacy_monster_variant_prefix(
     {
         bytes[offset * 2..offset * 2 + 2].copy_from_slice(&value.to_le_bytes());
     }
- // Старый basic_string занимает 0x1C: 4 bytes allocator/padding, 16-byte
- // union `_Bx`, DWORD `_Mysize`, DWORD `_Myres`. Prefix обрывается после
- // младших двух bytes `_Myres`; GameServer заранее выставляет старшие нули.
+    // Старый basic_string занимает 0x1C: 4 bytes allocator/padding, 16-byte
+    // union `_Bx`, DWORD `_Mysize`, DWORD `_Myres`. Prefix обрывается после
+    // младших двух bytes `_Myres`; GameServer заранее выставляет старшие нули.
     bytes[0x0C..0x0C + name.len()].copy_from_slice(name);
     bytes[0x0C + name.len()] = 0;
     bytes[0x1C..0x20].copy_from_slice(&(name.len() as u32).to_le_bytes());

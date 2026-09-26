@@ -107,15 +107,15 @@ impl Error for WorldPlatformTimeError {}
 fn local_tm(timestamp: i64) -> Result<libc::tm, WorldPlatformTimeError> {
     let timestamp = timestamp as libc::time_t;
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
- // `localtime_r` — потокобезопасная системная замена MSVC `_localtime`;
- // указатели живут только внутри этого вызова и результат сразу копируется.
+    // `localtime_r` — потокобезопасная системная замена MSVC `_localtime`;
+    // указатели живут только внутри этого вызова и результат сразу копируется.
     let result = unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) };
     if result.is_null() {
         return Err(WorldPlatformTimeError::LocalTimeUnavailable {
             timestamp: timestamp as i64,
         });
     }
- // `localtime_r` при non-null результате полностью инициализировал `tm`.
+    // `localtime_r` при non-null результате полностью инициализировал `tm`.
     Ok(unsafe { local.assume_init() })
 }
 
@@ -171,7 +171,7 @@ fn normalize_lei_ting_time(
         tm_isdst: local.daylight_saving,
         ..unsafe { std::mem::zeroed() }
     };
- // `_mktime` в EXE одновременно нормализовал все девять полей `tm`.
+    // `_mktime` в EXE одновременно нормализовал все девять полей `tm`.
     let timestamp = unsafe { libc::mktime(&mut native) };
     *local = lei_ting_time_from_tm(&native);
     i32::try_from(timestamp).map_err(|_| {

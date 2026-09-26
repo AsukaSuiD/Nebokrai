@@ -395,8 +395,8 @@ pub async fn on_delete_role(
         (ip_raw >> 24) & 0xff,
     )
     .into_bytes();
- // `_time` расположен до DB/organizing gates; в deletion-list
- // сохранялись младшие 32 бита Windows `long`.
+    // `_time` расположен до DB/organizing gates; в deletion-list
+    // сохранялись младшие 32 бита Windows `long`.
     let deletion_time = chrono::Local::now().timestamp() as i32;
 
     let country = db
@@ -477,8 +477,8 @@ pub async fn on_delete_role(
         false,
     );
 
- // optional log начинается только после постановки success-ответа в
- // LoginServer queue. Parameter binding заменяет `_sprintf`, не меняя FIFO.
+    // optional log начинается только после постановки success-ответа в
+    // LoginServer queue. Parameter binding заменяет `_sprintf`, не меняя FIFO.
     let delete_log = if delete_log_enabled {
         let player_name = db
             .get_player_name_by_id(player_id, player_database.as_deref_mut())

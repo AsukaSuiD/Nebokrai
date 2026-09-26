@@ -13,10 +13,9 @@
 //! signed wrapping; max-stack и weight зависят от base-properties, weight
 //! умножается с 32-битным wrapping.
 //!
-//! `CanUpgraded` (RVA `0x4528e0`, точная пара `Nworldserver.exe` SHA
-//! `f3ac454d…` + `WorldServer.pdb` RSDS match) возвращает true только когда
-//! base-properties по индексу найдены, goods type == `GOODS_TYPE_EQUIPMENT`
-//! и addon values `GAP_WEAPON_LEVEL` (0x30) непусты; иначе false.
+//! `CanUpgraded` возвращает true только когда base-properties по индексу
+//! найдены, goods type == `GOODS_TYPE_EQUIPMENT` и addon values
+//! `GAP_WEAPON_LEVEL` (0x30) непусты; иначе false.
 //! Rust-владение и `Vec` заменяют ручной cleanup, не меняя wire или этот
 //! предикат.
 
@@ -382,17 +381,13 @@ impl CGoods {
         )
     }
 
-    /// `CGoods::CanUpgraded` (RVA `0x4528e0`, точная пара `Nworldserver.exe`
-    /// `f3ac454d…` + `WorldServer.pdb` RSDS match).
+    /// `CGoods::CanUpgraded`.
     ///
-    /// Машинные шаги: индекс `+0x6c` передаётся в map-lookup global-реестра
-    /// (`0x4528fc-0x45290a` → `0x455db0`); промах (NULL) → ret 0
-    /// (`0x45290c`); `props->GetGoodsType() != 2` (`0x4dea40`, compare
-    /// `0x452919: cmp eax, 2; jne`) → ret 0; `GetAddonValues(0x30, out)`
-    /// (`0x45293b` → `0x452760`) при пустом result-векторе → ret 0
-    /// (`0x452944`/`0x452966`); иначе ret 1 (`0x45297f-0x45298d`).
-    /// Ctor-неназначенный индекс (`None`) соответствует промаху lookup по
-    /// неинициализированному `+0x6c` → false.
+    /// Индекс идёт в map-lookup global-реестра; промах → false;
+    /// `GetGoodsType() != 2` → false; пустой result `GetAddonValues(0x30)` →
+    /// false; иначе true. Ctor-неназначенный индекс (`None`) соответствует
+    /// промаху lookup по неинициализированному base-полю. Машинное основание
+    /// — docs/reconstruction/realm-services.md.
     pub fn can_upgraded(&self, registry: &GoodsBasePropertiesRegistry) -> bool {
         let Some(index) = self.base_properties_index else {
             return false;
@@ -406,13 +401,11 @@ impl CGoods {
         !self.get_addon_property_values(GAP_WEAPON_LEVEL).is_empty()
     }
 
- /// DIRECT-case `0x45648c` машинной jump-table `UpgradeEquipment`
- /// (`Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb`): у property по
- /// индексу итерируемого addon-вектора ищется первое value с id == 1
- /// (`0x456492-0x4564c6`, compare `0x4564b9: cmp dword ptr [eax], 1; je`)
- /// и его modifier меняется на ±1 обычным x86 wrapping без всякого clamp
- /// (`0x4564d7: add …,+1` / `0x4564f7: add …,-1`). changed-флаг цикла
- /// взводится только при найденном value (`0x4564e4`/`0x4564ff`).
+    /// DIRECT-case машинного `UpgradeEquipment`: у property по индексу
+    /// итерируемого addon-вектора ищется первое value с id == 1 и его
+    /// modifier меняется на ±1 обычным x86 wrapping без всякого clamp;
+    /// changed-флаг цикла взводится только при найденном value.
+    /// Машинное основание — docs/reconstruction/realm-services.md.
     pub fn adjust_indexed_id_one_modifier(&mut self, property_index: usize, increase: bool) -> bool {
         let Some(property) = self.addon_properties.get_mut(property_index) else {
             return false;
@@ -710,8 +703,8 @@ fn read_goods_description(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, 
         return Ok(bytes[..length].to_vec());
     }
 
- // `_GetStringFromByteArray` не получал capacity и
- // продолжал запись за stack buffer либо чтение за source.
+    // `_GetStringFromByteArray` не получал capacity и
+    // продолжал запись за stack buffer либо чтение за source.
     Err(GoodsCodecError::UnterminatedDescription { offset, available })
 }
 
@@ -747,8 +740,8 @@ fn read_goods_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый вспомогательный код не получал длину источника. При коротком
- // буфере он выходил за его границы; Rust не воспроизводит это UB.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(GoodsCodecError::UnexpectedEnd {
             field,
             offset,

@@ -218,9 +218,9 @@ impl CGame {
             }
 
             let Some(index) = current_index else {
- // При неуспехе первого числового чтения всё равно
- // использовал неизвестный
- // stack-key в map::operator[]. Safe Rust не выбирает ключ.
+                // При неуспехе первого числового чтения всё равно
+                // использовал неизвестный
+                // stack-key в map::operator[]. Safe Rust не выбирает ключ.
                 blocked_at_record = Some(record_index as usize + 1);
                 break;
             };
@@ -231,8 +231,8 @@ impl CGame {
                     index,
                     ip: current_ip.clone(),
                     port: current_port,
- // ->
- // переносит неинициализированный stack DWORD.
+                    // ->
+                    // переносит неинициализированный stack DWORD.
                     received_player_data: None,
                 },
             );
@@ -472,8 +472,8 @@ impl CGame {
             discarded_roll,
         });
 
- // Оба critical section уже являются Rust owners: `db_data` Mutex и
- // эксклюзивная save-thread guard-граница. До worker-start их не видно.
+        // Оба critical section уже являются Rust owners: `db_data` Mutex и
+        // эксклюзивная save-thread guard-граница. До worker-start их не видно.
         events.push(WorldGameInitEvent::RustLocksReady);
         context.put_debug_string(b"WorldServer start!");
         events.push(WorldGameInitEvent::DebugStartPublished);
@@ -651,10 +651,10 @@ impl CGame {
             events.push(WorldGameInitEvent::DatabaseOwnerCreated(owner));
         }
 
- // constructor ловил DB/COM error внутри `reInitDB`: owner
- // оставался опубликованным, а CGame::Init продолжал следующий шаг.
- // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
- // освобождается Drop вместо исходной утечки при повторном Init.
+        // constructor ловил DB/COM error внутри `reInitDB`: owner
+        // оставался опубликованным, а CGame::Init продолжал следующий шаг.
+        // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
+        // освобождается Drop вместо исходной утечки при повторном Init.
         if let Err(block) = context
             .create_database_owner(WorldGameDatabaseOwner::GoodsWarMember)
             .await
@@ -1284,8 +1284,8 @@ impl CGame {
             stop!(WorldGameInitBlockReason::CountryWar);
         }
 
- // Init публикует новый owner до config/DB loading. Drop заменяет
- // предварительный delete и не сохраняет его dangling-lifetime риск.
+        // Init публикует новый owner до config/DB loading. Drop заменяет
+        // предварительный delete и не сохраняет его dangling-lifetime риск.
         *general_variables = Some(CVariableList::default());
         events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::CreateGeneralVariableList,
@@ -1303,7 +1303,7 @@ impl CGame {
             .expect("owner опубликован перед LoadVarData")
             .load_var_data(context.general_variable_database())
             .await;
- // `LoadVarData` был void: исходный Init не ветвился по bool Load.
+        // `LoadVarData` был void: исходный Init не ветвился по bool Load.
         events.push(WorldGameInitEvent::GeneralVariableDataLoaded(
             general_variable_data_load,
         ));
@@ -1345,8 +1345,8 @@ impl CGame {
             WorldGameInitVoidOwner::InitializeBaseMessage,
             WorldGameInitVoidOwner::InitializeSocket,
         ] {
- // Rust message/socket owners не требуют отдельного глобального
- // initialize-вызова; их живые transport-owner-ы создаются ниже.
+            // Rust message/socket owners не требуют отдельного глобального
+            // initialize-вызова; их живые transport-owner-ы создаются ниже.
             events.push(WorldGameInitEvent::VoidOwner(owner));
         }
 
@@ -1461,7 +1461,7 @@ impl CGame {
                 continue;
             }
             let Some(region) = assignment.region.as_mut() else {
- // WorldServer разыменовывал `pRegion` без null-check.
+                // WorldServer разыменовывал `pRegion` без null-check.
                 return Err((
                     saved,
                     WorldSaveCityRegionBlock::NullCityRegion { region_id },
@@ -1568,10 +1568,10 @@ impl CGame {
             drop(region);
             events.push(WorldGameReleaseEvent::RegionOwnerReleased { region_id });
         }
- // `ClearRegionList` удаляет сначала каждый `pRegion`, затем освобождает
- // узлы самой map. После этого места normal Release больше не читает
- // region registry, поэтому clear устраняет только внутреннее удержание
- // пустых Rust map-node до немедленного `DeleteGame`.
+        // `ClearRegionList` удаляет сначала каждый `pRegion`, затем освобождает
+        // узлы самой map. После этого места normal Release больше не читает
+        // region registry, поэтому clear устраняет только внутреннее удержание
+        // пустых Rust map-node до немедленного `DeleteGame`.
         self.regions.clear();
 
         let scripts_released = self.script_resources.clear();
@@ -1591,9 +1591,9 @@ impl CGame {
         ] {
             events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
         }
- // После этого места нет ни одного team lookup до немедленного
- // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
- // меняя session ID, routing либо внешний порядок.
+        // После этого места нет ни одного team lookup до немедленного
+        // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
+        // меняя session ID, routing либо внешний порядок.
         self.team_session_ids.clear();
         let owner = WorldGameReleaseOptionalOwner::GeneralVariableList;
         let released = context.release_optional_owner(owner);
@@ -1642,10 +1642,10 @@ impl CGame {
         context.release_void_owner(owner);
         events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
- // Background reconnect может владеть только producer FIFO, но перед
- // разрушением transport-owner-а он обязан завершиться. Это устраняет
- // внутренний dangling-lifetime старого process-global worker-а; sleep
- // не прерывается, как у его обычного stop/join owner-а.
+        // Background reconnect может владеть только producer FIFO, но перед
+        // разрушением transport-owner-а он обязан завершиться. Это устраняет
+        // внутренний dangling-lifetime старого process-global worker-а; sleep
+        // не прерывается, как у его обычного stop/join owner-а.
         let _connect_login_completion = self.stop_connect_login_thread();
 
         if let Some(client) = self.net_client.take() {
@@ -1681,8 +1681,8 @@ impl CGame {
             let released = context.release_database_owner(owner);
             events.push(WorldGameReleaseEvent::DatabaseOwner { owner, released });
         }
- // WorldServer создаёт `m_pRsMisc` в Init, но не удаляет
- // и не обнуляет его ни в одном Release call-site до skill-cache cleanup.
+        // WorldServer создаёт `m_pRsMisc` в Init, но не удаляет
+        // и не обнуляет его ни в одном Release call-site до skill-cache cleanup.
         events.push(WorldGameReleaseEvent::DatabaseMiscRetained);
 
         skills.clear_skill_cache();
@@ -1697,8 +1697,8 @@ impl CGame {
         context.release_void_owner(owner);
         events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
- // `db_data` и save serialization являются Rust owners; после этой
- // позиции Release к ним больше не обращается, фактический Drop — DeleteGame.
+        // `db_data` и save serialization являются Rust owners; после этой
+        // позиции Release к ним больше не обращается, фактический Drop — DeleteGame.
         events.push(WorldGameReleaseEvent::RustLocksRetired);
         for owner in [
             WorldGameReleaseVoidOwner::CleanupSocket,
@@ -1764,7 +1764,7 @@ impl CGame {
                     "dwListenPort",
                 ))?;
 
- // публиковал s_pNetServer до проверки результата Host.
+        // публиковал s_pNetServer до проверки результата Host.
         self.net_server = Some(server);
         let server = self
             .net_server
@@ -1804,7 +1804,7 @@ impl CGame {
     ) -> Result<WorldClientInitialization, WorldClientInitializationError> {
         self.net_client.take();
 
- // записывал s_pNetClient до Create(0, 0) и Connect.
+        // записывал s_pNetClient до Create(0, 0) и Connect.
         self.net_client = Some(CMyNetClient::new());
         let socket = bind_tcp_ipv4(None, 0);
         let login_port =
@@ -1847,9 +1847,9 @@ impl CGame {
             .expect("успешно подключённый World client остаётся опубликованным")
             .enable_control_send();
 
- // При успешно открытом, но оборванном до первой
- // пары setup исходный `dwNumber` не инициализирован. Уже выполненные
- // connect/control-send не откатываем и неизвестный DWORD не выбираем.
+        // При успешно открытом, но оборванном до первой
+        // пары setup исходный `dwNumber` не инициализирован. Уже выполненные
+        // connect/control-send не откатываем и неизвестный DWORD не выбираем.
         let world_number =
             self.setup
                 .world_number
@@ -1991,11 +1991,11 @@ impl CGame {
         snapshot.base_mut().add_ulong(world_number);
         snapshot.base_mut().add_ulong(declared_online_players);
         for &player_id in &self.online_players {
- // World owner выполнял
- // чтение поля по смещению +0x744 через найденный объект; при отсутствии
- // записи указатель оставался нулевым.
- // Достижимость/реакция null-dereference не определена; safe Rust не
- // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
+            // World owner выполнял
+            // чтение поля по смещению +0x744 через найденный объект; при отсутствии
+            // записи указатель оставался нулевым.
+            // Достижимость/реакция null-dereference не определена; safe Rust не
+            // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
             let player = self
                 .players
                 .get(&player_id)

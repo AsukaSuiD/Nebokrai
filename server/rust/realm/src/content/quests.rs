@@ -1,6 +1,6 @@
-//! Каталог заданий Realm по server/setup/questsystem.cpp/.h.
-//! Nworldserver.exe: CQuestSystem::Load RVA 0x67aa0, Initialize RVA 0x68be0;
-//! владелец читает ресурсы, а формат и частичные изменения заданы Shared.
+//! Каталог заданий Realm по server/setup/questsystem.cpp/.h; источник
+//! контракта — точная пара `Nworldserver.exe` + `WorldServer.pdb`.
+//! Владелец читает ресурсы, а формат и частичные изменения заданы Shared.
 
 use nebokrai_shared::resources::{CQuestSystem, QuestSystemLoadReport};
 

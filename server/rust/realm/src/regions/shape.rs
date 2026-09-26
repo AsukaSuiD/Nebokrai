@@ -227,8 +227,8 @@ impl CShape {
         self.pos_y = read_shape_f32(source, cursor, "m_fPosY")?;
         self.direction = read_shape_i32(source, cursor, "m_lDir")?;
         let _serialized_position = read_shape_i32(source, cursor, "m_lPos")?;
- // WorldServer сдвигает cursor через wire m_lPos, но
- // присваивает live m_lPos константу 0 вместо прочитанного DWORD.
+        // WorldServer сдвигает cursor через wire m_lPos, но
+        // присваивает live m_lPos константу 0 вместо прочитанного DWORD.
         self.position = 0;
         self.speed = read_shape_f32(source, cursor, "m_fSpeed")?;
         self.state = read_shape_u16(source, cursor, "m_wState")?;
@@ -242,9 +242,9 @@ fn truncate_tile_coordinate(
     value: f32,
     axis: &'static str,
 ) -> Result<i32, ShapeTileCoordinateBlock> {
- // x87 `fistp dword` выдаёт integer-indefinite для
- // NaN/inf/out-of-range. Достижимость такого live position и обязанность
- // публиковать именно этот результат соседним owner-ам не определены.
+    // x87 `fistp dword` выдаёт integer-indefinite для
+    // NaN/inf/out-of-range. Достижимость такого live position и обязанность
+    // публиковать именно этот результат соседним owner-ам не определены.
     if !value.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
         return Err(ShapeTileCoordinateBlock {
             axis,
@@ -294,8 +294,8 @@ fn read_shape_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый helper не получал длину источника и
- // продолжал чтение. Safe Rust останавливает только эту границу.
+        // Старый helper не получал длину источника и
+        // продолжал чтение. Safe Rust останавливает только эту границу.
         return Err(ShapeDecodeError::UnexpectedEnd {
             field,
             offset,

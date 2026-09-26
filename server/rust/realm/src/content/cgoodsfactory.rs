@@ -10,12 +10,11 @@
 //! всех вызовов legacy `random(bound)`; сам генератор передаётся callback-ом.
 //!
 //! Gold/YuanBao/JiFen indices разрешаются через исходные StringTable имена.
-//! `UpgradeEquipment` (RVA `0x4561c0`, точная пара `Nworldserver.exe` SHA
-//! `f3ac454d…` + `WorldServer.pdb` RSDS match) воспроизводит машинный цикл
-//! апгрейда экипировки: gate `CanUpgraded` (eax==0 → ret 0), per-property
-//! jump-table `0x45655c` на gapType `0x30..0x49` с 18 звеньями к private
-//! `Upgrade` (`0x455f20`) и DIRECT-case уровня ±1, завершение по сравнению
-//! текущего уровня с целевым. Подробные шаги — у `upgrade_equipment`.
+//! `UpgradeEquipment` воспроизводит машинный цикл апгрейда экипировки: gate
+//! `CanUpgraded`, per-property переходы по gapType к private `Upgrade` (18
+//! case) и DIRECT-case уровня ±1, завершение по сравнению текущего уровня с
+//! целевым. Подробные шаги — у `upgrade_equipment`, машинное основание —
+//! docs/reconstruction/realm-services.md.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -336,10 +335,10 @@ pub fn garbage_collect(goods: Option<&mut Option<Box<CGoods>>>) -> bool {
     true
 }
 
-/// Пары (source gapType → destination gapType) 18 case-звеньев jump-table
-/// `0x45655c` из machine-байт; immediates взяты из push-последовательностей
-/// case-тел (`0x456285`-`0x45647a`). Слоты `0x31..0x34` и `0x46..0x48`
-/// указывают на default `0x456507` (пропуск), как и всё вне `0x30..0x49`.
+/// Пары (source gapType → destination gapType) собраны по машинной
+/// jump-table `UpgradeEquipment`: 18 живых case-звеньев, остальные слоты
+/// диапазона и всё вне его ведут на default-пропуск.
+/// Машинное основание — docs/reconstruction/realm-services.md.
 const fn upgrade_destination_gap_type(gap_type: i32) -> Option<i32> {
     match gap_type {
         0x35 => Some(0x0e),
@@ -364,18 +363,17 @@ const fn upgrade_destination_gap_type(gap_type: i32) -> Option<i32> {
     }
 }
 
-/// Private `CGoodsFactory::Upgrade` (RVA `0x455f20`, точная пара
-/// `Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb` RSDS match).
+/// Private `CGoodsFactory::Upgrade`.
 ///
 /// delta-контракт: `v1 = GetAddonPropertyValue(src, 1)`, `v2 = (src, 2)`;
-/// `v1 <= 0` → ret 0 (`0x455f4c: jle`); `v2 > 0` →
-/// `delta = random(v2 − v1) + v1` (`0x455f54-0x455f65`), иначе `delta = v1`
-/// (`0x455f6b`). Signed sub/add — обычный x86 wrapping. Мутация destination
+/// `v1 <= 0` → ret 0; `v2 > 0` → `delta = random(v2 − v1) + v1`, иначе
+/// `delta = v1`. Signed sub/add — обычный x86 wrapping. Мутация destination
 /// вынесена в `adjust_first_addon_modifier` (first-match скан с головы
-/// вектора, `_Myfirst` без проверки и clamp-формы). Машина вызывает
-/// `0x453560` с сырым signed bound, включая ноль и отрицательный; bound
-/// поступает в callback без коррекции. Результат потребляется только
-/// вызывающим `UpgradeEquipment` — и он его игнорирует.
+/// вектора без проверки и clamp-формы). Машина вызывает random с сырым
+/// signed bound, включая ноль и отрицательный; bound поступает в callback
+/// без коррекции. Результат потребляется только вызывающим
+/// `UpgradeEquipment` — и он его игнорирует. Машинное основание —
+/// docs/reconstruction/realm-services.md.
 fn upgrade<Random>(
     goods: &mut CGoods,
     source_gap_type: i32,
@@ -401,29 +399,24 @@ where
     )
 }
 
-/// `CGoodsFactory::UpgradeEquipment` (RVA `0x4561c0`, точная пара
-/// `Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb` RSDS match).
+/// `CGoodsFactory::UpgradeEquipment`.
 ///
 /// Шаги машинного тела:
-/// - NULL goods → 0 (`0x4561cb-0x4561cd` → `0x456553`);
-/// - gate `CanUpgraded`, eax==0 → 0 (`0x4561d3-0x4561dc`);
-/// - current = `GetAddonPropertyValue(GAP 0x30, 1)`; current < 0 → 0
-///   (signed `jl`, `0x4561e8-0x4561ef`);
-/// - direction `increase = target >= current` (signed `jge`,
-///   `0x4561fa-0x456204`);
-/// - свежее current == target → ret 1 до любой мутации
-///   (`0x456206-0x456217`);
-/// - проходы по addon-вектору в index-порядке с шагом `0x1c` (`0x456230`);
-///   jump-table — только диспетчеризация по gapType, порядок обхода задаёт
-///   сам вектор (факт по телу `0x45621d-0x45627e`);
-/// - case 0x30 — DIRECT (`0x45648c`): у итерируемой property ищется первое
-///   value с id == 1 и его modifier меняется на ±1 без clamp; только этот
-///   case взводит changed-флаг (`0x4564e4`/`0x4564ff`);
-/// - 18 case зовут private `upgrade`; результат игнорируется
-///   (`0x456285`-`0x45629d` и далее по телам);
-/// - конец прохода: changed == 0 → ret 0 (`0x456516-0x45653f`), иначе
-///   свежее current == target → ret 1 (`0x45651d-0x45653a`), иначе новый
-///   проход (`0x45652c` → `0x456220`).
+/// - NULL goods → 0;
+/// - gate `CanUpgraded` → 0;
+/// - current = `GetAddonPropertyValue(GAP 0x30, 1)`; current < 0 → 0 (signed);
+/// - direction `increase = target >= current` (signed);
+/// - свежее current == target → ret 1 до любой мутации;
+/// - проходы по addon-вектору в index-порядке; jump-table — только
+///   диспетчеризация по gapType, порядок обхода задаёт сам вектор;
+/// - case 0x30 — DIRECT: у итерируемой property ищется первое value с id == 1
+///   и его modifier меняется на ±1 без clamp; только этот case взводит
+///   changed-флаг;
+/// - 18 case зовут private `upgrade`; результат игнорируется;
+/// - конец прохода: changed == 0 → ret 0, иначе свежее current == target →
+///   ret 1, иначе новый проход.
+///
+/// Машинное основание — docs/reconstruction/realm-services.md.
 pub fn upgrade_equipment<Random>(
     goods: Option<&mut CGoods>,
     registry: &GoodsBasePropertiesRegistry,

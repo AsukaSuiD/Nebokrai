@@ -205,9 +205,9 @@ pub enum QueuedOrganizingSessionTerminal {
     CityTransfer(QueuedCityTransferTerminal),
 }
 
-/// Выгружает конкретное подтверждение Session confirmation с `SendMessageError`-
-/// результатом; нулевое пuegosето SendMessageError не имеет смысла, ей выдаётся
-/// исходный сообщение-маркер без инференцев.
+/// Запись доставки session confirmation с исходным результатом отправки:
+/// неуспешный `SendMessageError` сохраняется как есть и не подменяется
+/// нейтральным исходом.
 #[derive(Debug, Eq, PartialEq)]
 pub struct UnionApplicationConfirmationDelivery {
     pub recipient_player_id: i32,
@@ -229,11 +229,11 @@ pub struct ConfederationCreationConfirmationDelivery {
     pub result: Result<i32, SendMessageError>,
 }
 
-/// Блокировка session endpoint-а, собранная в единый терминальный владелец.
+/// Общие очереди session endpoint-ов одного World-а.
 ///
-/// Внутренний владелец очередей использует `parking_lot::Mutex`, а callback не
-/// обновляет игру вне основного loop-a — зафиксировано в заявлении выше и в
-/// подтверждающем заголовке старого диспетчера.
+/// Очереди защищены `parking_lot::Mutex`: session callback только кладёт
+/// исходы в очередь и не меняет состояние игры вне основного цикла — порядок
+/// «callback публикует, main-loop применяет» сохраняется.
 #[derive(Debug, Default)]
 struct WorldUnionApplicationRuntimeState {
     terminals: Mutex<VecDeque<QueuedOrganizingSessionTerminal>>,
@@ -247,14 +247,11 @@ struct WorldUnionApplicationRuntimeState {
         Mutex<VecDeque<crate::organizations::union::ConfederationCreationEndpointBlock>>,
 }
 
-/// Идемпотентный владелец скопления endpoint-терминалов для одного World-а.
-///
-/// Это слитый владелец: открытые `Arc`-фабрики четырёх endpoint-узлов и есть
-/// исходные точки подключения подтверждений; объектное поле `state` по
-/// объявлению берёт собственную форму shared state из orginal-and-rec host
-/// `Nworldserver.exe + WorldServer.pdb`. Расхождения очередей с прежним
-/// `WorldUnionApplicationRuntimeOwner` нет — старый файл ссылается на этот же
-/// `Arc`-state через type-алиас.
+/// Единый runtime-владелец endpoint-терминалов одного World-а: `Clone` делит
+/// общий `Arc`-state, а фабрики `*_endpoint` выдают узлы четырёх
+/// session-семейств, к которым session-токены подключают подтверждения.
+/// Старый пакет обращается к тому же state через type-алиас прежнего имени
+/// `WorldUnionApplicationRuntimeOwner`.
 #[derive(Clone, Default)]
 pub struct WorldOrganizingSessionRuntimeOwner {
     state: Arc<WorldUnionApplicationRuntimeState>,

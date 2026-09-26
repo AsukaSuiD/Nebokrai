@@ -194,14 +194,14 @@ where
         split.set_amount(amount);
         notify_split(&split);
 
- // Reentrant callback мог удалить original, что в old оригинал оставляло
- // dangling pointer. Safe adapter не записывает в пропавший slot и
- // возвращает split caller-у вместо internal lifetime defect.
+        // Reentrant callback мог удалить original, что в old оригинал оставляло
+        // dangling pointer. Safe adapter не записывает в пропавший slot и
+        // возвращает split caller-у вместо internal lifetime defect.
         let Some(goods) = storage.goods_at(position) else {
             return Ok(Some(split));
         };
- // Оригинал повторно читает amount после listener-callback: callback может
- // менять тот же stack, но не обязан его удалять.
+        // Оригинал повторно читает amount после listener-callback: callback может
+        // менять тот же stack, но не обязан его удалять.
         goods.set_amount(goods.get_amount().wrapping_sub(amount));
         return Ok(Some(split));
     }

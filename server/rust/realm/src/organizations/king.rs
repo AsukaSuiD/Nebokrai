@@ -13,11 +13,11 @@
 //! отрицание стоимости через `wrapping_neg`, сохраняя x86 `neg/add` даже для
 //! `INT_MIN`; parameter singleton заменён явной ссылкой на `CCountryParam`.
 //!
-//! Layout сохраняет `m_bRegister` по `+0x34`, но constructor обнуляет только
-//! officer bytes `+0x24..+0x27` и три точки `+0x28..+0x30`. Старый bool
+//! Constructor обнуляет только officer bytes и три king-точки: `m_bRegister`
 //! остаётся неинициализированным, а подтверждённых project-caller-ов у него
-//! нет. Это внутренний UB-дефект, не контракт: safe Rust назначает ему `false`,
-//! как согласованный C++ reference, и не переносит случайное значение allocator-а.
+//! нет. Это внутренний UB-дефект, не контракт: safe Rust назначает ему `false`
+//! и не переносит случайное значение allocator-а. Исходный layout —
+//! docs/reconstruction/realm-services.md.
 //!
 //! Data-типы point-отчётов (`KingPointKind`, `KingPointUpdate`) лежат рядом в
 //! `organizations/country`.

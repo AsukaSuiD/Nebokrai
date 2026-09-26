@@ -62,9 +62,9 @@ impl CNpc {
 
 impl Drop for CNpc {
     fn drop(&mut self) {
- // `~CNpc` сначала вызывает `_Tidy(m_listScript)`, и лишь затем
- // `CMoveShape::~CMoveShape`. Pointee не owned старым list, поэтому
- // очистка Rust storage не освобождает неизвестные external objects.
+        // `~CNpc` сначала вызывает `_Tidy(m_listScript)`, и лишь затем
+        // `CMoveShape::~CMoveShape`. Pointee не owned старым list, поэтому
+        // очистка Rust storage не освобождает неизвестные external objects.
         self.script_links.clear();
     }
 }

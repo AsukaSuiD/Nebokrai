@@ -636,12 +636,12 @@ impl DbGoodsOwner<CPlayer> for TiberiusDbGoods {
             .delete_goods(snapshot.player_id, &mut *active_transaction)
             .await
         {
- // WorldServer: `__snprintf(buf, 4,
- // "CDBGoods::SaveGoodsFiled():%d", player_id)` обрезал строку и
- // мог оставить её без NUL перед `AddErrorLogText`.
- // typed boundary: какие байты старый logger читал после
- // первых четырёх, не определёно; typed notice сохраняет сам факт
- // outer-ошибки без воспроизведения чтения за stack-buffer.
+            // WorldServer: `__snprintf(buf, 4,
+            // "CDBGoods::SaveGoodsFiled():%d", player_id)` обрезал строку и
+            // мог оставить её без NUL перед `AddErrorLogText`.
+            // typed boundary: какие байты старый logger читал после
+            // первых четырёх, не определёно; typed notice сохраняет сам факт
+            // outer-ошибки без воспроизведения чтения за stack-buffer.
             self.notices.push_back(DbGoodsNotice {
                 operation: DbGoodsOperation::SaveGoodsFiled,
                 error: DbGoodsSaveError::NestedDeleteFailed,

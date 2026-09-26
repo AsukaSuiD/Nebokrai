@@ -83,9 +83,9 @@ impl WorldProcessPlayerLoadDatabase {
             jjc: TiberiusRsJjcSys::new(settings),
             goods: TiberiusDbGoods::new(settings),
             snapshot,
- // World binary только конструирует/читает static map; кроме
- // CRT teardown записей в неё нет, поэтому shipped process начинает
- // и остаётся с пустой таблицей замен индексов.
+            // World binary только конструирует/читает static map; кроме
+            // CRT teardown записей в неё нет, поэтому shipped process начинает
+            // и остаётся с пустой таблицей замен индексов.
             changed_goods_indices: BTreeMap::new(),
             dakong_addon_types,
         }
@@ -110,8 +110,8 @@ pub(crate) fn world_player_load_largess(
     largess: Arc<TiberiusLargess>,
     snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
 ) -> Box<dyn FnMut(&mut CPlayer) + Send> {
- // Machine random (`0x453560`) — process-global CRT rand; create/upgrade
- // пути делят одну последовательность, поэтому состояние общее через Cell.
+    // Machine random (`0x453560`) — process-global CRT rand; create/upgrade
+    // пути делят одну последовательность, поэтому состояние общее через Cell.
     let random_state = Cell::new(1u32);
     Box::new(move |player| {
         let snapshot = snapshot.read().clone();
@@ -239,9 +239,9 @@ impl WorldProcessInitContext {
         self.started_at
     }
 
- // Три accessor-а ниже — инвентарь process-owner контекста без текущих
- // вызывателей; в старом пакете их покрывал module-wide allow(dead_code),
- // здесь им переходный `pub` как остальному API контекста.
+    // Три accessor-а ниже — инвентарь process-owner контекста без текущих
+    // вызывателей; в старом пакете их покрывал module-wide allow(dead_code),
+    // здесь им переходный `pub` как остальному API контекста.
     pub fn country_database_owner(&mut self) -> Option<&mut TiberiusDbCountry> {
         self.country.as_mut()
     }
@@ -374,9 +374,9 @@ impl WorldGameInitContext for WorldProcessInitContext {
             WorldGameDatabaseOwner::DbMisc => {
                 let mut database = TiberiusDbMiscDatabase::new(&settings);
                 if let Err(error) = database.initialize_normal_connection().await {
- // Конструктор старого CDbMisc также сохранял owner после
- // неуспешного CreateNormalCn: следующий MainLoop batch
- // повторял reconnect через тот же контекст.
+                    // Конструктор старого CDbMisc также сохранял owner после
+                    // неуспешного CreateNormalCn: следующий MainLoop batch
+                    // повторял reconnect через тот же контекст.
                     eprintln!(
                         "WorldServer: начальное соединение аукционного DB-owner-а не открыто: {error:?}"
                     );

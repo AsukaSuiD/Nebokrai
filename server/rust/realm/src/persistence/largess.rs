@@ -692,8 +692,8 @@ impl TiberiusLargess {
                 Err(source) => return CycleLoadLargessOutcome::ReturnedFalse(source),
             };
 
- // Оригинал owner читал/lowercase-ил Cdkey, но значение не покидало
- // локальный string и не участвовало ни в одном side effect.
+            // Оригинал owner читал/lowercase-ил Cdkey, но значение не покидало
+            // локальный string и не участвовало ни в одном side effect.
             match append_largess_entry(
                 &mut entries,
                 send_id,
@@ -808,7 +808,7 @@ impl TiberiusLargess {
             if add_gold_coin(player, goods, gold_coin_limit)
                 .map_err(LoadLargessBlock::Player)?
             {
- // Оригинал gold-ветка пишет literal `1`, а не количество монет.
+                // Оригинал gold-ветка пишет literal `1`, а не количество монет.
                 current_sent_num = 1;
                 entry.obtained_num = entry.send_num;
                 entry.failed_reason.clear();
@@ -970,8 +970,8 @@ async fn mark_incoming_largess_processed(
     incoming: &mut WorldTdsClient,
     send_id: i32,
 ) -> Result<(), tiberius::error::Error> {
- // LoginDB schema-аудит поздней Rust-ветки подтверждает identity/PK SendID;
- // это безопасный эквивалент ADO Recordset::Fields[IsProcessed]=1; Update().
+    // LoginDB schema-аудит поздней Rust-ветки подтверждает identity/PK SendID;
+    // это безопасный эквивалент ADO Recordset::Fields[IsProcessed]=1; Update().
     let mut update = Query::new(
         "UPDATE Largess SET IsProcessed=1 WHERE SendID=@P1 AND IsProcessed=0",
     );

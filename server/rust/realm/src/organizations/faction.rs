@@ -2069,9 +2069,9 @@ impl TagLeaveWord {
 
     pub fn content_wire_bytes(&self) -> Result<&[u8], UnterminatedLeaveWordField> {
         let Some(terminator) = self.content.iter().position(|byte| *byte == 0) else {
- // WorldServer `SaveLeaveWords` передавал
- // `node + 0x34` в `CheckPoint` без размера; тот читал бы за
- // `char[212]`, а достижимость и результат этого пути не определены.
+            // WorldServer `SaveLeaveWords` передавал
+            // `node + 0x34` в `CheckPoint` без размера; тот читал бы за
+            // `char[212]`, а достижимость и результат этого пути не определены.
             return Err(UnterminatedLeaveWordField {
                 field: "tagLeaveWord::strContent",
             });
@@ -4813,20 +4813,11 @@ impl CFaction {
             true,
             false,
         )?;
-        // Досверка 2026-09-26 (Nworldserver.exe; CFaction::DoJoin=0x4BEE40 —
-        // PDB public 1:000bde40 занижен на 0x1000, как у соседних CFaction-методов,
-        // истинные адреса через vftable 0x547A8C):
-        // purviews нового member пишутся машинно: слоту Exit 2 по 0x4BF3A1
-        // (локальный pair-blob +0x74) и слоту LeaveWord 2 по 0x4BF3A8 (+0x88),
-        // затем девять нулей в остальные слоты 0x4BF3D2..0x4BF40A; каждый слот
-        // пишется один раз — бывшие гипотезы «dead double-store» и «слоты
-        // idx1/idx6 не пишутся» были следом ошибки учёта esp через push между
-        // записями. job_level=99 пишется явно: 0x4BF263 (blob +0x2C), strcpy
-        // title идёт в +0x30 и его не перекрывает. Копия join tagTime полная
-        // (бывший F2 опровергнут): t+0→+0 0x4BF231, t+4→+4 0x4BF23B,
-        // t+0xC→+0xC 0x4BF245, t+8→+8 0x4BF255 — store идёт после push 0x4BF24C
-        // и попадает в свой слот +8, не поверх +0xC; insert (rep movsd 0x3C
-        // @0x4BF601 от blob) уносит все 16 байт в map до рассылки.
+        // Машинно подтверждённая инициализация нового member: purviews Exit
+        // и LeaveWord получают Permit, остальные девять слотов — нули, каждый
+        // слот пишется один раз; job_level стартует с 99 и не пересекается с
+        // title; копия join tagTime полная (16 байт), insert уносит её в map
+        // до рассылки. Машинное основание — docs/reconstruction/realm-services.md.
         let mut purview = [EPurviewOwnState::No; 11];
         purview[EPurview::Exit as usize] = EPurviewOwnState::Permit;
         purview[EPurview::LeaveWord as usize] = EPurviewOwnState::Permit;
@@ -5654,12 +5645,8 @@ impl CFaction {
             }
         };
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
-        // Декомпилятор показывает у этого вызова `K=0x87a238`, но в теле
-        // хелпера `0x4B4890` (`SendInfoToAllMember(…, -1, K)`) аргумент
-        // цвета мёртв — жёсткий push константы `0xFFDAEDFE`; в кадр
-        // `0x7F804` всегда уходит `0xFFDAEDFE`. Машинный факт: тело
-        // `0x4B4890` в `Nworldserver.exe` + `WorldServer.pdb`.
-        // См. `send_info_to_all_members_with_color`.
+        // Цвет кадра всегда `0xFFDAEDFE`: декомпиляторский `K=0x87a238`
+        // мёртв в хелпере рассылки. См. `send_info_to_all_members_with_color`.
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             &notice,
             legacy_c_string_visible_bytes(&second_text),
@@ -5776,10 +5763,9 @@ impl CFaction {
     /// Рассылка info-notice всем членам фракции.
     ///
     /// Wire-цвет всех таких рассылок — `0xFFDAEDFE`. Аргумент цвета у
-    /// оригинального хелпера `SendInfoToAllMember` (`0x4B4890`) мёртв: тело
-    /// жёстко пушит константу `0xFFDAEDFE`, а передаваемый у части вызовов
-    /// `K=0x87a238` на провод не попадает. Машинный факт по телу `0x4B4890`
-    /// в `Nworldserver.exe` + `WorldServer.pdb`.
+    /// исходного хелпера рассылки мёртв: тело жёстко пушит константу
+    /// `0xFFDAEDFE`, а передаваемый у части вызовов `K=0x87a238` на провод
+    /// не попадает. Машинное основание — docs/reconstruction/realm-services.md.
     pub fn send_info_to_all_members_with_color<'a, F>(
         &self,
         first_text: &'a [u8],
@@ -6270,8 +6256,8 @@ impl CFaction {
         let notice = legacy_c_string_visible_bytes(&notice);
         let second_text = context.world_string(b"WS0119").unwrap_or_default();
         // Цвет тот же `0xFFDAEDFE`, что и у `Demise`: декомпиляторский
-        // `K=0x87a238` мёртв в теле хелпера `0x4B4890`, см. машинный факт
-        // у `send_info_to_all_members_with_color`.
+        // `K=0x87a238` мёртв в теле хелпера рассылки, см.
+        // `send_info_to_all_members_with_color`.
         progress.member_information = Some(self.send_info_to_all_members_with_color(
             notice,
             legacy_c_string_visible_bytes(&second_text),
@@ -6436,15 +6422,15 @@ impl CFaction {
             } else {
                 VecDeque::new()
             },
- // CloneSaveData не копирует оба runtime enemy-set.
+            // CloneSaveData не копирует оба runtime enemy-set.
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
- // Private clone-constructor не назначает transient bool.
+            // Private clone-constructor не назначает transient bool.
             permit_demise: None,
             enemy_factions_changed: None,
             city_war_enemy_factions_changed: None,
- // DB ability-owner читает ordered keys; wire-owner подтверждает
- // и сохраняемый вместе с ними полный tagApplyPerson value.
+            // DB ability-owner читает ordered keys; wire-owner подтверждает
+            // и сохраняемый вместе с ними полный tagApplyPerson value.
             apply_persons: if change_data_type & 8 != 0 {
                 self.apply_persons.clone()
             } else {
@@ -6471,9 +6457,9 @@ impl CFaction {
                 Vec::new()
             },
             change_data_type,
- // Private clone-constructor не назначает эти поля; текущие
- // безопасные значения остаются только до связанный canonical
- // нормализации SaveFactionProperty.
+            // Private clone-constructor не назначает эти поля; текущие
+            // безопасные значения остаются только до связанный canonical
+            // нормализации SaveFactionProperty.
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
             union_master_id: if copy_property {
@@ -6837,9 +6823,9 @@ impl CFaction {
         let region_name = match game.region_name(region_id) {
             WorldRegionNameLookup::RegionNotFound => &[][..],
             WorldRegionNameLookup::NullRegionPointer => {
- // разыменовывает найденный
- // `tagRegion::pRegion` без проверки на null.
- // Достижимость и наблюдаемая реакция null не определены.
+                // разыменовывает найденный
+                // `tagRegion::pRegion` без проверки на null.
+                // Достижимость и наблюдаемая реакция null не определены.
                 return MemberEnterOutcome::Blocked(MemberEnterBlockedReason::NullRegionPointer {
                     region_id,
                 });
@@ -6855,7 +6841,7 @@ impl CFaction {
             let member_region = match member.region_wire_bytes() {
                 Ok(bytes) => &bytes[..bytes.len() - 1],
                 Err(field) => {
- // strcmp читал бы за strRegion[64].
+                    // strcmp читал бы за strRegion[64].
                     return MemberEnterOutcome::Blocked(
                         MemberEnterBlockedReason::UnterminatedMemberRegion(field),
                     );
@@ -6874,8 +6860,8 @@ impl CFaction {
             .region
             .len();
         if region_name.len() >= member_region_capacity {
- // Второй `strcpy` по переполнял бы
- // `strRegion[64]` уже после исходного неравенства.
+            // Второй `strcpy` по переполнял бы
+            // `strRegion[64]` уже после исходного неравенства.
             return MemberEnterOutcome::Blocked(
                 MemberEnterBlockedReason::RegionNameExceedsMemberField {
                     region_id,

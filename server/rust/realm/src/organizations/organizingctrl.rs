@@ -2877,8 +2877,8 @@ impl COrganizingCtrl {
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
             },
- // оригинал `LoadAllFaction` удаляет temporary map на этой ветви, поэтому
- // из готового prefix не возникает live faction-owner.
+            // оригинал `LoadAllFaction` удаляет temporary map на этой ветви, поэтому
+            // из готового prefix не возникает live faction-owner.
             FactionLoadOutcome::ReturnedFalse { reported_count, .. } => {
                 OrganizingDatabaseLoadReport {
                     published_unions,
@@ -4221,8 +4221,8 @@ impl COrganizingCtrl {
         let mut message = CMessage::new(0x7FE02);
         message.base_mut().add_long(player_id);
         message.base_mut().add(&snapshot);
- // Snapshot дописан непосредственно в vector и потому требует
- // `CBaseMessage::Update` перед `SendToMapID`.
+        // Snapshot дописан непосредственно в vector и потому требует
+        // `CBaseMessage::Update` перед `SendToMapID`.
         message.base_mut().update();
         let _ = game.send_msg_to_game_server(game_server_id, &message);
         player.set_faction_data_received(true);
@@ -4433,8 +4433,8 @@ impl COrganizingCtrl {
             return Ok(OrganizingUnionApplyForJoinOutcome::UnionNotFound);
         };
 
- // `ApplyForJoin` повторно сканирует union-map по applicant. Временный
- // safe take выбранного owner-а не должен менять результат этого scan.
+        // `ApplyForJoin` повторно сканирует union-map по applicant. Временный
+        // safe take выбранного owner-а не должен менять результат этого scan.
         let applicant_membership = self.is_free_faction(applicant_faction_id);
         let mut union = self
             .confederations
@@ -5036,7 +5036,7 @@ impl COrganizingCtrl {
         let mut completed = Vec::new();
         for (&map_key, faction) in &mut self.factions {
             let Some(faction) = faction.as_deref_mut() else {
- // RTTI cast null/non-CFaction pointer пропускал.
+                // RTTI cast null/non-CFaction pointer пропускал.
                 continue;
             };
             let result = match faction.reinitialize_property_by_level(game, parameters) {
@@ -5162,9 +5162,9 @@ impl COrganizingCtrl {
     pub fn is_free_player(&self, player_id: i32) -> FreePlayerLookup {
         for (&map_key, faction) in &self.factions {
             let Some(faction) = faction.as_deref() else {
- // `IsFreePlayer` разыменовывает значение map
- // без проверки на null. Достижимость и наблюдаемая реакция
- // такого состояния не определены.
+                // `IsFreePlayer` разыменовывает значение map
+                // без проверки на null. Достижимость и наблюдаемая реакция
+                // такого состояния не определены.
                 return FreePlayerLookup::BlockedNullFaction { map_key };
             };
             let faction_id = faction.is_member(player_id);
@@ -5178,9 +5178,9 @@ impl COrganizingCtrl {
     pub fn is_free_faction(&self, faction_id: i32) -> FreeFactionLookup {
         for (&map_key, union) in &self.confederations {
             let Some(union) = union.as_deref() else {
- // `IsFreeFaction` разыменовывает значение map
- // без проверки на null. Достижимость и наблюдаемая реакция
- // такого состояния не определены.
+                // `IsFreeFaction` разыменовывает значение map
+                // без проверки на null. Достижимость и наблюдаемая реакция
+                // такого состояния не определены.
                 return FreeFactionLookup::BlockedNullConfederation { map_key };
             };
             let union_id = union.is_member(faction_id);
@@ -6100,8 +6100,8 @@ impl COrganizingCtrl {
         ) {
             Ok(session) => session,
             Err(source) => {
- // CreateSession/allocation failure старого кода приводил к
- // null dereference. Это внутренний UB, не wire-семантика.
+                // CreateSession/allocation failure старого кода приводил к
+                // null dereference. Это внутренний UB, не wire-семантика.
                 let first_reservation_removed =
                     self.remove_from_establishment_list(first_faction_id);
                 let second_reservation_removed =
@@ -7185,8 +7185,8 @@ impl COrganizingCtrl {
                         &outcome,
                         MemberEnterOutcome::Blocked(_) | MemberEnterOutcome::Published(Err(_))
                     ) {
- // Старый faction callback на этих UB-границах не
- // возвращался бы к последующей top-info отправке.
+                        // Старый faction callback на этих UB-границах не
+                        // возвращался бы к последующей top-info отправке.
                         return PlayerEnterGameOutcome::BlockedDuringFactionCallback {
                             faction_id,
                             outcome,
@@ -8262,9 +8262,9 @@ fn finish_billboard_rows(
         }
     });
 
- // Исходный `std::map<tagKey,...>` не имел faction-ID tie-break:
- // одинаковые number и шесть сравниваемых полей времени оставляли первую
- // faction из signed map-order. Stable sort + retain сохраняют именно её.
+    // Исходный `std::map<tagKey,...>` не имел faction-ID tie-break:
+    // одинаковые number и шесть сравниваемых полей времени оставляли первую
+    // faction из signed map-order. Stable sort + retain сохраняют именно её.
     let mut previous_key = None;
     rows.retain(|(number, time, _)| {
         let key = (*number, billboard_time_fields(*time));

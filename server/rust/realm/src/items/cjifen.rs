@@ -254,8 +254,8 @@ impl CWallet {
         self.release();
         let offset = *cursor;
         let Some(&marker) = source.get(offset) else {
- // Старый владелец не получал длину источника. При коротком буфере
- // он выходил за его границы; Rust не воспроизводит это UB.
+            // Старый владелец не получал длину источника. При коротком буфере
+            // он выходил за его границы; Rust не воспроизводит это UB.
             return Err(GoodsCodecError::UnexpectedEnd {
                 field: marker_field,
                 offset,

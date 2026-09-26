@@ -1,5 +1,6 @@
 //! Ресурсы сценариев Realm по worldserver/game.cpp/.h: LoadScriptFileData,
-//! LoadOneScript и GetScriptFileData. Nworldserver.exe: RVA 0x14450/0x13440/0x132e0.
+//! LoadOneScript и GetScriptFileData; источник контракта — точная пара
+//! `Nworldserver.exe` + `WorldServer.pdb`.
 //! Сборка, проверенные ветви и ограничения — docs/gameplay/scripting.md.
 
 use std::collections::BTreeMap;

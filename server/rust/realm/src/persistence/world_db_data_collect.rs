@@ -7,9 +7,7 @@
 //!
 //! Контракт подтверждён точной парой `Nworldserver.exe` + `WorldServer.pdb`
 //! (канонические идентификаторы сборки —
-//! `server/rust/src/manifest/_worldserver_export_manifest.toml`); S_PUB32
-//! первой секции: worker-вход `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30`, тело
-//! `generate_db_data` — `1:11e50`.
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Общие нормализации save-семейства описаны у [`crate::app::world_game`].
 
@@ -743,8 +741,8 @@ impl CGame {
         }
         db_data.delete_factions.clear();
         db_data.delete_unions.clear();
- // WorldServer не вызывает virtual destructor здесь:
- // save-фаза уничтожает value, сохраняя node до этой общей очистки.
+        // WorldServer не вызывает virtual destructor здесь:
+        // save-фаза уничтожает value, сохраняя node до этой общей очистки.
         db_data.regions.clear();
     }
 

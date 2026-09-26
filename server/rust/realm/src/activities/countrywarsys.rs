@@ -205,8 +205,8 @@ impl Default for CountryWarLoadReport {
 
 #[derive(Clone, Debug)]
 struct CountryWarTime {
- // записывает event DeclarEnd в поле DeclarBeginEventID и при
- // достижимом DeclarBegin затем перезаписывает его вторым ID.
+    // записывает event DeclarEnd в поле DeclarBeginEventID и при
+    // достижимом DeclarBegin затем перезаписывает его вторым ID.
     declare_begin_event_id: Option<TimerId>,
     declare_begin_time: TagTime,
     declare_end_event_id: Option<TimerId>,
@@ -676,8 +676,8 @@ impl CountryWarSys {
                 continue;
             }
 
- // всегда передаёт
- // stack long, обнулённый один раз в, без increment.
+            // всегда передаёт
+            // stack long, обнулённый один раз в, без increment.
             self.country_wars.insert(0, candidate);
             report.accepted_records = report.accepted_records.wrapping_add(1);
         }
@@ -1210,8 +1210,8 @@ impl CountryWarSys {
         let state_wire = state_message.as_wire_bytes().to_vec();
         let state_delivery = context.send_all(&state_message);
 
- // сначала копировал WS0103 в 512-byte buffer, затем полностью
- // перезаписывал его результатом sprintf(WS0104). Сам lookup сохраняем.
+        // сначала копировал WS0103 в 512-byte buffer, затем полностью
+        // перезаписывал его результатом sprintf(WS0104). Сам lookup сохраняем.
         let discarded_ws0103 = context.world_string(b"WS0103");
         let notice = context.format_declaration_notice(
             attack_country,
@@ -1255,7 +1255,7 @@ impl CountryWarSys {
             let mut victory_side = None;
 
             if region.is_some() {
- // Оригинал выполняет оба lookup независимо, затем общий gate.
+                // Оригинал выполняет оба lookup независимо, затем общий gate.
                 let defend_exists = context.country_exists(defend_country as u8)?;
                 let attack_exists = context.country_exists(attack_country as u8)?;
                 if defend_exists && attack_exists {
@@ -1486,8 +1486,8 @@ impl CountryWarTime {
                 }
             }
         } else {
- // сначала уже оставил clear-event на ClearTime, затем ставит
- // второй на now и теряет ID первого через overwrite поля.
+            // сначала уже оставил clear-event на ClearTime, затем ставит
+            // второй на now и теряет ID первого через overwrite поля.
             self.clear_event_id = Some(timer.set_time_event(now, callbacks.clear, war_id));
             registered = registered.wrapping_add(1);
         }

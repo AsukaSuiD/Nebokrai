@@ -456,8 +456,8 @@ fn read_amount_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
- // Старый вспомогательный код не получал длину источника. При коротком
- // буфере он выходил за его границы; Rust не воспроизводит это UB.
+        // Старый вспомогательный код не получал длину источника. При коротком
+        // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,
