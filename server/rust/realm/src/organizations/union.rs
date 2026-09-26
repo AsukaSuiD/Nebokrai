@@ -1936,11 +1936,15 @@ impl CUnion {
         let information = legacy_c_string_visible_bytes(&information);
         let information_title = effects.world_string(b"WS0188");
         let information_title = legacy_c_string_visible_bytes(&information_title);
+ // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
+ // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
+ // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
+ // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
         let member_information = self.send_info_to_all_members(
             information,
             information_title,
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             context,
             &mut |request| effects.send_organizing_info(request),
         );
@@ -2337,11 +2341,15 @@ impl CUnion {
         );
         let information = legacy_c_string_visible_bytes(&information);
         let title = effects.world_string(b"WS0188");
+ // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
+ // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
+ // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
+ // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
         let member_information = self.send_info_to_all_members(
             information,
             legacy_c_string_visible_bytes(&title),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             context,
             &mut |request| effects.send_organizing_info(request),
         );
@@ -2461,11 +2469,15 @@ impl CUnion {
             ],
         );
         let title = effects.world_string(b"WS0188");
+ // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
+ // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
+ // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
+ // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             context,
             &mut |request| effects.send_organizing_info(request),
         );
@@ -2616,11 +2628,15 @@ impl CUnion {
             &[UnionFormatArgument::Text(&leaving_name)],
         );
         let title = effects.world_string(b"WS0188");
+ // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
+ // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
+ // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
+ // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             context,
             &mut |request| effects.send_organizing_info(request),
         );
@@ -2741,11 +2757,15 @@ impl CUnion {
             ))],
         );
         let title = effects.world_string(b"WS0188");
+ // Машинный факт общего кадра 0x7F804: цвет рассылки всегда 0xFFDAEDFE.
+ // `CUnion::SendInfoToAllMember` (RVA 0x4C6290) лишь пробрасывает K через
+ // два уровня до `CFaction::SendInfoToAllMember` (RVA 0x4B5890), где
+ // литерал 0xFFDAEDFE его убивает — K мёртв в обоих классах.
         let member_information = self.send_info_to_all_members(
             legacy_c_string_visible_bytes(&information),
             legacy_c_string_visible_bytes(&title),
             -1,
-            0x0087_A238,
+            0xFFDA_EDFE,
             context,
             &mut |request| effects.send_organizing_info(request),
         );
