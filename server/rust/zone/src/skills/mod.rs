@@ -13,7 +13,7 @@ pub mod blind; // CBlind (0x76): kernel-вход, visual и AddBlindState (по�
 pub mod blindstate; // общий lifecycle 8-байт lock-состояний Blind/Rush/Rush2/BoaLock/KnockOut/KnightCut/SpiderWeb/Seal/Strike (порция №6c).
 pub mod callosity; // Check/AI взаимно исключающих CCallosity/CCallosity2 (порция №6c; hub-швы `selfcast`).
 pub mod callositystate; // живые replace/restart/AI/End CCallosityState/CCallosityState2 (порция №6c).
-mod chaossphere; // движущаяся область CChaosSpherePhalanx и её живая форма.
+mod chaossphere; // движущаяся область CChaosSpherePhalanx, её живая форма и тело Summon (порция T5).
 pub mod cure; // Check/AI CCure, числовое правило и выбор снимаемых состояний CastCure (порция №6a; hub-швы `statecast`).
 pub mod curestate; // живые Begin/restart/AI/End CCureState над hub-швами `statecast` (порция №6a).
 mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
@@ -21,7 +21,7 @@ pub mod dash; // рывки: общая геометрия пути, едины�
 mod directelement; // числовой расчёт прямых элементальных ударов.
 pub mod directprojectile; // CChuckStone/CSkeletonArchery (0x19D/0x1A1): Check/AI прямого снаряда буквально + hub-швы делегата.
 mod dispatch; // форма цели и снимок ожидающей команды навыка.
-mod elementphalanx; // снимок и числовой расчёт элементального удара призванных областей.
+mod elementphalanx; // снимок и числовой расчёт элементального удара призванных областей; живое применение попадания и проход боевых духов (порция T5).
 pub mod energyholding; // Check/AI накопления энергии CEnergyHolding (порция №6c; hub-швы `selfcast`).
 pub mod energyholdingstate; // живые add/consume/restart/End CEnergyHoldingState над швами `selfcast` (порция №6c).
 // Исполнение зарегистрированного навыка: typed payload player/BF и полная
@@ -35,7 +35,7 @@ pub mod flash; // CFlash (0x69): Check/AI рывка, visual, master_info/target
 mod fury; // ID состояний, которые Fury снимает перед созданием.
 pub mod godbless; // Check/AI CGodBless/CGodBless2 и параметры создания их состояний (порция №6a; clock/install-шов `GodBlessCastRuntime`).
 pub mod godblessstate; // живые callbacks CGodBlessState/CGodBlessState2 (порция №6a).
-mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2 и живая форма CGodThunderPhalanx.
+mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2, живая форма CGodThunderPhalanx и тела их Summon (порция T5).
 pub mod heal; // Check/AI квартета CHeal/CHeal2/CSuperHeal/CSuperHeal2 с ID навыков (порция №6a; FREQ машинно 6001, якорь 0x581861).
 pub mod healstate; // живые Begin/restart/AI/End состояний периодического лечения (порция №6a).
 pub mod hearten; // Check/AI CHearten и параметры нового состояния (порция №6a).
@@ -51,7 +51,8 @@ pub mod monsterbasedispatch; // диспетчерский костяк CMonster
 pub mod pathprojectile; // CEnergyBolt/CSnakeBolt/CZombieClaw (0x1A0/0x1A5/0x1A2): Check/AI путевого снаряда буквально + hub-швы делегата.
 pub mod pillar; // Check/AI и параметры стойки CPillar (порция №6c; hub-швы `selfcast`).
 pub mod pillarstate; // живые toggle/restart/AI/End CPillarState (порция №6c).
-mod poisonfog; // данные живой области CPoisonFogPhalanx.
+mod poisonfog; // данные и живая форма области CPoisonFogPhalanx; тело Summon (порция T5).
+pub mod poisonfogstate; // живые Begin/update/restart/AI/End CPoisonFogState (порция T5).
 pub mod promotion; // Check/AI CPromotion (порция №6a; hub-швы `statecast`).
 pub mod promotionstate; // живой Begin/restart CPromotionState и wire-тип его пакета (порция №6a).
 mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall, общий серверный decoder и живые композиты FireBall и GodPunishment.
@@ -62,7 +63,7 @@ pub mod seal; // CSeal (0x138): Check-гейты и формула keep-time б�
 pub mod selfcast; // hub-швы self/zone-кастов семьи blind/energyholding/roar/pillar/callosity/soulmirror (порция №6c; реализация фасадов у прежнего владельца).
 mod selfstate; // правила self-state семьи: ветка состояния, текст MP-отказа, создание Agility-состояний.
 pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
-mod snowstorm; // данные области CSnowStormPhalanx и окна выбранных клеток.
+mod snowstorm; // данные и живая форма области CSnowStormPhalanx; тело Summon и применение окна (порция T5).
 pub mod soulmirror; // маска, параметры клетки и живой обход области CSoulMirror (порция №6c; hub-швы `selfcast`).
 pub mod spidermist; // CSpiderMist (0x198): Check/AI/Summon буквально, область CSpiderMistPhalanx (маска, AI обхода, entry 0xBF502), hub-швы семьи summoncreatureskill (кластер C Monster 0x19x).
 pub mod statecast; // общие hub-швы и wire-кадр visual state-кастов пятёрки и heal-квартета (порция №6a; реализация фасадов у прежнего владельца).
@@ -79,10 +80,12 @@ mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже п
 mod tianhuophalanx; // живая область CTianhuoPhalanx: скан клетки каждый проход, End→BF504, x87-calc (порция T2).
 mod visualeffect; // visual-ресурс зарегистрированного навыка.
 mod wangsheng; // прямое восстановление HP навыком CWangsheng, без создания WangshengState.
-mod weak; // правила области ослабления CWeakPhalanx и срока призыва CWeak.
+mod weak; // правила и живая форма CWeakPhalanx; тело Summon CWeak (порция T5).
+pub mod weakstate; // живые Begin/update/restart/AI/End и смена региона CWeakState (порция T5).
 mod wuxing; // ID и подготовка 24 параметров пяти состояний У-син.
-mod yinyang; // параметры и маски областей CYinYang и CYinYang2.
+mod yinyang; // параметры и маски областей CYinYang и CYinYang2; тела их Summon (порция T5).
 pub mod yunshenglightning; // CYunShengLightning (0x19E): кадры visual, формулы и dispatch-предикаты; hub-оркестрация у делегата.
+pub mod zonalcast; // hub-швы и скелет Begin/Check/AI/visual/End областных призывов Weak/PoisonFog/SnowStorm/YinYang[2]/GodThunder[2]/FireWall/ChaosSphere/SoulMirror (порция T5).
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
@@ -188,3 +191,17 @@ pub use projectile::{ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack,
     ElementProjectileLiveField, FIRE_BALL_SKILL_ID, FireBallPath,
     GOD_PUNISHMENT_SKILL_ID,
     ProjectileServerSnapshotPrefix, SoulProjectileAmplification};
+
+// Порция T5 «zonalcast-хаб»: скелет и швы, тела Summon владельцев,
+// композиты областей и применение элементных ударов.
+pub use zonalcast::{ZonalCastAiOutcome, ZonalCastContact, ZonalCastGame,
+    ZonalCastMoveShape, ZonalCastPathBlock, ZonalCastPlayer, ZonalCastPropertyTarget,
+    check_zonal_cast, is_zonal_cast_skill, prepare_element_summon, publish_zonal_cast_visual,
+    run_zonal_cast_ai, zonal_cast_resolved_user};
+pub use weak::{CWeakPhalanx, summon_weak};
+pub use poisonfog::{CPoisonFogPhalanx, summon_poison_fog};
+pub use snowstorm::{CSnowStormPhalanx, apply_snow_storm_attack, summon_snow_storm};
+pub use yinyang::summon_yin_yang;
+pub use godthunder::summon_god_thunder;
+pub use chaossphere::summon_chaos_sphere;
+pub use elementphalanx::{apply_element_phalanx_attack, apply_element_phalanx_war_soul};

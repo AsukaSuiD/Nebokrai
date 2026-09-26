@@ -34,6 +34,13 @@
 //! пакета), lifecycle призванного существа свёрнут в шов
 //! `add_soul_mirror_summoned_creature` (property по picture id → owner →
 //! Add → возврат owner, в порядке прежнего тела).
+//!
+//! Порция T5 «zonalcast-хаб» увела общий Begin/Check/AI/End скелет зеркала
+//! и кадр его visual в `skills/zonalcast.rs`; вызов этого обхода оттуда —
+//! шов `ZonalCastContact::apply_soul_mirror_area`. Маска и scope области
+//! остаются этому файлу (соседям не делегируются). По визуалам: hub переносит
+//! только кадр `0xBFE01` скелета, а входные снимки порождённых зеркалом
+//! существ — wire-конверт `skills/summonshape.rs` (сноска по границе T5).
 
 use crate::content::CSkillBaseProperties;
 use crate::regions::ShapeIdentity;

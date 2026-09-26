@@ -8,8 +8,16 @@
 //! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).
 //! Композит `CGodThunderPhalanx` (CShape + область) перенесён из старого
 //! адаптера буквально порцией замыкания; новых машинных оснований он не
-//! добавляет. Для server decode VA 0x005F5D90 подтверждённого вызывающего
-//! пути оригинала нет (UNKNOWN), decoder не переносится.
+//! добавляет. Тело `summon_god_thunder` перенесено из старого клея буквально
+//! порцией T5 «zonalcast-хаб» (VA 0x00573840/0x00553A80 уже сверены ниже):
+//! Master(country0)/Player EM→свежая таблица→usage20015/FISTP; порядок
+//! дальнейших живых чтений — в `GodThunderSummonParameters::read`; SetTile→
+//! Initialize/RNG предшествуют повторному чтению actual region captured U;
+//! Add→encode/BF502 не зависят от успеха Add (швы `ZonalCastContact` в
+//! `skills/zonalcast.rs`). Конструктор явно отклоняет параметры с native
+//! делением на ноль или выходом из массива; валидный порядок запросов и
+//! RNG не меняется. Для server decode VA 0x005F5D90 подтверждённого
+//! вызывающего пути оригинала нет (UNKNOWN), decoder не переносится.
 
 use nebokrai_shared::protocol::LegacyWriter;
 use nebokrai_shared::values::CGuid;
@@ -18,6 +26,7 @@ use crate::effects::timed_client_state_time;
 use crate::regions::ShapeIdentity;
 use crate::regions::shape::CShape;
 use super::summonshape::SUMMON_SHAPE_TYPE;
+use super::zonalcast::{ZonalCastContact, ZonalCastMoveShape, prepare_element_summon};
 use super::{ElementPhalanxAttack, ElementSummonLiveField};
 
 pub const GOD_THUNDER_SKILL_ID: u32 = 0x140;
@@ -243,4 +252,50 @@ impl CGodThunderPhalanx {
         self.area.write_client_snapshot_fields(&mut payload, now);
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
+}
+
+/// Тело Summon CGodThunder/CGodThunder2 (VA 0x00573840/0x00553A80):
+/// префикс `prepare_element_summon` (Master(country0)/Player EM→свежая
+/// таблица→usage20015/FISTP), затем порядок живых чтений
+/// `GodThunderSummonParameters::read` с выбором исходного skill ID от
+/// диспетчера; SetTile→Initialize/RNG до повторного чтения actual region U.
+/// Перенесено буквально порцией T5 «zonalcast-хаб»; `MATCH` против
+/// `git show HEAD`.
+pub fn summon_god_thunder<Game, Runtime>(
+    game: &mut Game,
+    instance: Game::SkillAddress,
+    skill_id: u32,
+    source: (i32, ShapeIdentity),
+    destination: (i32, i32),
+    runtime: &mut Runtime,
+    now_milliseconds: &mut dyn FnMut(&mut Runtime) -> u32,
+)
+where
+    Game: ZonalCastContact<Runtime>,
+{
+    let Some((master, properties, scaled_element)) = prepare_element_summon(game, instance, source) else { return; };
+    let Some(parameters) = GodThunderSummonParameters::read(
+        skill_id,
+        |property| properties.query_property(property),
+        |field| game.zonal_source_property(source, field).map(|value| value as i32),
+        || game.registered_skill(instance).map(|skill| skill.level()),
+        scaled_element,
+    ) else { return; };
+    let started = now_milliseconds(runtime);
+    let id = game.allocate_summon_shape_id();
+    let mut phalanx = match CGodThunderPhalanx::new(id, master, started, parameters) {
+        Ok(phalanx) => phalanx,
+        Err(error) => {
+            tracing::error!(skill_id = parameters.skill_id, ?error, "некорректные параметры божественного грома");
+            return;
+        }
+    };
+    phalanx.shape_mut().set_pos_xy_base(
+        (f64::from(destination.0) + 0.5) as f32, (f64::from(destination.1) + 0.5) as f32,
+    );
+    phalanx.initialize(&mut |maximum| game.skill_random_below(maximum));
+    let Some(user) = game.resolve_state_move_shape(source.0, source.1) else { return; };
+    if !user.shape().is_assigned_to_server_region() { return; }
+    let region = user.shape().get_region_id();
+    let _ = game.add_god_thunder_phalanx(region, phalanx, started, runtime);
 }
