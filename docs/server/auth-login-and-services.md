@@ -13,9 +13,9 @@ Login сохраняет связь account с ожидающим клиенто
 | World не указан, `inside_use` отличен от `0` и `1` | Возвращается `InsideModeIgnored`, дальнейшей проверки нет. |
 | World не указан, `inside_use == 1` | Сначала локальные проверки account, ban, IP и matrix; затем при подключённом Auth создаётся Auth-запрос, иначе вызывается локальная проверка пароля. |
 
-Это фактический выбор ветвей в [loginqueue.rs](../../server/rust/src/loginserver/loginserver/loginqueue.rs), а не рекомендация обходить проверку учётной записи. При изменении входа нельзя делать Auth обязательным этапом для всех путей без пересмотра этого контракта. Обычный и расширенный клиентские запросы также различаются порядком чтения и нормализацией account; общий смысл «войти» не делает их взаимозаменяемыми.
+Это фактический выбор ветвей в [loginqueue.rs](../../server/rust/realm/src/access/loginqueue.rs), а не рекомендация обходить проверку учётной записи. При изменении входа нельзя делать Auth обязательным этапом для всех путей без пересмотра этого контракта. Обычный и расширенный клиентские запросы также различаются порядком чтения и нормализацией account; общий смысл «войти» не делает их взаимозаменяемыми.
 
-Успешная проверка ещё не завершает вход. `TagPwdChecked` передаётся в `handle_pwd_checked`, где учитываются ошибочные valid-code, при необходимости выдаётся картинка, выполняется matrix-проверка и продолжается `prepare_enter`/`enter_game`. Ответ Auth с кодом `0` создаёт эту запись с **пустым** World и `has_matrix = false`; локальный пароль использует свой полученный matrix-флаг. Реализация продолжения — [AuthHandler::on_response](../../server/rust/src/loginserver/loginserver/authhandler.rs) и `CLoginQueue::complete_checked_entry`.
+Успешная проверка ещё не завершает вход. `TagPwdChecked` передаётся в `handle_pwd_checked`, где учитываются ошибочные valid-code, при необходимости выдаётся картинка, выполняется matrix-проверка и продолжается `prepare_enter`/`enter_game`. Ответ Auth с кодом `0` создаёт эту запись с **пустым** World и `has_matrix = false`; локальный пароль использует свой полученный matrix-флаг. Реализация продолжения — [AuthHandler::on_response](../../server/rust/realm/src/access/authhandler.rs) и `CLoginQueue::complete_checked_entry`.
 
 ## Асинхронная проверка через Auth
 
@@ -26,7 +26,7 @@ Login хранит ожидающий запрос в `AuthManager`, а Auth в�
 3. Login получает `0xCF601` через Auth-очередь. `AuthManager::on_response_auth` ищет pending **по account**, удаляет запись и только затем вызывает listener. IP и socket конечного клиента берутся из ответа; отдельной сверки этой пары с удалённой записью здесь нет. Повтор после удаления получает `InvalidResponse`.
 4. Listener переводит успех в `TagPwdChecked`, а отказ — в клиентский код. Только default-код ошибки пароля дополнительно меняет счётчик ошибок; остальные отказы нельзя приравнивать к неверному паролю.
 
-Точки изменения — [AuthManager](../../server/rust/src/loginserver/loginserver/authmanager.rs), [AsMessageHandlers](../../server/rust/src/loginserver/applogin/message/asmessage.rs), [AuthMessageHandlers](../../server/rust/src/authserver/appauth/message/message_func.rs), [Auth CGame](../../server/rust/src/authserver/src/cgame.rs). Wire-поля этой пары приведены в [протоколе входа](../protocol/login-auth.md).
+Точки изменения — [AuthManager](../../server/rust/realm/src/access/authmanager.rs), [AsMessageHandlers](../../server/rust/realm/src/access/asmessage.rs), [AuthMessageHandlers](../../server/rust/src/authserver/appauth/message/message_func.rs), [Auth CGame](../../server/rust/src/authserver/src/cgame.rs). Wire-поля этой пары приведены в [протоколе входа](../protocol/login-auth.md).
 
 Timeout AuthManager публикует в ту же очередь локальный `0xCF601` с результатом `4`. Он не удаляет pending и не обновляет время старта, поэтому может публиковаться повторно до обработки первого ответа. Поздний реальный ответ конкурирует с ним за ту же запись account. Следствие для расширения: нельзя обещать корреляцию по уникальному request ID или автоматический повтор операции — таких механизмов здесь нет.
 
@@ -42,7 +42,7 @@ Auth ограничивает очередь заданий настройкой
 
 ## Внешняя проверка GAS
 
-[CGasThread](../../server/rust/src/loginserver/applogin/gasthread.rs) выполняет HTTP-проверки через [CMyWinInet](../../server/rust/src/loginserver/applogin/mywininet.rs) в отдельном blocking-потоке. После проверки работник публикует владеющий `GasWorkerEvent` и ждёт подтверждения: основной Login-проход выполняет `apply_worker_event`, применяет DB/сетевые эффекты и подтверждает завершение до следующего запроса. Это существенно сильнее простого «HTTP работает в фоне»: медленный основной цикл задерживает следующий GAS-запрос, зато один работник не обгоняет собственный предыдущий результат. Пауза пустой очереди — 10 ms.
+[CGasThread](../../server/rust/realm/src/access/gasthread.rs) выполняет HTTP-проверки через [CMyWinInet](../../server/rust/realm/src/access/mywininet.rs) в отдельном blocking-потоке. После проверки работник публикует владеющий `GasWorkerEvent` и ждёт подтверждения: основной Login-проход выполняет `apply_worker_event`, применяет DB/сетевые эффекты и подтверждает завершение до следующего запроса. Это существенно сильнее простого «HTTP работает в фоне»: медленный основной цикл задерживает следующий GAS-запрос, зато один работник не обгоняет собственный предыдущий результат. Пауза пустой очереди — 10 ms.
 
 Конкретные открытые вопросы:
 
@@ -54,7 +54,7 @@ CD-key, IP, локальный пароль и matrix-card используют 
 
 ## Billing: запрос, рабочая очередь, ответ Game
 
-Billing принимает от Game запросы баланса, покупки и обмена. Основной цикл разбирает пакет и передаёт владеющую запись в `CBillingPlayerManager`; DB-работник снимает сначала запросы баланса, затем сделки и строит ответы через `ServerCommandHandle`. Ответ не возвращается для отправки в основной доменный цикл Billing: он сразу становится командой сетевого слоя. Реализация — [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs) и [CBillingPlayerManager::run](../../server/rust/src/billingserver/appbilling/billingplayermanager.rs).
+Billing принимает от Game запросы баланса, покупки и обмена. Основной цикл разбирает пакет и передаёт владеющую запись в `CBillingPlayerManager`; DB-работник снимает сначала запросы баланса, затем сделки и строит ответы через `ServerCommandHandle`. Ответ не возвращается для отправки в основной доменный цикл Billing: он сразу становится командой сетевого слоя. Реализация — [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs) и [CBillingPlayerManager::run](../../server/rust/realm/src/billing/billingplayermanager.rs).
 
 `game_server_id` в рабочей записи здесь хранит **socket ID принятого соединения**, полученный из метаданных сообщения. Это адрес ответа, а не переданный в payload номер Game. Поле `session_id` имеет смысл конкретного запроса: в Increment Shop это ID скидочного товара, в обмене — связь с сеансом/участником. При отключении Game очередь не превращается автоматически в журнал доставки для нового соединения: поздняя адресная send-команда может не найти прежний socket. Таблица запросов и ответов — в [каталоге opcode](../protocol/opcode-catalog.md).
 
@@ -64,7 +64,7 @@ DB-ветвь сделки выбирается по пустоте `seller_iden
 
 У покупки есть важная граница ошибки: `goods_number > 1000` проверяется **после** вызова DB-операции и постановки полученного increment-log. Затем работник записывает диагностику и возвращает `false`, не формируя ответ этой покупки. Необработанный хвост уже снятого локального списка сделок уничтожается. Это не отказ валидации до побочных эффектов; перемещение проверки меняет контракт. Правила самих DB-операций описаны [отдельно](../architecture/database.md).
 
-Отдельный [rsplayerfillmgr](../../server/rust/src/dbaccess/dbbilling/rsplayerfillmgr.rs) обрабатывает ожидающие пополнения. Выборка максимум 50 записей `TBL_NeedUpdate` по ID и удаление обработанного набора описаны в [БД](../architecture/database.md). Основное подключение и cash-log настраиваются отдельно; служба читает `Setup.ini` и `GSInfoSetup.ini`.
+Отдельный [rsplayerfillmgr](../../server/rust/realm/src/billing/rsplayerfillmgr.rs) обрабатывает ожидающие пополнения. Выборка максимум 50 записей `TBL_NeedUpdate` по ID и удаление обработанного набора описаны в [БД](../architecture/database.md). Основное подключение и cash-log настраиваются отдельно; служба читает `Setup.ini` и `GSInfoSetup.ini`.
 
 При изменении покупки прослеживайте и DB-результат, и ответ Game. Игровые расчёты магазина и обмена описаны в [торговле](../gameplay/trade.md).
 

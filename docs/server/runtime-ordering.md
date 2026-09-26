@@ -35,7 +35,7 @@
 
 ## Сетевые проходы World и Game
 
-У World `WorldProcessNetworkRuntime::run_turn` при наличии принятого server-компонента запускает отдельную Tokio-задачу с `WorldServerNetworkRuntime`. Её ход: собрать завершения accept/I/O → начать очередной accept → применить сетевой снимок → запустить I/O-действия → вывести отчёт → ждать сигнал остановки либо 10 мс. Это пауза между проходами, а не гарантия такта ровно каждые 10 мс. Исходящий World→Login остаётся в `WorldProcessNetworkRuntime::run_turn` с одним неблокирующим опросом. Код — [World runtime](../../server/rust/src/worldserver/worldserver/runtime.rs); общие объекты и границы блокировок — в [сетевом runtime](network-runtime.md#кто-владеет-соединением).
+У World `WorldProcessNetworkRuntime::run_turn` при наличии принятого server-компонента запускает отдельную Tokio-задачу с `WorldServerNetworkRuntime`. Её ход: собрать завершения accept/I/O → начать очередной accept → применить сетевой снимок → запустить I/O-действия → вывести отчёт → ждать сигнал остановки либо 10 мс. Это пауза между проходами, а не гарантия такта ровно каждые 10 мс. Исходящий World→Login остаётся в `WorldProcessNetworkRuntime::run_turn` с одним неблокирующим опросом. Код — [world_network.rs](../../server/rust/realm/src/app/world_network.rs) в Realm; общие объекты и границы блокировок — в [сетевом runtime](network-runtime.md#кто-владеет-соединением).
 
 У Game сетевой ход после обслуживания принятых соединений выбирает готовые операции сначала World, затем Billing: не более **128 I/O-шагов World** и **16 I/O-шагов Billing**. Каждый `poll_once` прекращает ожидание при `Pending`; `Closed` или `Err` включаются в отчёт и заканчивают выборку этого направления. Бюджет считает I/O-шаги, включая записи и чтения неполного кадра; он не ограничивает число сообщений или длительность одного шага. Это позволяет за проход принять больше уже готовых данных, сохраняя конечную границу перед следующим направлением и доменным тактом. Код — [GameProcessNetworkRuntime::run_turn](../../server/rust/src/gameserver/gameserver/runtime.rs).
 
@@ -52,7 +52,7 @@
 | Server-info Login | При ненулевом интервале используется `interval <= now.wrapping_sub(last)`. Неблокирующий захват telemetry-lock может не добавить новые записи, но уже накопленные остаются доступны работнику. |
 | Game pacing | Целевой шаг 80 ms; после ожидания deadline увеличивается на шаг. Если знаковое отставание от обновлённого deadline больше 1000 ms, он заменяется новым tick. Это не гарантия выполнения каждого такта за 80 ms. |
 
-Методы для проверки: `CServer::acknowledge_first_receive` / `expire_new_accepts`, [AuthManager::run](../../server/rust/src/loginserver/loginserver/authmanager.rs), Auth `update_server_info`, Login `main_loop_turn`, Game `finish_main_loop_pacing`. Исходные свидетельства этих ветвей указаны в комментариях к ним; равенство поведения планировщика Windows и Tokio остаётся `UNKNOWN`.
+Методы для проверки: `CServer::acknowledge_first_receive` / `expire_new_accepts`, [AuthManager::run](../../server/rust/realm/src/access/authmanager.rs), Auth `update_server_info`, Login `main_loop_turn`, Game `finish_main_loop_pacing`. Исходные свидетельства этих ветвей указаны в комментариях к ним; равенство поведения планировщика Windows и Tokio остаётся `UNKNOWN`.
 
 ## Инициализация и завершение
 

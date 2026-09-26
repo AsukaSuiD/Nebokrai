@@ -29,7 +29,7 @@
 
 Ручное немедленное сохранение и работа без подключённых Game могут собрать уже имеющееся состояние World, не ожидая этой доставки. После успешной сборки обычный путь очищает живые списки создания/восстановления/удаления/offline и удаляет из player-map тех, кто не состоит в login или online. Эта очистка происходит **до SQL**.
 
-`take_save_data_owner` заменяет накопитель новым пустым `WorldDbData`. `take_save_thread_job` добавляет копии общих переменных, справочника предметов, honor ranks и параметров GodsBattle. Worker владеет старым пакетом целиком; изменения следующего прохода поступают в новый. DB I/O не удерживает живой `CGame`. Save-worker-ы и сборка через process save-контекст используют барьер сериализации; это не механизм транзакционного отката и не журнал повторов. Реализация: `WorldSaveThreadJob`, `WorldSaveWorker`, `WorldProcessSaveRuntime` в [game.rs](../../server/rust/src/worldserver/worldserver/game.rs) и [runtime.rs](../../server/rust/src/worldserver/worldserver/runtime.rs).
+`take_save_data_owner` заменяет накопитель новым пустым `WorldDbData`. `take_save_thread_job` добавляет копии общих переменных, справочника предметов, honor ranks и параметров GodsBattle. Worker владеет старым пакетом целиком; изменения следующего прохода поступают в новый. DB I/O не удерживает живой `CGame`. Save-worker-ы и сборка через process save-контекст используют барьер сериализации; это не механизм транзакционного отката и не журнал повторов. Реализация: `WorldSaveThreadJob` в [savedb.rs](../../server/rust/realm/src/persistence/savedb.rs), `WorldSaveWorker` и `WorldProcessSaveRuntime` в [world_process_save.rs](../../server/rust/realm/src/app/world_process_save.rs) Realm.
 
 ## Порядок записи
 

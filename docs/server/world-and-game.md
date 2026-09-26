@@ -7,7 +7,7 @@ World ведёт мировые данные и сохранение; Game ис�
 | Часть | Game | World |
 | --- | --- | --- |
 | Состояние процесса и основной цикл | [gameserver/game.rs](../../server/rust/src/gameserver/gameserver/game.rs) | [worldserver/game.rs](../../server/rust/src/worldserver/worldserver/game.rs) |
-| Сеть, ресурсы и фоновые задачи | [Game runtime](../../server/rust/src/gameserver/gameserver/runtime.rs) | [World runtime](../../server/rust/src/worldserver/worldserver/runtime.rs) |
+| Сеть, ресурсы и фоновые задачи | [Game runtime](../../server/rust/src/gameserver/gameserver/runtime.rs) | [World runtime в Realm](../../server/rust/realm/src/app/world_runtime.rs) |
 | Игровые подсистемы | `gameserver/appserver/` | `worldserver/appworld/` |
 | Загрузка и сохранение | Обмен состоянием с World | [playerloadworker](../../server/rust/src/worldserver/worldserver/playerloadworker.rs), [savedb](../../server/rust/src/worldserver/worldserver/savedb.rs), [worlddb](../../server/rust/src/dbaccess/worlddb/) |
 

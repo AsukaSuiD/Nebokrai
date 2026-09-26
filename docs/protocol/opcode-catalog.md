@@ -1,6 +1,6 @@
 # Каталог сообщений и границы покрытия
 
-`MsgType` — полное 32-битное слово по смещению `+0x04` [внутреннего заголовка](message-header.md). Направление, допустимый диапазон, внешнее [TCP-обрамление](transport.md) и назначение конкретного типа нужно читать вместе: совпадение младших байт или имени обработчика само по себе не доказывает одинаковый layout. Эта страница фиксирует **достигнутые и сопоставленные** типы входа и перехода между Login, World и Game, а не объявляет полным каталогом всей игры. Значения и роли взяты из точных EXE/PDB, указанных в owner-комментариях [Login](../../server/rust/src/loginserver/applogin/message/logmessage.rs), [World](../../server/rust/src/worldserver/appworld/message/logmessage.rs) и [Game](../../server/rust/src/gameserver/appserver/message/logmessage.rs); это `VERIFIED` для достигнутых ветвей оригинала, но не runtime-проверка новой реализации.
+`MsgType` — полное 32-битное слово по смещению `+0x04` [внутреннего заголовка](message-header.md). Направление, допустимый диапазон, внешнее [TCP-обрамление](transport.md) и назначение конкретного типа нужно читать вместе: совпадение младших байт или имени обработчика само по себе не доказывает одинаковый layout. Эта страница фиксирует **достигнутые и сопоставленные** типы входа и перехода между Login, World и Game, а не объявляет полным каталогом всей игры. Значения и роли взяты из точных EXE/PDB, указанных в owner-комментариях [Login](../../server/rust/realm/src/access/logmessage.rs), [World](../../server/rust/realm/src/app/logmessage.rs) и [Game](../../server/rust/src/gameserver/appserver/message/logmessage.rs); это `VERIFIED` для достигнутых ветвей оригинала, но не runtime-проверка новой реализации.
 
 ## Приём и маршрутизация
 
@@ -24,7 +24,7 @@
 
 ## Вход клиента и обслуживание роли через Login и World
 
-Первичный источник для клиентских значений и клиентских ответов — [Login `OnLogMessage`](../../server/rust/src/loginserver/applogin/message/logmessage.rs); для межсерверных запросов и ответов — [Login `CGame`](../../server/rust/src/loginserver/loginserver/game.rs) и [World `OnLogMessage`](../../server/rust/src/worldserver/appworld/message/logmessage.rs). Статус таблицы — `VERIFIED` для выбора ветви и указанного направления; payload каждого типа требует отдельного анализа и остаётся `PARTIAL`, если нет специальной страницы.
+Первичный источник для клиентских значений и клиентских ответов — [Login `OnLogMessage`](../../server/rust/realm/src/access/logmessage.rs); для межсерверных запросов и ответов — [Login `CGame`](../../server/rust/src/loginserver/loginserver/game.rs) и [World `OnLogMessage`](../../server/rust/realm/src/app/logmessage.rs). Статус таблицы — `VERIFIED` для выбора ветви и указанного направления; payload каждого типа требует отдельного анализа и остаётся `PARTIAL`, если нет специальной страницы.
 
 | Событие | Клиент → Login | Login → World | World → Login | Login → клиент |
 | --- | --- | --- | --- | --- |
@@ -39,14 +39,14 @@
 | Matrix / valid-code | `0x2FD08`, `0x2FD09`, `0x2FD0A` | Не устанавливается этой таблицей | Не устанавливается | Ответы зависят от условий, см. Login owner |
 | Разрыв / очистка | `0x2FD07` или локальный `0x10001` после TCP close | `0x4FB06`, при иных переходах `0x4FB07` | `0x1FF06` на соответствующей ветви | Не сводится к одному ответу |
 
-Таблица не обещает, что каждая ячейка одной строки всегда исполнится: фильтры account, CD-key, существование подключённого World, DB-результат и фаза соединения могут остановить последовательность раньше. Например, обычный Login нормализует account после проверки длины/версии, расширенный проверяет пароль раньше account и не переводит account в lowercase; поэтому их нельзя объединять только потому, что обе ветви «вход». [Доменный Login owner](../../server/rust/src/loginserver/applogin/message/logmessage.rs). `VERIFIED` для этих достигнутых ветвей; полный автомат состояний клиента `PARTIAL`.
+Таблица не обещает, что каждая ячейка одной строки всегда исполнится: фильтры account, CD-key, существование подключённого World, DB-результат и фаза соединения могут остановить последовательность раньше. Например, обычный Login нормализует account после проверки длины/версии, расширенный проверяет пароль раньше account и не переводит account в lowercase; поэтому их нельзя объединять только потому, что обе ветви «вход». [Доменный Login owner](../../server/rust/realm/src/access/logmessage.rs). `VERIFIED` для этих достигнутых ветвей; полный автомат состояний клиента `PARTIAL`.
 
 ## Передача игрока World → Game
 
 | Тип | Направление | Смысл и порядок |
 | --- | --- | --- |
 | `0x8F702` | клиент → Game | Вход клиента на игровой сервер. [Game dispatcher](../../server/rust/src/gameserver/appserver/message/logmessage.rs) читает ID, проверяет отсутствие уже загруженного игрока, меняет тип на `0x5FB01`, отправляет World и затем назначает socket→player map ID. Это два упорядоченных side effects, а не один локальный login. `VERIFIED` по Game owner. |
-| `0x5FB01` | Game → World | Запрос состояния/деталей игрока; [World dispatcher](../../server/rust/src/worldserver/appworld/message/logmessage.rs) выбирает live map, frozen save map, затем DB и может поставить player-load FIFO. `VERIFIED` для порядка ветвей, payload `PARTIAL`. |
+| `0x5FB01` | Game → World | Запрос состояния/деталей игрока; [World dispatcher](../../server/rust/realm/src/app/logmessage.rs) выбирает live map, frozen save map, затем DB и может поставить player-load FIFO. `VERIFIED` для порядка ветвей, payload `PARTIAL`. |
 | `0x7F901` | World → Game | Результат загрузки игрока. [Game dispatcher](../../server/rust/src/gameserver/appserver/message/logmessage.rs) трактует положительный status как ID игрока, `0`/`-1` как отказ, `-2` как служебный игнорируемый результат; затем декодирует GameSave и формирует клиентский снимок. `VERIFIED` для достигнутой ветви; полная byte parity GameSave `PARTIAL`. |
 | `0xBF401` | Game → клиент | Полный начальный snapshot либо короткий отказ `long(0)`. Точный внешний порядок и доказанный однобайтовый `country_identity` приведены в [спецификации сообщения](game-login.md). Общий layout `PARTIAL`. |
 | `0xEF201` | Game → Billing | Запрос баланса: C-строка account, затем `long player_id`. Game ставит его после вызова отправки начального snapshot, **без проверки её результата**. Приём — `BillingMessageHandler::on_account_request`; ответ — `0xFF001`, см. таблицу ниже. |
@@ -143,7 +143,7 @@ World передаёт Game ту же структуру конфигураци�
 | Запрос → ответ | Действие | Где записан контракт |
 | --- | --- | --- |
 | `0xCF501` → `0xCF601` | Login → Auth → Login: обычная проверка account с данными корреляции конечного клиента. | [Поля и локальный timeout](login-auth.md); ожидание и дубликаты — [служебные процессы](../server/auth-login-and-services.md). |
-| `0xEF201` → `0xFF001` | Game → Billing → Game: баланс. Запрос описан выше; ответ: `long player_id`, `long result`, только при `result == 0` — `long point`. Пустой account в запросе даёт no-op до чтения ID. | [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs), [CBillingPlayerManager::run](../../server/rust/src/billingserver/appbilling/billingplayermanager.rs). |
+| `0xEF201` → `0xFF001` | Game → Billing → Game: баланс. Запрос описан выше; ответ: `long player_id`, `long result`, только при `result == 0` — `long point`. Пустой account в запросе даёт no-op до чтения ID. | [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs), [CBillingPlayerManager::run](../../server/rust/realm/src/billing/billingplayermanager.rs). |
 | `0xEF202` → `0xFF002` | Покупка в магазине; асинхронный запрос передаёт цену, товар, количество и session-контекст. | Те же обработчик и работник; игровой смысл и поля результата — [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
 | `0xEF203` → `0xFF003` | Расчёт сделки между игроками, включая идентификаторы участников, session/plugin и GUID товара. | Те же обработчик и работник; [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
 

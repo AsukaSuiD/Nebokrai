@@ -23,7 +23,7 @@ Nebokrai восстанавливает серверное поведение «
 | --- | --- |
 | [`architecture/`](architecture/) | [Realm, Zone и Shared](architecture/realm-and-zone.md), [карта проекта](architecture/workspace.md) |
 | [`gameplay/`](gameplay/) | [Симуляция](gameplay/simulation.md) и далее по подсистемам |
-| [`reconstruction/`](reconstruction/) | [Обзор метода](reconstruction/overview.md), [правила evidence](reconstruction/evidence-and-contracts.md) |
+| [`reconstruction/`](reconstruction/) | [Обзор метода](reconstruction/overview.md), [правила evidence](reconstruction/evidence-and-contracts.md), доказательные базы: [Realm](reconstruction/realm-services.md), [Zone-навыки](reconstruction/gameserver-skills.md), [Zone-регионы и NPC](reconstruction/gameserver-npc-and-regions.md), [Shared](reconstruction/shared-technical.md) |
 | [`operations/`](operations/) | [Сборка](operations/build.md), [локальный стенд](operations/hybrid-runtime.md), [диагностика](operations/diagnostics.md) |
 | [`status/`](status/) | [Аудит проекта](status/audit.md) |
 
@@ -79,7 +79,7 @@ Nebokrai восстанавливает серверное поведение «
 
 ## Работа с реконструкцией
 
-[Как проверять поведение оригинала](reconstruction/evidence-and-contracts.md) нужно при восстановлении неизвестной механики или спорного формата. [Материалы анализа](reconstruction/sources.md) описывает необязательные локальные данные.
+[Как проверять поведение оригинала](reconstruction/evidence-and-contracts.md) нужно при восстановлении неизвестной механики или спорного формата. [Материалы анализа](reconstruction/sources.md) описывает необязательные локальные данные. Машинные основания вынесены из заголовков кода в доказательные базы направлений: [службы Realm](reconstruction/realm-services.md), [навыки GameServer](reconstruction/gameserver-skills.md), [NPC, регионы, AI и бой Zone](reconstruction/gameserver-npc-and-regions.md), [технический слой Shared](reconstruction/shared-technical.md); в источнике остаётся короткая ссылка на свой документ.
 
 Документацию меняют вместе с поведением. На странице объясняют назначение, устройство и причину решения; точные поля и формулы оставляют там, где ими пользуются. Принятые правила отделяют от текущей реализации и её расхождений. Подход закреплён в [ADR-0001](decisions/0001-system-specification.md) и [ADR-0007](decisions/0007-reuse-existing-mechanisms.md).
 

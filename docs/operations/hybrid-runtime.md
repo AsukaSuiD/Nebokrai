@@ -80,7 +80,7 @@ docker compose up -d --build
 | Bind-mount `runtime/<служба>`, `/runtime` | Конфиги, ресурсы и записанные службой файлы. Это рабочие данные, а не только вход для образа. |
 | `runtime/Database`, `/backup:ro` | Исходные backup; SQL не записывает туда текущие изменения БД. |
 
-В частности, World пишет состояния городских регионов в `regions/<ID>.rgn` и обновляет `setup/JJcConfig.ini`, а файловые журналы служб попадают обратно в их host-каталоги. Поэтому сохранение одного SQL-тома не охватывает все локальные данные. Права на запись и исходная структура подкаталогов имеют значение. Источники — [Compose](../../deploy/hybrid/compose.yaml), [сохранение региона](../../server/rust/src/worldserver/appworld/region.rs), [World runtime](../../server/rust/src/worldserver/worldserver/runtime.rs).
+В частности, World пишет состояния городских регионов в `regions/<ID>.rgn` и обновляет `setup/JJcConfig.ini`, а файловые журналы служб попадают обратно в их host-каталоги. Поэтому сохранение одного SQL-тома не охватывает все локальные данные. Права на запись и исходная структура подкаталогов имеют значение. Источники — [Compose](../../deploy/hybrid/compose.yaml), [сохранение региона](../../server/rust/src/worldserver/appworld/region.rs), [World save-контекст](../../server/rust/realm/src/app/world_process_save.rs).
 
 ## Остановка и повторное использование стенда
 

@@ -25,7 +25,7 @@ flowchart LR
   registry --> rule["Игровая механика"]
 ```
 
-Основные ветви загрузки собраны в `CGame::reload` World, доступ к данным — в `WorldProcessResources`. [World game.rs](../../server/rust/src/worldserver/worldserver/game.rs) определяет порядок, [runtime.rs](../../server/rust/src/worldserver/worldserver/runtime.rs) хранит ресурсы и публикует снимки для фоновых потребителей.
+Основные ветви загрузки собраны в `CGame::reload` World, доступ к данным — в `WorldProcessResources`. [World reload](../../server/rust/realm/src/app/world_reload.rs) определяет порядок, [world_process_resources.rs](../../server/rust/realm/src/app/world_process_resources.rs) хранит ресурсы и публикует снимки для фоновых потребителей.
 
 В этом пути `publish_player_load_snapshot` обновляет набор таблиц для загрузки персонажа: свойства, коэффициенты, предметы и параметры валюты. Поэтому исправление только живой таблицы World может быть недостаточным для следующей загрузки игрока. Это описание существующего пути передачи данных, а не утверждение о едином устройстве всех настроек сервера.
 
