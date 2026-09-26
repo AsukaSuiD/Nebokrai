@@ -1,20 +1,11 @@
-//! Состояния Zone: арена экземпляров мобильного носителя (`storage`,
-//! бывший `moveshape/state_storage.rs` переходного Game), читающие проекции
-//! её семейств (`accessors` — бывшие query-методы hub
-//! `appserver/moveshape.rs`), мутирующие операции и RAW-слой записей
-//! Serialize-cache (`mutations` — бывшая мутирующая половина того же hub),
-//! клиентские контракты (`catalog` — проекция
-//! живых записей для `CMoveShape::AddToByteArray_ForClient` и runtime-план
-//! visual после Begin), двухпроходный клиентский писатель этого снимка
-//! (`snapshot` — бывшие `encode_*_client_snapshot` hub
-//! `appserver/moveshape.rs`) и DB Save/Load (`serialization` — кодек проекции
-//! GameSave, бывшая Save/Load-семья hub `appserver/moveshape.rs`).
+//! Состояния Zone: арена экземпляров мобильного носителя, её читающие проекции
+//! и мутирующие операции, клиентские контракты/снимки и DB Save/Load-кодек.
 
 mod accessors; // читающие проекции арены состояний владельца.
 mod catalog; // клиентская проекция живых состояний и runtime-план их visual.
 mod mutations; // мутирующие операции арены, RAW-записи Serialize-cache и splice замены.
 mod serialization; // DB Save/Load-кодек состояний GameSave и сброс persisted snapshot.
-mod snapshot; // двухпроходный клиентский писатель снимка состояний `AddToByteArray_ForClient` (0x004CDD30).
+mod snapshot; // двухпроходный клиентский писатель снимка состояний `AddToByteArray_ForClient`.
 mod storage; // арена экземпляров состояний мобильного носителя.
 
 pub use accessors::{
@@ -47,7 +38,7 @@ pub use serialization::{
 }; // DB-кодек проекции GameSave и бинарные примитивы записей состояний.
 pub use snapshot::{
     encode_client_snapshot, encode_client_snapshot_with_team_count, encode_fresh_client_snapshot,
-}; // двухпроходный клиентский писатель снимка состояний `CMoveShape` (0x004CDD30).
+}; // двухпроходный клиентский писатель снимка состояний `CMoveShape`.
 pub use storage::{
     AppliedState, AppliedStateEntries, CanonicalStateStorage, LegacyStateCodec, StateBatch,
     StateData, StateKey, StateSerialization,

@@ -1,7 +1,6 @@
-//! Data-ядра `CServerRegion` (исходный владелец — `appserver/serverregion.h/.cpp`).
-//! Переходный агрегат старого пакета делегирует операции файлам этого
-//! компонента без изменения сигнатур методов; entry-effects входа, доменные
-//! классы и lifecycle остаются у него.
+//! Data-ядра `CServerRegion`. Переходный агрегат старого пакета делегирует
+//! операции файлам этого компонента без изменения сигнатур методов;
+//! entry-effects входа, доменные классы и lifecycle остаются у него.
 
 pub mod areagrid; // area-grid: построение, доступ и war-soul карты.
 pub mod blocks; // block-refresh клеток, spatial shape-lookup и skill-cell формула блока.

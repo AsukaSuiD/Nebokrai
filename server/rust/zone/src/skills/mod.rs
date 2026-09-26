@@ -5,7 +5,7 @@ mod battlefairy; // правила навыков боевого духа (сб�
 mod battlefairyattribute; // Check/AI атрибутного октета Po/Yu (0x212..0x219) над hub-швами `battlefairyskill`.
 mod battlefairybasemagic; // Check/AI и Summon BFBaseAttack (0x224) над hub-швами.
 mod battlefairybasemagicphalanx; // снаряд CBFBaseAttackPhalanx: форма, тики, клиентский снимок и формула.
-pub mod battlefairygear; // экипировка, потенциал (0x8FC2A), улучшение (аудит 0x60202/0x60203) и сброс ZHQLS01/ZHJNS01-02 боевой феи у CPlayer: BFPropertyAdd double-apply quirk и полные resolution-оркестрации (hub-трейт `BattleFairyGearHost` прежнего CPlayer).
+pub mod battlefairygear; // экипировка, потенциал (0x8FC2A), улучшение (0x60202/0x60203) и сброс ZHQLS01/ZHJNS01-02 боевой феи у CPlayer: BFPropertyAdd double-apply quirk и полные resolution-оркестрации (hub-трейт `BattleFairyGearHost` прежнего CPlayer).
 pub mod battlefairyskill; // координатор BF-семейства: общий вход, End-контракт, visual-таблица 19 тел и hub-трейты.
 mod battlefairytransfer; // Check/AI CHuoxieshu/CLingzhishu (точечная BF918).
 pub mod battlefairysummon; // призыв, следование и гибель/воскрешение боевого духа у CPlayer: SetWarSoulStaus, SummonBF±1, ComputeWarSoulXY, spatial tails и death/revive (view/closure-швы прежнего hub CPlayer).

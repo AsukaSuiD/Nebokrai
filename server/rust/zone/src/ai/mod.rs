@@ -1,7 +1,7 @@
-//! Поведение AI фигур живого региона исторического GameServer. Региональный
-//! реестр, around-доставка шагов и час-тик owner-а остаются hub-владением через
-//! фасады `monsterai`/`playerai` делегатов старого пакета. Контракт:
-//! `docs/gameplay/npc-ai.md`.
+//! Поведение AI фигур живого региона исторического GameServer. Реестр,
+//! around-доставка шагов и час-тик owner-а — hub-владение через фасады
+//! `monsterai`/`playerai` делегатов старого пакета.
+//! Контракт: `docs/gameplay/npc-ai.md`.
 
 mod events; // элементы `AI_EVENT` и коды `AI_SHAPE_ACTION`; чистый wrapping-deadline.
 pub mod baseai; // `CBaseAI`: три FIFO, object-цель, back-stage навыки, dormancy, Slip и задержка шага MoveTo.

@@ -1,18 +1,7 @@
-//! Исполнение зарегистрированного навыка Zone. Обязанность компонента —
-//! lifecycle исполнения: typed payload игрока и боевого духа (`payload`,
-//! `player`, `battlefairy`), payload исполнения монстра с его
-//! progress-каталогом (`monster`) и
-//! полная запись реестра (`record`): скалярная база `SkillIdentity` +
-//! execution + retained данные полёта с фасадами install/clear/progress/
-//! advance/prepare/clear_end. Alias `MoveShapeSkill` специализирует запись
-//! монстровым payload прямо здесь: оба операнда (`RegisteredSkillRecord` и
-//! `MonsterSkillExecution`) — типы этого компонента, тогда как
-//! `regions::skillregistry` связан с записью только generic-швом
-//! `SkillIdentityAccess` и конкретную специализацию не называет.
-//! Переходным hub-владельцам записи generic-сварки `MonsterSkillExecutionAccess`
-//! и `MonsterSkillProgressState<M>` остаются открытой формой доступа.
-//! Источник: gameserver.exe + GameServer.pdb, `appserver/moveshape.h/.cpp`,
-//! `appserver/states/skill.cpp/.h` и конкретные `appserver/skills/*.cpp/.h`.
+//! Исполнение зарегистрированного навыка Zone: typed payload игрока и боевого
+//! духа, payload исполнения монстра с progress-каталогом и полная запись
+//! реестра со скалярной базой `SkillIdentity`; generic-сварки записи открыты
+//! переходным hub-владельцам.
 
 mod battlefairy;
 mod monster;
@@ -49,9 +38,7 @@ pub use record::{
     RegisteredSkillExecution, RegisteredSkillRecord, SkillRetainedData,
 };
 
-/// Полная запись зарегистрированного навыка фигуры: скалярная база
-/// `SkillIdentity` (Zone `regions/skillregistry`), execution kernel и retained
-/// данные полёта. Раньше alias жил в hub `appserver/moveshape.rs` из-за
-/// hub-владения payload монстра; теперь оба операнда специализации принадлежат
-/// этому компоненту, и hub сохраняет только re-export прежнего имени.
+/// Полная запись зарегистрированного навыка фигуры: скалярная база `SkillIdentity`
+/// (`regions/skillregistry`), execution kernel и retained данные полёта; оба операнда
+/// специализации — типы этого компонента, hub сохраняет только re-export прежнего имени.
 pub type MoveShapeSkill = RegisteredSkillRecord<MonsterSkillExecution>;
