@@ -1,432 +1,54 @@
-//! Достигнутая send-family проекция `CPlayer` исторического GameServer.
-//! UpdateProperty (0x004593E0, GameServer.exe/GameServer.pdb, player.cpp)
-//! оставляет формулы экипировки у player, а +0x24 каждого состояния выполняет
-//! общий живой CMoveShape-проход. Промежуточные tagProperty видны следующему
-//! callback; копии списка, фильтр «последний CHBY» и очередь visuals сняты.
-//! Чистые Ex/Undead/Ride-формулы читают owning payload по ссылке без callbacks.
-//! CHBY Begin/End не дублируются в Player mutation-wrapper: их mode/hotkeys
-//! и общий AddSkill/DelSkill выполняет единственный state-owner через CGame.
-//! Mount0x00444E20 представлен CGame::begin_player_ride: C-string name перед
-//! constructor/Begin/append, fight-state GS0154 с native return1 без установки.
-//! Технический отказ allocator не эмулируется; время и actual participants
-//! принадлежат этому Begin, а внешний Update остаётся в ветке UseItem.
-//! Undead/Appellation также устанавливается и завершается через общий
-//! lifecycle CMoveShape; Player не хранит промежуточную пачку копий состояний.
-//! RestoreHp/RestoreMp (0x00444C80/0x00444D50) координирует CGame:
-//! после двух cooldown-часов выполняются constructor, Begin(self, self)
-//! с отдельным clock и общая регистрация. Нулевой срок не означает мгновенное
-//! лечение; повторные состояния сохраняются, внешнего UpdateProperty нет.
-//! HP/MP-mutation wrappers устранены: AI обращается к тому же живому payload.
-//! Particular: OnObjectAdded (0x004451A0) вызывает общий Begin синхронно
-//! после container commit и GoodsAI, до следующего товара; собственный equipment-listener
-//! (0x004EF6C0) сначала публикует skills/properties/BF720/PackExpand.
-//! OnEnterRegion (0x0045A410) собирает только ordered unique additional-значения;
-//! packet-вектор отбрасывается, GUID-listener дополняется экипировкой.
-//! Packet Add (0x004DE6E0) регистрирует GoodsAI до player-listener;
-//! ComputeTicket (0x0043E820) читает wall-clock только после life/ticket/type/start gates.
-//! Packet Swap проходит тот же синхронный Add, включая восстановление displaced
-//! при отказе; storage-алгоритм и его конечный garbage-collect остаются общими.
-//! Ride AI (0x004F9110, other states/ridestate.cpp) проверяет packet actual
-//! Sufferer через существующий property-listener: сначала GAP_MOUNT_TYPE != 0,
-//! затем GUID lookup и сравнение type/level. Проверка read-only, без cached GUID,
-//! локального state-key и часов; поиск по goods-name оставлен только формуле.
-//! OnLost (0x0044183B..0x00441894, player.cpp:1780) проходит живые позиции:
-//! для очередного CHBY ставит has_changed_region=false/online=true и при
-//! !restore_online сразу отправляет исходный BF806 и вызывает End. Следующий
-//! индекс/размер читается после callback, без предварительной пачки ключей,
-//! принудительного destructor, дополнительных часов или UpdateProperty.
-//! SelfTarget — объектная перегрузка Attack с самим игроком: обычный запрос
-//! вызывает virtual +0x78 в 0x00488E20, item — в 0x00489109/0x00489547,
-//! WarSoul — в 0x0048953D/0x00489547. Он имеет ту же цель type=400/id игрока,
-//! что явный Object на себя; Point использует другую перегрузку +0x74.
-//! Формы команды и сравнение ожидающего запроса принадлежат
-//! `zone/skills/dispatch.rs`; Player собирает их из живого запроса.
-//! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
-//! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
-//! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
-//! Exact-key AutoProtect End (0x005D44E0) снимает auto_protected перед
-//! RemoveState; визуальный эффект и Player/GM gate принадлежат общему CGame
-//! direct-End координатору, а не повторяются в тонком state-wrapper.
+//! Hub `CPlayer` переходного пакета: владелец живого state игрока и его
+//! адаптеров (send-family проекция исторического GameServer). Значимое
+//! поведение держат части и их владельцы в Zone; этот hub хранит поля,
+//! accessors и делегаты прежних сигнатур единого `CGame`/message-контура.
 //!
-//! PDB `GameServer/GameServer.pdb` подтверждает base `CMoveShape +0x0` и signed
-//! `m_lTeamID +0xB20`, а также unsigned byte `m_btCountry +0xA5C`. Exact
-//! `CMessage::SendToAround` RVA `0x00014420` и
-//! `SendToRegionContryPlayer` RVA `0x00014760` читают inherited
-//! `CBaseObject::m_lID +0x8` как numeric map/player identity, team ID и country
-//! после RTTI `CShape/CMoveShape -> CPlayer`. Эти достигнутые поля имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; исходники
-//! `server/gameserver/appserver/player.h/.cpp`.
-//! Расход MP атрибутных навыков Po/Yu использует непосредственно equipment[10]
-//! (CPojia::AI 0x0052a77f), без повторного GetWarSoulGoods. Это отдельный
-//! адаптер к общему списанию; проверка типа товара у CWangsheng сохраняется.
-//! GameSave сохраняет предмет в руке перед экипировкой: CPlayer::AddToByteArray
-//! (0x00440dc0) вызывает m_cHand::Serialize, а World читает этот контейнер
-//! в том же порядке. Используется готовый codec CAmountLimitGoodsContainer,
-//! сохраняющий количество и порядок предметов, известных фабрике.
-//! Общий `AddSkillsToByteArray` (0x00432b80) пишет навыки в порядке
-//! Attack→Defense→Summon→State, внутри категории — в порядке регистрации.
-//! GameSave и initial client используют один обход; `GetNumSkills`
-//! (0x00432aa0) тем же фильтром исключает только Defense с ID 10.
-//! Имя skill-снимка читается из текущих свойств ID/уровня, как GetSkillName
-//! (0x004D86E0). Some хранит прочитанные байты, включая пустое имя; None
-//! требует при публикации локализованный GS0318 либо пустую строку.
-//! LoadBFDefualtProperty (0x00502BC0) после AddSkill отдельно проверяет
-//! GetSkill: успех регистрации не гарантирует разрешение metadata-категории.
-//! Два player-входа продолжают инициализацию без skill-пакета при null,
-//! вместо паники или отката уже добавленного экземпляра.
-//! Organizing identity `m_lFactionID/m_lFacMasterID` обновляется из полного
-//! World `0x7FE06` wire; `IsFactionMaster` сохраняет exact positive-faction и
-//! player-ID equality contract.
-//! Полный World→Game `0x7F901` handoff теперь декодирует единый
-//! `CPlayer::DecordFromByteArray(..., true)` layout: shape/base/combat,
-//! skills/states, containers, variables, timers, companions, quests, country,
-//! organization и session. Обратный `AddGameSaveToByteArray` использует те же
-//! owned поля и live pet/carriage snapshot; машинная досверка той же точной
-//! пары показала, что результаты `CShape::AddToByteArray`, всех 15 container
-//! serialize и `CVariableList::AddToByteArray` не тестируются, а функция
-//! безусловно возвращает 1 (`0x00441399`). false-подрезультаты цепочки
-//! поэтому отбрасываются, а ошибками encode остаются только безопасные
-//! границы Rust. Первым шагом encode оригинал вызывает `DelAllItemInDelList`
-//! (`0x00440DDC` → `0x0043E4E0`): сущности del-list в Rust нет, её pre-effect
-//! не воспроизводится (UNKNOWN). После чтения base-wire
-//! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
-//! принимается как независимый persisted fact.
-//! Quest-map, skill-list, friend-list и три organization-list decoder-а
-//! сохраняют signed legacy count: отрицательное значение очищает коллекцию и
-//! не отклоняет остальной handoff. CiQing/pet loops исходника на отрицательном
-//! count патологически обходили бы весь `u32`; безопасная Rust-граница такие
-//! данные отклоняет. Organization force/contribute читаются как `i32`, но
-//! нормализуются в `0/1`, поскольку persisted owner хранит их как `bool`.
-//! Decoder virtual +0x9C — `UpdateProperty`, не InitSkills. Последний
-//! вызывается `OnLogMessage` после login-script (0x0049FC0A, slot +0x14C):
-//! добавляет отсутствующие intrinsic skills и выбирает default посредством
-//! SetCurrentSkill, не восстанавливая HP. CGame сохраняет этот owning tail.
-//! CPlayer ctor (0x004590DC/0x00459365) задаёт InChangingRegion=true и
-//! last-enter timestamp=0: первый 8F801 проходит обычный EnterTime/flag gate.
-//! Initial-login tail обходит GoodsAI candidates в exact positional order:
-//! equipment, packet, hand, auction и depot. Для equipment-state `2` нулевая
-//! packed date прерывает только текущий container; просроченное состояние
-//! становится `3` до old-client `0xBF928`, как в `OnLogMessage`.
-//! `CMessage::Run` RVA `0x000149D0` дополнительно читает inherited father
-//! `+0x40` как текущий `CServerRegion*`; удалённый raw pointer выражен
-//! `Option<i32>` region identity в assembly-проекции.
+//! GameSave codec и клиентские снимки игрока — Zone `players`
+//! (`zone/src/players/`):
+//! - `decode_game_save`/`encode_game_save`, base/combat property wire,
+//!   organizing snapshot, LeiTing codec, init/refresh persistence-контейнеров
+//!   и унаследованные машинные факты (`0x00441399` discard-цепочка,
+//!   `DelAllItemInDelList` UNKNOWN, D1/D8 отложенные границы) —
+//!   `zone::players::gamesave`; layout VERIFIED машинной разведкой
+//!   GameSave-форматов (fix D2/D4).
+//! - `encode_client_shape_snapshot` (short area/query) и
+//!   `encode_initial_client_snapshot` (full login `0xBF401`) —
+//!   `zone::players::clientsnapshot`.
+//! - Codec-типы и wire-константы — re-export совместимости ниже для hub-а
+//!   и его callers; делегаты передают заёмные проекции полей.
+//! - Временные generic-швы: realm-appellation bonus-предикат и
+//!   `CanMountEquip` из hub-а — см. шапку `zone::players::gamesave`.
 //!
-//! Материализована также подтверждённая setter-family: боевые scalar-ы
-//! насыщаются до `INT_MAX`, contribution — до `±2_000_000_000`, а fetch power
-//! сравнивается с unsigned-представлением setup limit. Это минимальный owned
-//! player state для будущих equipment/battle-fairy side effects, но не замена
-//! полного constructor-а, property recalc или runtime player lifecycle.
-//! World kill confirmation `0x7F806` materializes `wPkCount`, `dwKillCount` и
-//! murderer timestamp: PK насыщается до `0xFFFF`, kills wrapping-инкрементятся,
-//! а clock читается только при первом ненулевом murderer state.
-//! FourNation reward `0x7FE46` добавляет owned `dwExploit`: advertised client
-//! value сохраняет wrapping addition, `SetExploit` отдельно применяет exact
-//! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
-//! обязательным caller-runtime effect после мутации.
-//! Reached script property catalog отделён от gameplay setter-ов: generic
-//! `SetValue/ChangeValue` сохраняет narrowing/wrapping storage, включая
-//! shipped `Experience` alias и достигнутые honor
-//! `dwAppellationID/dwRankOfNobilityID`; bool fairy enable pair нормализует
-//! ненулевой write в persisted player state. `GetValue` читает также credit,
-//! SZL и contribution из canonical storage. Пересчёт и
-//! `0xBF721` остаются у вызывающего `CGame`.
-//! Total honor-rank startup материализует days/weeks/months counters и
-//! nobility rank: reset меняет owned state и возвращает точный признак
-//! `AdjustHonorRank`, который `CGame` связывает с общим script scheduler.
-//! Silence-timeout, как и оригинал, проверяется лениво при query по
-//! инъецируемому wrapping `timeGetTime`-значению. Decode GameSave
-//! восстанавливает полную машинную пару (`0x0044C0A7..0x0044C0E1`): wire>0
-//! сохраняет minutes и начало `timeGetTime()/60_000` (магический делитель
-//! `0x45E7B273`, shr `0xE`), wire≤0 обнуляет оба поля — та же семантика, что
-//! exact `SetSilence`; отрицательный wire более не wrap-ит в бесконечный
-//! silence. Reached `OnExit` отдельно
-//! сохраняет исходные один либо три clock-read и пересчитывает остаток перед
-//! GameSave. GM `0x7FC0B/0x7FC0E`
-//! замыкают name lookup, mutation, двухпроходный ordered query и World
-//! responses, поэтому отдельный scheduler не требуется.
-//! Тот же `OnExit` после around-публикации восстанавливает умершего и
-//! сохраняет выбранные `GetReturnPoint` region/tile/direction до GameSave;
-//! team membership при `OnLost` намеренно не очищается.
-//! Client allocation `0x8FA01` владеет sex/occupation, remaining point,
-//! четырьмя base stat и base HP/MP maxima. Сохранены общий STR gate для всех
-//! `Add*`, безусловный расход очка и отдельный 0x9c-byte `m_Property` wire:
-//! reached recompute заменяет только подтверждённые поля, не обнуляя хвост.
-//! PDB-layout `tagBaseProperty/tagProperty` задаёт отдельные `wBaseMaxYp +0xB8`,
-//! `wBaseBurden +0xD6`, hit/attack-speed slots и fairy-флаги
-//! `+0x90..+0x92`; полный `UpdateProperty` пересобирает их из base owner-а,
-//! а не сохраняет ошибочно сдвинутые байты прежнего combat snapshot.
-//! PvP preferences `0x8FA05` хранят пять live permission flags, которые
-//! downstream player/skill AI читает при выборе обычных, team, union,
-//! criminal и country целей; unknown selector только потребляет вход.
-//! `CPlayer::IsAttackAble` материализован двумя достигнутыми направлениями:
-//! player-attacker проходит общую PvP/security политику, monster-attacker —
-//! точные tame, city/country guard и criminal ветви. Их нельзя объединять с
-//! одноимённой monster-side проверкой обратного направления.
-//! Межсерверная прогрессия `0x7FA08/09/0B` использует собственную карту
-//! навыков и поля уровня с опытом: перегрузки по имени делегируют фабрике
-//! поиск ID, а `SetLevel` возвращает фракционное последствие вызывающему коду
-//! до точного клиентского сообщения прогрессии. `0x7FA0A` относится к
-//! контейнерному удалению предметов и не проходит через карту навыков.
-//! Тот же persisted level/exp/vigour/base-stat owner теперь обслуживает reached
-//! auto-inc `CheckLevel`; multi-level scripts, property recompute и network
-//! результаты остаются у `CGame`, чтобы helper-ы не образовывали shadow path.
-//! Метки времени общих и государственных разговоров принадлежат тому же
-//! состоянию игрока: время восстановления с переполнением обновляется до
-//! проверки и списания стоимости канала.
-//! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
-//! RP/YP сохраняют соседние WORD offsets `0xAC/0xAE` base-wire. Изменение
-//! самих max не выполняет этот clamp без конкретного caller-а.
-//! Достигнутый damage runtime использует те же maximum HP и `reank` в
-//! унаследованном `CMoveShape::Stiffen`, не создавая отдельный combat snapshot.
-//! `CPlayer::OnBeenHurted` RVA `0x00041D80` связан целиком: после износа брони
-//! пассивные свободные питомцы принимают identity нападавшего, а атака игрока
-//! другой страны вне block `1` через region-owned wrapping cooldown публикует
-//! World `0x5FD09/GS0133` с именем региона и координатами жертвы.
-//! Соседний `OnDied` использует тот же `m_lNotify`, но отдельный kill timestamp
-//! и строгий gate `last + interval < now`; `GS0140..GS0142` также запрещены
-//! именно block `1`, а не одноимённым значением security.
-//! `OnBeenMurdered` honor-eliminate `0x5FD0D` сравнивает union master identity,
-//! проверяет тот же block `1` и передаёт World все четыре текущих счётчика;
-//! общий PK policy ниже по цепочке по-прежнему использует security клетки.
-//! `UseItem` материализует точные коды требований, принадлежащее игроку
-//! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
-//! `tagExpendableEffect`. Эффекты 0x4A..4D читают часы внутри своего case,
-//! не в общем UseItem.
-//! Новая запись: value1 для owner → clock → value2 → отдельное value1 для
-//! прибавления свойства → append. Замена: снять old → value1/прибавить →
-//! clock/timestamp → value2/duration → повторное value1/owner.value.
-//! Эти чтения не объединяются; WORD/DWORD wrapping остаётся исходным.
-//! Проверки и состояния ездового животного и
-//! `ChangeBody` замкнуты на владельцах игрока и игры. Возврат предметами
-//! сохраняет порядок рюкзак → экипировка → рука и передаёт `CGame` только
-//! последовательное удаление предметов и смену региона; временные `CState`
-//! и неподдержанные селекторы виртуальной машины сценариев остаются внешней
-//! границей времени исполнения.
-//! Как в связном `RefreshContainerOwners`, достигнутые equipment,
-//! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
-//! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
-//! enable/vigour/experience; persisted battle-fairy enable декодируется из
-//! World base-property offset `0x128`, а `CanMountEquip` использует оба enable
-//! flag-а, headgear addon и live requirements без внешнего result snapshot.
-//! `MountEquip` cases `0x75..0x78` применяют четыре ordinary-fairy addon-а к
-//! player combat state через setup scales `+0x8AC..+0x8B8`, затем повторно
-//! используют occupation-derived STR/DEX/INT формулы; signed pass и clamp
-//! совпадают с остальными equipment addon-ами.
-//! Общие прямые поля MountEquip0x00442610 и MountEquipRide0x0043C5E0
-//! сохраняют DWORD wrapping до negative gate/INT_MAX и WORD wrapping
-//! до отрицательного clamp; скорость атаки остаётся WORD без этого clamp.
-//! Отдельные FuMo и производные формулы не подменяются этим прямым адаптером.
-//! Battle-fairy cases `0x9B/0x9C/0x9E..0xA1` исполняются после slot-10
-//! prelude: base fallback мутирует canonical goods, живая BF HP разрешает
-//! масштабированный `0.0001` вклад в player properties, а BF HP/MP зажимаются
-//! к обновлённым максимумам до общего state pass-а.
-//! Durability gate в `MountAllEquip` ограничивает только Flash/TaoZhuang scan:
-//! последующие `MountEquip/MountCiQingEquip` применяют addon-ы всех занятых
-//! слотов, включая предметы с нулевой прочностью.
-//! `MountCiQingEquip` cases `0x80..0x84` отдельно мутируют persisted
-//! `m_BaseProperty +0x12C..+0x13C`: два signed pass-а сохраняют wrapping
-//! сложение и нулевой clamp отрицательного результата до общего пересчёта.
-//! `GAP_EQUIP_ACTIVE (0x69)` использует пересобранную из живой экипировки
-//! anima-bind карту уровней и в storage order применяет процентный
-//! `ActiveEquip`; ездовой owner этого case не имеет. `ActiveEquip`, обычные
-//! addon-ы и `MountFuMoProperty` сохраняют x87 truncate полной производной
-//! суммы, включая вложенное преобразование ordinary-fairy характеристик.
-//! Periodic hatcher caller замкнут через `CGame`;
-//! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
-//! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
-//! проходит исходный remove→failed add→hand rollback без потери ownership.
-//! Enhancement/precious-box confirm хранит server-trusted container-script
-//! path у игрока; отмена очищает только shadow selection без переноса goods.
-//! Remote equipment inspection использует owned persisted head/face/mode и
-//! тот же live equipment container, не отдельный display snapshot.
-//! Depot-password vertical дополнительно материализует `m_eProgress`, оба
-//! changing-guard-а, password byte-string и owned `CBank/CDepot`; открытый
-//! bank участвует в реальном wallet↔bank `0x90301` ownership pass. Numeric
-//! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
-//! enum без выдуманного `repr`.
-//! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
-//! только при addon `GAP_BF_BATTLE_FAIRY` value-id 1, равном единице.
-//! `ReplacePlayerData/RestorePlayerData` выражены временной typed-проекцией
-//! только для defense-pass навыков боевого духа: blast/level берутся из
-//! headgear, три setup scale действуют во время защиты, а затем прежние scale
-//! возвращаются с исходным усечением к нулю и minimum clamp.
-//! `BatllteFairyCombine` соединяет container inputs, global BattleFairy gate,
-//! fetch power, shared Game RNG/factory, `CMoveShape::AddSkill` и ordered
-//! адресные object/skill/goods/audit effects. `BTreeMap` skill storage в
-//! `CMoveShape` заменяет четыре pointer-vector-а только для общего confirmed
-//! identity/level/type/name state; выполнение concrete skill owners не
-//! перенесено сюда. Результат combine кладётся в обычную ячейку `Battle`, а
-//! не в gear-ячейку, поэтому исходный owner доказательно не вызывает здесь
-//! `BFPropertyAdd`, equipment mutation или `PropertiesChanged`. Account для
-//! audit принадлежит player snapshot и пока заполняется отдельным caller-ом
-//! при восстановлении player identity.
-//! Script revive боевой феи восстанавливает HP/MP из maxima и атомарно меняет
-//! recall/died/summon/WarSoul state; goods и properties wire публикует CGame.
-//! Поэтому `from_send_state` остаётся явной assembly-границей уже
-//! восстановленного runtime. Figure передаётся как доказанный derived virtual
-//! fact; владение spatial state остаётся у `CMoveShape`.
-//! `SummonBF` RVA `0x00101CB0` материализован единым Player→CGame→region
-//! проходом: guards, summon/recall state, ordered around effects и area-map
-//! action. Active pets теперь хранят exact movement-shape refs и восстанавливаются
-//! из GameSave в region-owned monsters; codec и goods-message decoder
-//! остаются явной границей и report не подменяет исторические packet bytes.
-//! `BFPropertyAdd` соединяет восемь gear-ячеек с headgear battle fairy,
-//! `GlobeSetup` occupation coefficients и player combat state. Сохранены
-//! ранний effect до результата Add, post-remove `-1`, clamp текущих HP/MP,
-//! двойное применение MaxHP/Str/Int/Dex, x87 truncate каждой дробной дельты
-//! и двойной `0xBF918` в Remove.
-//! Goods-message `0x8FC2A` материализован до ordered potential mutation:
-//! aggregate guard остаётся в клиентских единицах, отдельные allocation
-//! умножаются на `10000`, одинаковые property keys имеют `std::map` first-win,
-//! а каждый вызов и outer caller публикуют собственный `0xBF918`.
-//! Gear add/remove теперь через `CGame` действительно исполняет ordered
-//! `0xBF721/0xBF918`; remove сохраняет две одинаково обязательные публикации
-//! old-client payload после успешного `BFPropertyAdd(-1)`.
-//! Улучшение `0x8FC28` замыкает проверки, принадлежащие кошельку предметы,
-//! общий генератор случайных чисел, изменение уровня и роста на фабрике,
-//! результат ошибки цели, позиционный расход камней и упорядоченные клиентские
-//! и контрольные последствия. Снимки цели, камней и игрока сохраняют контрольную
-//! запись мира после необратимого удаления, а `CGame` публикует точные
-//! `0xC0101/0xC0102`, `0xBF918` и `0x60202/0x60203` в исходном порядке.
-//! `ResetPotential` использует принадлежащий игроку рюкзак `CVolumeLimitGoodsContainer` 8×12:
-//! первый `ZHQLS01` расходуется до изменения дополнительных свойств и игрока,
-//! семь учтённых вкладов возвращаются в общий потенциал, после чего публикуется
-//! один итоговый `0xBF918`.
-//! `ResetSkill` связывает головной предмет экипировки, необязательный предмет
-//! сброса из рюкзака, общий генератор случайных чисел игры, точные несовместимые
-//! пары, полное снятие и установку девяти навыков боевой феи и подтверждения
-//! `0xBF71D/0xBF918`.
-//! Сообщение предмета `0x8FC29` использует отдельный сценарный сброс: владелец
-//! игрока сохраняет исходное снятие и установку девяти навыков дополнительных
-//! свойств вокруг живого сценария, не подменяя его внутренней случайной ветвью
-//! `ResetSkill`.
-//! `GetGoodsById` сохраняет точный поиск по руке, рюкзаку, экипировке и аукциону;
-//! рука и аукцион являются владеющими контейнерами и участвуют в обновлении.
-//! Однослотовый `m_cEnhancementContainer` хранит теневые данные выбранного
-//! исходного предмета и даёт сценарию 9351 тот же живой предмет без копии.
-//! Входящий `0x90301` проверяет контейнер, позицию, `GUID`, количество и
-//! возможность складывания, затем записывает тень без смены владельца исходного
-//! предмета и сохраняет исходный источник последней операции.
-//! Сценарий `2249` использует того же живого владельца; созревшая замена
-//! добавляется прямо в рюкзак, даже пока выполняется другой сценарий.
-//! Двусторонний путь аукционного объявления использует те же рюкзак и
-//! экипировку: обратный ход считает точную нагрузку экипировки, рюкзака и руки,
-//! сохраняет последнюю операцию только после успешного добавления в назначение
-//! и не включает временные предметы аукциона, феи и сессий в сумму веса.
-//! Набор открытых базовых индексов `CiQing` хранится в упорядоченном `BTreeSet`;
-//! запрос не создаёт постоянные предметы, а передаёт снимок владельцу фабрики
-//! `CGame`; создание считает и удаляет стопки рюкзака в порядке контейнера и
-//! сохраняет владение новым предметом или стопкой. `CGame` публикует точные
-//! `0xC0101/02` и контрольную запись мира `0x60218`. Владеющие контейнеры
-//! `CiQing` имеют точные объёмы `8/3`; ячейки сборки удаляются по позиции.
-//! Основное удаление `CiQing` сохраняет семантику частичного количества
-//! `DeleteGoods`. Установка в руку читает точные дополнительные свойства
-//! `243/244`; расход из руки также сохраняет частичное количество и не выдаёт
-//! полученную ссылку на `CGoods` за полную копию.
-//! Владелец свойств `CiQing` хранит упорядоченные обычные карты, карты
-//! `TaoZhuang` и идентификатор набора. `UpdateCiQingProperty` сопоставляет
-//! равные по размеру упорядоченные снимки и насыщает отрицательную разницу
-//! нулём; объединение для клиента сохраняет беззнаковое сложение с
-//! переполнением. Снимок другого игрока читает это состояние и те же
-//! восемь принадлежащих `CiQing` ячеек без копий. `MountAllEquip` вычисляет
-//! два снимка одной формулой оборудования — до и после CiQing — затем
-//! сохраняет насыщенную разницу; единый результат проводит обязательный
-//! `SendResultToClient` через обычный, equipment и специальный CiQing caller.
-//! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
-//! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
-//! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
-//! player-методы не являются отдельным недостижимым adapter-слоем. Каждый
-//! полный `UpdateProperty` снова выставляет equipment/TaoZhuang pending-флаг;
-//! выбор немедленного либо AI-tail завершения остаётся у setup-gate caller-а.
-//! `skillmessage 0x90001` сохраняет learned-skill authorization, contend
-//! notice, безусловное обнуление emotion state, self/point/object target и
-//! socket reject; `0x90005` добавляет feature/HP guards и странный fallback
-//! `546/547`. Concrete `CPlayerAI`, region symbol rule и полный region object
-//! registry передаются как explicit facts.
-//! Item-skill `0x90004` использует тот же player route с client-provided level
-//! и добавляет ID в owned ordered `CMoveShape` vector только перед AI dispatch.
-//! Shape commands сохраняют owned direction и emotion index/timestamp:
-//! ClearEmotion всегда обнуляет оба поля, PerformEmotion делает это до guards
-//! и запоминает repeated ID/time только при разрешённом живом AI owner-е.
-//! Client relocation использует общие movement facts и `CShape` owner через
-//! `CServerRegion`; caller сохраняет исходный `BF603 -> SetTileXY` порядок.
-//! Общий SetTileXY после spatial mutation отменяет захват через фактическую
-//! связь формы с регионом и при успехе публикует GS0163.
-//! Quest movement также использует concrete `OnCannotMove` wire с текущими
-//! tile coordinates; player-AI caller очищает emotion перед постановкой шага.
-//! Friend owner хранит исходный ordered список до 40 byte-exact имён и online
-//! flag; message caller замыкает reciprocal mutation, World persistence и
-//! addressed client result, поэтому `AddFriend/DelFriend` RAW удалён.
-//! Public identity owner хранит headpiece/appellation/honor state; country job
-//! вычисляется concrete `CCountry`, а change request записывает attempt ID до
-//! вызова server-trusted script owner-а.
-//! Client timing owner хранит quest countdown и heartbeat acknowledgement:
-//! остаток сохраняет signed 32-bit arithmetic исходного `time_t`, а wall/local
-//! clock остаются внешними runtime-фактами message caller-а.
-//! Player quest lifecycle хранит persisted `ushort → complete byte`: accept,
-//! complete и disband публикуют `0xBFF2C/2D/2E`, а `0xBFF2F` position остаётся
-//! transient client hint и не создаёт второго авторитетного quest state.
-//! LeiTing owner хранит пять scalar-полей и ordered `tagThing` list; codec
-//! совпадает с WorldServer `Add/DecodeByteArrayLeiTing`, а reward-флаг
-//! выставляется только после exact energy/count threshold. Script `2650/2651`
-//! работает с тем же списком: успешное увеличение добавляет `point * delta`
-//! к энергии, применяет суточный порог `60` и публикуется единым snapshot.
-//! Полный `AddToByteArray_ForClient(true)` теперь отделён от GameSave: он
-//! сохраняет category-order навыков, old-client goods projection, четыре
-//! currency GUID, organization/quest tails и CiQing completion side effect;
-//! `CGame::OnLogMessage` вкладывает результат непосредственно в `0xBF401`.
-//! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
-//! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
-//! полиморфные session End/plug Exit принадлежат caller runtime-у.
-//! Nation-war player lifecycle связывает exact `SetContendState`,
-//! `OnDied`/`OnRelive` и millisecond-tail `PeriodicalUpdate`: owned state
-//! хранит три PDB-поля `+0xBA5/+0xBA8/+0xBAC`, а конкретные self/around
-//! маршруты сообщений остаются у `CGame`, владеющего network/session runtime.
-//! Периодический `ComputeWarSoulXY` сохраняет вещественное состояние
-//! следования, точные пороги смерти и мгновенного переноса, общий хвост карты
-//! областей и последующий `0xBF605`; готовность конкретного навыка остаётся
-//! входным фактом. Повреждённое нечисловое состояние блокируется
-//! типизированным результатом до прежнего целочисленного преобразования x87.
-//! `SetWarSoulXY/DelWarSoul` (player.cpp:13071/13109,
-//! 0x0042DF50/0x0042E0A0) завершают выбранный незаконченный навык через
-//! End(int,0), не bool-перегрузку и не удаление AI-команды. Этот callback
-//! выполняет `CGame`: Set только при найденных region/target area, Delete
-//! после проверки equipment[10] GAP_BF_BATTLE_FAIRY==1 до region gate.
-//! `CServerRegion` меняет карту с signed /15; player point обновляется
-//! только при найденной target area для Set либо прежней area для Delete,
-//! независимо от результата CArea::AddWarSoul/DelWarSoul.
-//! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
-//! recall/died флаги нулевой по HP equipped fairy, затем вызывает
-//! `PropertiesChanged`; `CGame` собирает exact `0xBF721` целиком из owned
-//! combat/base wire, включая add-element-attack, RP/max-RP, max-vigour и exalt.
-//! Оригинал в этой ветви не чистит stale area-map entry и не посылает status
-//! broadcast; оба отсутствующих side effect сохранены.
-//! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие
-//! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
-//! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`; полный
-//! virtual property owner остаётся injected callback-границей.
-//! Monster-death caller восстанавливает transient continuous-kill clock/count,
-//! persisted `wHitTopLog`, milestone EXP и exact `0xBF706/0xBF707` wire.
-//! Потеря цели возвращает ended-навык к exact occupation/equipment-dependent
-//! default `1/2/3`; active execution при этом остаётся отдельной AI-проекцией.
-//! GodsBattle player snapshot теперь также хранит persisted faction/SZL;
-//! faction membership появляется только в concrete region AddObject-tail и
-//! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
-//! `UpdateSZL` проходит через `CGame`: player property/notice предшествуют
-//! decrease-only appellation check и script-effect-у `RequestChangeAppellation`.
-//! `IncreaseRp` восстановлен в reached combat path: профессия/уровневые
-//! пороги, fixed attack gain, шесть damage/max-HP tiers, два последовательных
-//! clamp-а и каждый исходный `PropertiesChanged` сохраняются.
-//! Симметричный `OnObjectAdded` создаёт particular state только при ненулевом
-//! inherited `m_pFather`; затем сохраняет late-block partial mutations, после
-//! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
-//! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
+//! Машинные факты остающихся hub-частей (якоря той же точной пары):
+//! ctor (`0x004590DC/0x00459365`) задаёт InChangingRegion=true и last-enter=0;
+//! `InitSkills` вызывается из `OnLogMessage` после login-script (`0x0049FC0A`),
+//! `OnChangeSkill` (`0x00508E6A..0x00508E7E`) выбирает GetDefaultAttackSkillID;
+//! `UpdateProperty` (`0x004593E0`) держит формулы экипировки здесь, `+0x24`
+//! состояний — общий проход CMoveShape; SelfTarget: virtual +0x78 в `0x00488E20`,
+//! item — `0x00489109/0x00489547`, WarSoul — `0x0048953D/0x00489547`;
+//! `SummonBF` RVA `0x00101CB0` — единый Player→CGame→region проход;
+//! `LoadBFDefualtProperty` (`0x00502BC0`) проверяет GetSkill после AddSkill;
+//! расход MP атрибутных Po/Yu — непосредственно equipment[10] (`CPojia::AI`
+//! `0x0052a77f`); hand goods сериализуется перед экипировкой (`0x00440dc0`);
+//! Particular `OnObjectAdded` (`0x004451A0`) Begin синхронно после commit и
+//! GoodsAI; equipment-listener (`0x004EF6C0`) публикует skills/properties/
+//! BF720/PackExpand до товара; `OnEnterRegion` (`0x0045A410`) — ordered unique,
+//! packet-вектор отбрасывается; Packet Add (`0x004DE6E0`) регистрирует GoodsAI
+//! до player-listener; `ComputeTicket` (`0x0043E820`) читает часы после
+//! life/ticket/type/start gates; Mount (`0x00444E20`) — name перед ctor/Begin,
+//! fight-state GS0154 без установки; CHBY `OnLost` (`0x0044183B..0x00441894`) —
+//! !restore_online шлёт исходный BF806 и вызывает End сразу.
+//!
+//! Исходный владелец: `server/gameserver/appserver/player.h/.cpp`, точная
+//! пара GameServer/gameserver.exe + GameServer.pdb (идентификаторы сборки —
+//! COMPONENT_VARIANT в конце файла). Статусы перенесённых тел не повышаются
+//! и живут рядом с кодом `zone::players`.
 
 use super::ai::playerai::CPlayerAI;
 use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
-    AmountLimitGoodsAdded, AmountLimitGoodsCodecError, AmountLimitGoodsRemoved,
-    AmountLimitGoodsTaken, CAmountLimitGoodsContainer,
+    AmountLimitGoodsAdded, AmountLimitGoodsRemoved, AmountLimitGoodsTaken,
+    CAmountLimitGoodsContainer,
 };
 use super::container::camountlimitgoodsshadowcontainer::{
     AmountShadowAdded, CAmountLimitGoodsShadowContainer,
@@ -442,20 +64,20 @@ use super::container::ccontainer::PreviousContainer;
 use super::container::cdepot::CDepot;
 use super::container::cequipmentcontainer::{
     CEquipmentContainer, EquipmentAddOutcome, EquipmentAddRuntimeFacts, EquipmentAroundUpdate,
-    EquipmentColumn, EquipmentContainerCodecError, EquipmentOwnerPlayerFacts,
-    EquipmentRemoveOutcome, EquipmentRemoveRuntimeFacts, EquipmentUnserializedEntry,
+    EquipmentColumn, EquipmentOwnerPlayerFacts,
+    EquipmentRemoveOutcome, EquipmentRemoveRuntimeFacts,
 };
-use super::container::cfairycontainer::{CFairyContainer, FairyContainerCodecError};
+use super::container::cfairycontainer::CFairyContainer;
 use super::container::cgoodscontainer::GoodsStackMergeOutcome;
 use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
 use super::container::cjifen::CJiFen;
 use super::container::cvolumelimitgoodscontainer::{
-    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsCodecError,
+    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome,
     VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome,
 };
 use super::container::cwallet::{
-    CWallet, CurrencyCodecError, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome,
-    CurrencyGoodsTaken, CurrencyIncreaseOutcome,
+    CWallet, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome, CurrencyGoodsTaken,
+    CurrencyIncreaseOutcome,
 };
 use super::container::cyuanbao::CYuanBao;
 use super::gameeffectjournal::{GameEffect, GameEffectJournal};
@@ -493,7 +115,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_PUNCTURE, GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION,
     GAP_WAKAN_CORRECTION,
-    GAP_WEAPON_CATEGORY, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
+    GAP_WEAPON_CATEGORY, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
@@ -516,12 +138,12 @@ use nebokrai_zone::skills::battlefairygear::{
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
-    CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
+    CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView,
 };
 use super::skills::archery::ARCHERY_SKILL_ID;
 use super::skills::baseattack::BASE_ATTACK_SKILL_ID;
 use super::skills::basemagic::BASE_MAGIC_SKILL_ID;
-use super::skills::skillfactory::{CSkillFactory, SkillCategory, UNKNOWN_SKILL_ID};
+use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::teamstate::CTeamState;
 use crate::nets::netserver::message::GameServerAroundRuntime;
@@ -531,7 +153,13 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
-use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress, append_client_quest_record};
+use nebokrai_zone::players::{clientsnapshot, gamesave};
+use nebokrai_zone::players::clientsnapshot::{PlayerClientShapeParts, PlayerInitialClientParts};
+use nebokrai_zone::players::gamesave::{
+    PlayerGameSaveParts, PlayerOrganizingParts, PlayerOrganizingSnapshot,
+    read_player_wire_u16, read_player_wire_u32,
+};
+use nebokrai_zone::quests::PlayerQuestProgress;
 use nebokrai_zone::trade::auction::{
     AuctionBuyGate, AuctionListingGate, AuctionMoneyMoveCapacity, PlayerAuction,
     check_auction_money_move, legacy_ipv4_text,
@@ -544,91 +172,9 @@ use nebokrai_zone::trade::currency::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use bitflags::bitflags;
-use thiserror::Error;
 use tracing::trace;
 
 const PLAYER_TYPE: i32 = 400;
-const PLAYER_BASE_PROPERTY_WIRE_SIZE: usize = 0x194;
-const BASE_LEVEL_OFFSET: usize = 0x04;
-const BASE_EXPERIENCE_OFFSET: usize = 0x08;
-const BASE_HEAD_PICTURE_OFFSET: usize = 0x0c;
-const BASE_FACE_PICTURE_OFFSET: usize = 0x0d;
-const BASE_OCCUPATION_OFFSET: usize = 0x0e;
-const BASE_SEX_OFFSET: usize = 0x0f;
-const BASE_PK_COUNT_OFFSET: usize = 0x1c;
-const BASE_KILL_COUNT_OFFSET: usize = 0x20;
-const BASE_HIT_TOP_LOG_OFFSET: usize = 0x24;
-const BASE_CHARGED_OFFSET: usize = 0x38;
-const BASE_REMAIN_POINT_OFFSET: usize = 0x3a;
-const BASE_HOTKEY_OFFSET: usize = 0x3c;
-const BASE_PK_NORMAL_OFFSET: usize = 0x9c;
-const BASE_PK_TEAM_OFFSET: usize = 0x9d;
-const BASE_PK_UNION_OFFSET: usize = 0x9e;
-const BASE_PK_BADMAN_OFFSET: usize = 0x9f;
-const BASE_PK_COUNTRY_OFFSET: usize = 0xa0;
-const BASE_HEALTH_OFFSET: usize = 0xa4;
-const BASE_MANA_OFFSET: usize = 0xa8;
-const BASE_RP_OFFSET: usize = 0xac;
-const BASE_YP_OFFSET: usize = 0xae;
-const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
-const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
-const BASE_MAXIMUM_YP_OFFSET: usize = 0xb8;
-const BASE_MAXIMUM_RP_OFFSET: usize = 0xba;
-const BASE_STRENGTH_OFFSET: usize = 0xbc;
-const BASE_DEXTERITY_OFFSET: usize = 0xc0;
-const BASE_CONSTITUTION_OFFSET: usize = 0xc4;
-const BASE_INTELLIGENCE_OFFSET: usize = 0xc8;
-const BASE_MINIMUM_ATTACK_OFFSET: usize = 0xcc;
-const BASE_MAXIMUM_ATTACK_OFFSET: usize = 0xd0;
-const BASE_HIT_OFFSET: usize = 0xd4;
-const BASE_BURDEN_OFFSET: usize = 0xd6;
-const BASE_CCH_OFFSET: usize = 0xd8;
-const BASE_DEFENSE_OFFSET: usize = 0xdc;
-const BASE_DODGE_OFFSET: usize = 0xe0;
-const BASE_ATTACK_SPEED_OFFSET: usize = 0xe2;
-const BASE_ELEMENT_RESISTANCE_OFFSET: usize = 0xe4;
-const BASE_HP_RECOVERY_OFFSET: usize = 0xe8;
-const BASE_MP_RECOVERY_OFFSET: usize = 0xea;
-const BASE_VIGOUR_OFFSET: usize = 0xec;
-const BASE_MAXIMUM_VIGOUR_OFFSET: usize = 0xf0;
-const BASE_ENERGY_OFFSET: usize = 0xf4;
-const BASE_MAXIMUM_ENERGY_OFFSET: usize = 0xf8;
-const BASE_CREDIT_OFFSET: usize = 0xfc;
-const BASE_EXALT_OFFSET: usize = 0x100;
-const BASE_DISPLAY_HEAD_PIECE_OFFSET: usize = 0x104;
-const BASE_QUEST_TIME_BEGIN_OFFSET: usize = 0x108;
-const BASE_QUEST_TIME_LIMIT_OFFSET: usize = 0x10c;
-const BASE_QUEST_ENABLED_OFFSET: usize = 0x110;
-const BASE_EXPLOIT_OFFSET: usize = 0x114;
-const BASE_FAIRY_CONTAINER_ENABLED_OFFSET: usize = 0x11c;
-const BASE_BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x128;
-const BASE_BREAK_ARMOUR_OFFSET: usize = 0x12c;
-const BASE_PUNCTURE_OFFSET: usize = 0x130;
-const BASE_BREAK_ELEMENT_OFFSET: usize = 0x134;
-const BASE_BREAK_BOUND_OFFSET: usize = 0x138;
-const BASE_POWER_OF_GOLD_OFFSET: usize = 0x13c;
-const BASE_DAYS_HONOR_OFFSET: usize = 0x140;
-const BASE_WEEKS_HONOR_OFFSET: usize = 0x144;
-const BASE_MONTHS_HONOR_OFFSET: usize = 0x148;
-const BASE_TOTAL_HONOR_OFFSET: usize = 0x14c;
-const BASE_RANK_OF_NOBILITY_OFFSET: usize = 0x150;
-const BASE_APPELLATION_OFFSET: usize = 0x154;
-const BASE_MODE_OFFSET: usize = 0x158;
-const BASE_FETCH_POWER_OFFSET: usize = 0x164;
-const BASE_BATTLE_FAIRY_SUMMONED_OFFSET: usize = 0x16c;
-const BASE_BATTLE_FAIRY_RECALL_OFFSET: usize = 0x16d;
-const BASE_BATTLE_FAIRY_DIED_OFFSET: usize = 0x16e;
-const BASE_AUCTION_SPACE_OFFSET: usize = 0x170;
-const BASE_JJC_LEVEL_OFFSET: usize = 0x174;
-const BASE_JJC_SCORE_OFFSET: usize = 0x178;
-const BASE_FY_ENERGY_OFFSET: usize = 0x17c;
-const BASE_FY_ENABLE_FLAGS_OFFSET: usize = 0x180;
-const BASE_LT_UP_60_COUNT_OFFSET: usize = 0x184;
-const BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET: usize = 0x186;
-const BASE_LT_60_STAMP_OFFSET: usize = 0x188;
-const BASE_SZL_OFFSET: usize = 0x18c;
-const BASE_GODS_BATTLE_FACTION_OFFSET: usize = 0x190;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
 const CONTRIBUTION_MINIMUM: i32 = -2_000_000_000;
 const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
@@ -897,95 +443,18 @@ pub(crate) use nebokrai_zone::skills::{
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, SkillTarget, SkillTargetForm,
 };
 
-bitflags! {
-    /// Подтверждённые LeiTing/FY-флаги в `u32` legacy-формата игрока.
-    ///
-    /// Неизвестные биты сохраняются через `from_bits_retain` и возвращаются в
-    /// сетевой/DB формат без усечения; известные `0..=8` соответствуют порогам
-    /// энергии и числу суточных подъёмов выше 60.
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    pub(crate) struct LeiTingEnableFlags: u32 {
-        const ENERGY_20 = 1 << 0;
-        const ENERGY_60 = 1 << 1;
-        const ENERGY_80 = 1 << 2;
-        const ENERGY_100 = 1 << 3;
-        const LT_UP_60_4 = 1 << 4;
-        const LT_UP_60_10 = 1 << 5;
-        const LT_UP_60_16 = 1 << 6;
-        const LT_UP_60_22 = 1 << 7;
-        const LT_UP_60_28 = 1 << 8;
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerBaseProperties {
-    pub(crate) level: u8,
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) remain_point: u16,
-    pub(crate) base_maximum_hp: u32,
-    pub(crate) base_maximum_mp: u32,
-    pub(crate) base_burden: u16,
-    pub(crate) base_strength: u32,
-    pub(crate) base_dexterity: u32,
-    pub(crate) base_constitution: u32,
-    pub(crate) base_intelligence: u32,
-    pub(crate) pk_normal: bool,
-    pub(crate) pk_team: bool,
-    pub(crate) pk_union: bool,
-    pub(crate) pk_badman: bool,
-    pub(crate) pk_country: bool,
-    pub(crate) pk_count: u16,
-    pub(crate) kill_count: u32,
-    pub(crate) hit_top_log: u16,
-    pub(crate) experience: u32,
-    pub(crate) vigour: u32,
-    pub(crate) credit: u32,
-    pub(crate) charged: bool,
-    pub(crate) fairy_container_enabled: bool,
-    pub(crate) battle_fairy_enabled: bool,
-    pub(crate) break_armour: u32,
-    pub(crate) puncture: u32,
-    pub(crate) break_element: u32,
-    pub(crate) break_bound: u32,
-    pub(crate) power_of_gold: u32,
-    pub(crate) hotkeys: [u32; 24],
-    pub(crate) mode: u32,
-    pub(crate) display_head_piece: bool,
-    pub(crate) quest_availability: PlayerQuestAvailability,
-    pub(crate) fy_enable_flags: LeiTingEnableFlags,
-    pub(crate) fy_energy: u32,
-    pub(crate) lt_60_stamp: u32,
-    pub(crate) lt_up_60_count: u16,
-    pub(crate) remain_jing_li_dan_count: u16,
-    pub(crate) appellation_id: u32,
-    pub(crate) head_picture: i32,
-    pub(crate) face_picture: i32,
-    pub(crate) health: u32,
-    pub(crate) mana: u32,
-    pub(crate) rp: u16,
-    pub(crate) yp: u16,
-    pub(crate) maximum_yp: u16,
-    pub(crate) maximum_rp: u16,
-    pub(crate) maximum_vigour: u32,
-    pub(crate) energy: u32,
-    pub(crate) maximum_energy: u32,
-    pub(crate) exalt: u32,
-    pub(crate) fetch_power: u32,
-    pub(crate) battle_fairy_recall: bool,
-    pub(crate) battle_fairy_died: bool,
-    pub(crate) auction_space: u32,
-    pub(crate) jjc_level: u32,
-    pub(crate) jjc_score: u32,
-    pub(crate) days_honor_eliminate: u32,
-    pub(crate) weeks_honor_eliminate: u32,
-    pub(crate) months_honor_eliminate: u32,
-    pub(crate) total_honor_eliminate: u32,
-    pub(crate) rank_of_nobility_id: u32,
-    pub(crate) exploit: u32,
-    pub(crate) gods_battle_faction: i32,
-    pub(crate) szl: u32,
-}
+/// Codec-типы GameSave и wires свойств игрока — Zone `players::gamesave`;
+/// здесь их re-export совместимости для держателя hub-а и его callers.
+pub(crate) use nebokrai_zone::players::gamesave::{
+    BASE_ATTACK_SPEED_OFFSET, BASE_CCH_OFFSET, BASE_CONSTITUTION_OFFSET, BASE_DEFENSE_OFFSET,
+    BASE_DEXTERITY_OFFSET, BASE_DODGE_OFFSET, BASE_ELEMENT_RESISTANCE_OFFSET, BASE_HEALTH_OFFSET,
+    BASE_HIT_OFFSET, BASE_HP_RECOVERY_OFFSET, BASE_INTELLIGENCE_OFFSET, BASE_KILL_COUNT_OFFSET,
+    BASE_MANA_OFFSET, BASE_MAXIMUM_ATTACK_OFFSET, BASE_MAXIMUM_HP_OFFSET, BASE_MAXIMUM_MP_OFFSET,
+    BASE_MINIMUM_ATTACK_OFFSET, BASE_MP_RECOVERY_OFFSET, BASE_PK_COUNT_OFFSET, BASE_STRENGTH_OFFSET,
+    LeiTingEnableFlags, PLAYER_BASE_PROPERTY_WIRE_SIZE, PLAYER_COMBAT_PROPERTY_WIRE_SIZE,
+    PlayerBaseProperties, PlayerFriend, PlayerGameSaveCodecError, PlayerLeiTingDecodeBlock,
+    PlayerLeiTingThing, PlayerUncreatedCarriage, PlayerUncreatedPet,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerHonorSnapshot {
@@ -995,20 +464,6 @@ pub(crate) struct PlayerHonorSnapshot {
     pub(crate) weeks_eliminate: u32,
     pub(crate) months_eliminate: u32,
     pub(crate) total_eliminate: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerFriend {
-    pub(crate) name: Vec<u8>,
-    pub(crate) online: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLeiTingThing {
-    pub(crate) thing_id: u16,
-    pub(crate) count: u16,
-    pub(crate) max_count: u16,
-    pub(crate) point: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1026,71 +481,6 @@ pub(crate) enum PlayerLeiTingThingCountOutcome {
         current_energy: u32,
         daily_count_incremented: bool,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerUncreatedPet {
-    pub(crate) original_name: Vec<u8>,
-    pub(crate) health: u32,
-    pub(crate) level: u32,
-    pub(crate) experience: u32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerUncreatedCarriage {
-    pub(crate) original_name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
-    pub(crate) health: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("LeiTing snapshot обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
-pub(crate) struct PlayerLeiTingDecodeBlock {
-    pub(crate) field: &'static str,
-    pub(crate) offset: usize,
-    pub(crate) needed: usize,
-    pub(crate) available: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub(crate) enum PlayerGameSaveCodecError {
-    #[error(transparent)]
-    Shape(#[from] ShapeDecodeError),
-    #[error(transparent)]
-    Goods(#[from] AmountLimitGoodsCodecError),
-    #[error(transparent)]
-    Volume(#[from] VolumeGoodsCodecError),
-    #[error(transparent)]
-    Equipment(EquipmentContainerCodecError),
-    #[error(transparent)]
-    Fairy(#[from] FairyContainerCodecError),
-    #[error(transparent)]
-    Currency(#[from] CurrencyCodecError),
-    #[error(transparent)]
-    Variables(#[from] GameVariableSnapshotError),
-    #[error(transparent)]
-    LeiTing(#[from] PlayerLeiTingDecodeBlock),
-    #[error("player save обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
-    UnexpectedEnd {
-        field: &'static str,
-        offset: usize,
-        needed: usize,
-        available: usize,
-    },
-    #[error("player save содержит отрицательное count {count} в {field}")]
-    NegativeCount { field: &'static str, count: i32 },
-    #[error("player save string {field} имеет длину {length} при максимуме {maximum}")]
-    StringTooLong {
-        field: &'static str,
-        length: usize,
-        maximum: usize,
-    },
-    #[error("player save collection {field} длиной {length} не представима")]
-    CollectionTooLarge { field: &'static str, length: usize },
-    #[error("player save содержит object type {object_type} вместо player")]
-    WrongObjectType { object_type: i32 },
-    #[error("player save отклонил equipment position {position}")]
-    EquipmentRejected { position: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1263,8 +653,6 @@ pub(crate) struct PlayerExpendableEffect {
     pub(crate) start_time_ms: u32,
     pub(crate) effect_time_ms: u32,
 }
-
-pub(crate) const PLAYER_COMBAT_PROPERTY_WIRE_SIZE: usize = 0x9c;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerStatAllocationState {
@@ -2004,6 +1392,103 @@ fn apply_equipment_goods_properties(
 }
 
 impl CPlayer {
+    /// Сбор заёмной persistence-проекции codec-владеемых частей hub-а для
+    /// Zone `players::gamesave`; живёт только на время вызова codec-а.
+    /// Порядок полей отражает persisted layout, сами значения — живые части.
+    fn game_save_parts(&mut self) -> PlayerGameSaveParts<'_> {
+        PlayerGameSaveParts {
+            move_shape: &mut self.move_shape,
+            base_property_wire: &mut self.base_property_wire,
+            base_properties: &mut self.base_properties,
+            combat_property_wire: &mut self.combat_property_wire,
+            combat_properties: &mut self.combat_properties,
+            battle_fairy_summoned: &mut self.battle_fairy_summoned,
+            war_soul_state: &mut self.war_soul_state,
+            realm_appellation_skill_id: &mut self.realm_appellation_skill_id,
+            realm_appellation_skill_level: &mut self.realm_appellation_skill_level,
+            auto_protected: &mut self.auto_protected,
+            account: &mut self.account,
+            title: &mut self.title,
+            session_id: &mut self.session_id,
+            team_id: &mut self.team_id,
+            country: &mut self.country,
+            contribution: &mut self.contribution,
+            money: &mut self.money,
+            depot_password: &mut self.depot_password,
+            ci_qing_list: &mut self.ci_qing_list,
+            friends: &mut self.friends,
+            lei_ting_things: &mut self.lei_ting_things,
+            quest_progress: &mut self.quest_progress,
+            uncreated_pets: &mut self.uncreated_pets,
+            uncreated_carriage: &mut self.uncreated_carriage,
+            recreate_carriage: &mut self.recreate_carriage,
+            login: &mut self.login,
+            variable_list: &mut self.variable_list,
+            silence_minutes: &mut self.silence_minutes,
+            silence_timestamp_minutes: &mut self.silence_timestamp_minutes,
+            murderer_time_stamp_ms: &mut self.murderer_time_stamp_ms,
+            fight_state_count: &mut self.fight_state_count,
+            city_war_died_state: &mut self.city_war_died_state,
+            city_war_died_state_time_ms: &mut self.city_war_died_state_time_ms,
+            died_state_start_time_ms: &mut self.died_state_start_time_ms,
+            jjc_data: &mut self.jjc_data,
+            jjc_pk_state: &mut self.jjc_pk_state,
+            organizing: PlayerOrganizingParts {
+                faction_id: &mut self.faction_id,
+                faction_logo_id: &mut self.faction_logo_id,
+                faction_level: &mut self.faction_level,
+                faction_experience: &mut self.faction_experience,
+                faction_force: &mut self.faction_force,
+                faction_contribute: &mut self.faction_contribute,
+                faction_master_id: &mut self.faction_master_id,
+                faction_name: &mut self.faction_name,
+                faction_title: &mut self.faction_title,
+                union_id: &mut self.union_id,
+                union_master_id: &mut self.union_master_id,
+                enemy_factions: &mut self.enemy_factions,
+                city_war_enemy_factions: &mut self.city_war_enemy_factions,
+                faction_owned_regions: &mut self.faction_owned_regions,
+            },
+            hand: &mut self.hand,
+            enhancement: &mut self.enhancement,
+            packet: &mut self.packet,
+            equipment: &mut self.equipment,
+            wallet: &mut self.wallet,
+            yuan_bao: &mut self.yuan_bao,
+            ji_fen: &mut self.ji_fen,
+            bank: &mut self.bank,
+            depot: &mut self.depot,
+            auction_goods: &mut self.auction_goods,
+            auction_listing: &mut self.auction_listing,
+            auction_wallet: &mut self.auction_wallet,
+            fairy_container: &mut self.fairy_container,
+            battle_fairy_container: &mut self.battle_fairy_container,
+            ci_qing: &mut self.ci_qing,
+            ci_qing_compose: &mut self.ci_qing_compose,
+        }
+    }
+
+    /// Читающая проекция организационного блока для encode/клиентских снимков
+    /// Zone `players` (тот же `0x7FE06` wire layout).
+    fn organizing_snapshot(&self) -> PlayerOrganizingSnapshot<'_> {
+        PlayerOrganizingSnapshot {
+            faction_id: self.faction_id,
+            faction_logo_id: self.faction_logo_id,
+            faction_level: self.faction_level,
+            faction_experience: self.faction_experience,
+            faction_force: self.faction_force,
+            faction_contribute: self.faction_contribute,
+            faction_master_id: self.faction_master_id,
+            faction_name: &self.faction_name,
+            faction_title: &self.faction_title,
+            union_id: self.union_id,
+            union_master_id: self.union_master_id,
+            enemy_factions: &self.enemy_factions,
+            city_war_enemy_factions: &self.city_war_enemy_factions,
+            faction_owned_regions: &self.faction_owned_regions,
+        }
+    }
+
     /// Собирает только достигнутый send-family state уже созданного игрока;
     /// identity другого object type отвергается до регистрации.
     pub(crate) fn from_send_state(
@@ -2025,23 +1510,6 @@ impl CPlayer {
             })
             .min_by_key(|skill| skill.id())
             .map(|skill| (skill.id(), skill.level()));
-        let mut packet = CVolumeLimitGoodsContainer::new();
-        let _empty_release = packet.set_container_dimensions(8, 12);
-        let mut enhancement = CAmountLimitGoodsShadowContainer::new();
-        enhancement.set_goods_amount_limit(1);
-        enhancement.base_mut().set_container_extend_id(10);
-        let mut ci_qing = CVolumeLimitGoodsContainer::new();
-        let _empty_release = ci_qing.set_container_volume(8);
-        let mut ci_qing_compose = CVolumeLimitGoodsContainer::new();
-        let _empty_release = ci_qing_compose.set_container_volume(3);
-        let mut fairy_container = CFairyContainer::new();
-        let _empty_release = fairy_container.base_mut().set_container_volume(14);
-        let mut auction_goods = CVolumeLimitGoodsContainer::new();
-        let _empty_release = auction_goods.set_container_volume(0x12);
-        let mut auction_listing = CVolumeLimitGoodsContainer::new();
-        let _empty_release = auction_listing.set_container_volume(2);
-        let mut depot = CDepot::new();
-        let _empty_release = depot.base_mut().set_container_dimensions(8, 12);
         let mut player = Self {
             move_shape,
             player_ai: CPlayerAI::default(),
@@ -2155,26 +1623,30 @@ impl CPlayer {
             last_container_script: Vec::new(),
             variable_list: CVariableList::default(),
             bank: CBank::new(),
-            depot,
+            depot: CDepot::new(),
             hand: CAmountLimitGoodsContainer::new(),
-            enhancement,
+            enhancement: CAmountLimitGoodsShadowContainer::new(),
             last_operated_container: 0,
             last_operated_goods_position: 0,
-            packet,
+            packet: CVolumeLimitGoodsContainer::new(),
             wallet: CWallet::new(),
             yuan_bao: CYuanBao::new(),
             ji_fen: CJiFen::new(),
             equipment: CEquipmentContainer::new(),
-            auction_listing,
-            auction_goods,
+            auction_listing: CVolumeLimitGoodsContainer::new(),
+            auction_goods: CVolumeLimitGoodsContainer::new(),
             auction_wallet: CWallet::new(),
             auction: PlayerAuction::default(),
-            ci_qing,
-            ci_qing_compose,
-            fairy_container,
+            ci_qing: CVolumeLimitGoodsContainer::new(),
+            ci_qing_compose: CVolumeLimitGoodsContainer::new(),
+            fairy_container: CFairyContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
         };
-        player.refresh_reached_container_owners(owner_id);
+        // Разметка persistence-контейнеров и перепривязка owner перенесены в
+        // Zone players::gamesave (дизайн D4); hub только делегирует проекцию.
+        let mut parts = player.game_save_parts();
+        gamesave::init_player_persistence_containers(&mut parts);
+        gamesave::refresh_player_container_owners(&mut parts, owner_id);
         Some(player)
     }
 
@@ -2216,327 +1688,27 @@ impl CPlayer {
             Some(server_region_id),
         )
         .expect("player object type проверен до создания CPlayer");
-        player.base_property_wire =
-            read_player_game_save_array(source, cursor, "m_BaseProperty[0x194]")?;
-        player.apply_base_property_wire();
-        player.battle_fairy_summoned = player.war_soul_state != 0;
-        player.account = read_player_game_save_string(source, cursor, "strAccount", 0x100)?;
-        player.title = read_player_game_save_string(source, cursor, "strTitle", 0x100)?;
-        player.combat_property_wire =
-            read_player_game_save_array(source, cursor, "m_Property[0x9c]")?;
-        player.apply_combat_property_wire();
-        player.team_id = read_player_game_save_i32(source, cursor, "m_lTeamID")?;
-
-        player.ci_qing_list.clear();
-        let ci_qing_count = read_player_game_save_count(source, cursor, "m_setCiQingList")?;
-        for _ in 0..ci_qing_count {
-            player.ci_qing_list.insert(read_player_game_save_u32(
+        {
+            let mut parts = player.game_save_parts();
+            gamesave::decode_player_game_save(
                 source,
                 cursor,
-                "m_setCiQingList entry",
-            )?);
+                &mut parts,
+                goods_factory,
+                skill_factory,
+                variable_definitions,
+                now_ms,
+                one_pk_count_time_ms,
+                &mut *state_now,
+                pack_add_enabled,
+                &mut *ordinary_threshold,
+                &mut *battle_threshold,
+                super::skills::realmappellation::is_bonus_skill,
+                |goods, base, combat| {
+                    Self::can_mount_equip_from_properties(base, combat, goods, goods_factory)
+                },
+            )?;
         }
-
-        player.move_shape.clear_persisted_runtime_state();
-        player.auto_protected = false;
-        let skill_count = read_player_game_save_i32(source, cursor, "skill count")?;
-        for _ in 0..skill_count.max(0) {
-            let packed = read_player_game_save_u32(source, cursor, "tagSkillID")?;
-            let skill_id = packed & 0xffff;
-            let level = (packed >> 16) as i32;
-            let loaded = player.move_shape.add_skill(skill_id, level, skill_factory);
-            if loaded
-                && super::skills::realmappellation::is_bonus_skill(skill_id)
-                && (1..=4).contains(&level)
-            {
-                player.realm_appellation_skill_id = skill_id;
-                player.realm_appellation_skill_level = level;
-            }
-        }
-        let ex_state_length = read_player_game_save_count(source, cursor, "m_vExStates length")?;
-        player.move_shape.replace_ex_states(
-            read_player_game_save_slice(source, cursor, "m_vExStates", ex_state_length)?.to_vec(),
-            skill_factory,
-            state_now,
-        );
-
-        player.friends.clear();
-        let friend_count = read_player_game_save_i32(source, cursor, "m_listFriend")?;
-        for _ in 0..friend_count.max(0) {
-            player.friends.push(PlayerFriend {
-                name: read_player_game_save_string(source, cursor, "tagFriend.strName", 0x94)?,
-                online: read_player_game_save_u8(source, cursor, "tagFriend.bOnline")? != 0,
-            });
-        }
-        player.decode_lei_ting(source, cursor)?;
-
-        let _cleared_hand = player.hand.clear_goods();
-        player.hand.set_goods_amount_limit(1);
-        player.hand.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-
-        let base_properties = player.base_properties;
-        let combat_properties = player.combat_properties;
-        let equipment = player.equipment.unserialize_with(
-            source,
-            cursor,
-            goods_factory,
-            true,
-            |source, cursor| {
-                let mut goods = CGoods::default();
-                goods.unserialize(
-                    source,
-                    cursor,
-                    true,
-                    goods_factory,
-                    &mut *ordinary_threshold,
-                    &mut *battle_threshold,
-                )?;
-                Ok(Some(goods))
-            },
-            |goods| EquipmentAddRuntimeFacts {
-                owner_player: Some(EquipmentOwnerPlayerFacts {
-                    can_mount_result: Self::can_mount_equip_from_properties(
-                        base_properties,
-                        combat_properties,
-                        goods,
-                        goods_factory,
-                    ),
-                }),
-                pack_add_enabled: false,
-                now: u64::from(now_ms),
-            },
-            &mut |_| {},
-            &mut |_, _, _| {},
-        );
-        let equipment =
-            equipment.map_err(|failure| PlayerGameSaveCodecError::Equipment(failure.error))?;
-        if let Some(position) = equipment.entries.iter().find_map(|entry| match entry {
-            EquipmentUnserializedEntry::Rejected { position, .. }
-            | EquipmentUnserializedEntry::DecoderReturnedNull { position } => Some(*position),
-            EquipmentUnserializedEntry::Added { .. } => None,
-        }) {
-            return Err(PlayerGameSaveCodecError::EquipmentRejected { position });
-        }
-
-        let _released = player.packet.set_container_dimensions(8, 12);
-        player.packet.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player
-            .packet
-            .apply_player_expansion_limit(player.equipment.expanded_package_num());
-
-        let _released = player.auction_goods.set_container_volume(0x12);
-        player.auction_goods.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        // D1 машинной разведки: оригинал выполняет auction tail контейнера
-        // (семья CleanCell/HaveCell, виртуалы `+0x80`/`+0x84` в
-        // `0x0044C3AF/0x0044C3C6`) только после всего decoder-а; побайтовая
-        // эквивалентность этого Rust-пути зависит от Unserialize-маркировки
-        // самого container и отложена в container-порцию (запись «Zone player:
-        // машинная разведка GameSave» в docs/status/audit.md).
-        player.auction_goods.set_all_inactive();
-        if pack_add_enabled {
-            let inactive = player
-                .auction_goods
-                .size()
-                .wrapping_sub(player.base_properties.auction_space);
-            player.auction_goods.apply_player_expansion_limit(inactive);
-        }
-        let _released = player.auction_listing.set_container_volume(2);
-        player.auction_listing.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.wallet.unserialize(
-            source,
-            cursor,
-            "m_cWallet marker",
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.auction_wallet.unserialize(
-            source,
-            cursor,
-            "m_cAuctionWallet marker",
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.yuan_bao.unserialize(
-            source,
-            cursor,
-            "m_cYuanBao marker",
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.ji_fen.unserialize(
-            source,
-            cursor,
-            "m_cJiFen marker",
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.money = player.wallet.currency_amount();
-
-        player.depot_password =
-            read_player_game_save_string(source, cursor, "m_strDepotPassword", 0x6c)?;
-        player.bank.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        player.depot.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            pack_add_enabled,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        let _released = player.fairy_container.base_mut().set_container_volume(0x0e);
-        player.fairy_container.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        let _released = player
-            .battle_fairy_container
-            .base_mut()
-            .set_container_volume(0x11);
-        player.battle_fairy_container.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        let _released = player.ci_qing.set_container_volume(8);
-        player.ci_qing.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-        let _released = player.ci_qing_compose.set_container_volume(3);
-        player.ci_qing_compose.unserialize(
-            source,
-            cursor,
-            goods_factory,
-            &mut *ordinary_threshold,
-            &mut *battle_threshold,
-        )?;
-
-        player
-            .variable_list
-            .decode_world_snapshot(variable_definitions, source, cursor)?;
-        // Машина восстанавливает всю silence-пару (`0x0044C0A7..0x0044C0E1` по
-        // той же точной паре gameserver.exe + GameServer.pdb): wire>0 пишет
-        // minutes и начало `timeGetTime()/60_000` (магический делитель
-        // `0x45E7B273`, shr `0xE`), wire≤0 обнуляет оба поля. Контракт совпадает
-        // с exact `SetSilence`; текущий tick уже передан как `now_ms`, общий
-        // setter сохраняет ту же арифметику без системных часов в player.rs.
-        let silence_minutes = read_player_game_save_i32(source, cursor, "m_lSilenceTime")?;
-        player.set_silence(silence_minutes, now_ms);
-        let murderer_state = read_player_game_save_u8(source, cursor, "murderer state")? != 0;
-        let murderer_remain = read_player_game_save_u32(source, cursor, "murderer remain time")?;
-        player.restore_murderer_timestamp(
-            murderer_state,
-            murderer_remain,
-            now_ms,
-            one_pk_count_time_ms,
-        );
-        player.fight_state_count = read_player_game_save_i32(source, cursor, "m_lFightStateCount")?;
-
-        player.uncreated_pets.clear();
-        let pet_count = read_player_game_save_count(source, cursor, "m_vUncreatedPets")?;
-        for _ in 0..pet_count {
-            player.uncreated_pets.push(PlayerUncreatedPet {
-                original_name: read_player_game_save_string(
-                    source,
-                    cursor,
-                    "tagPetInformation.strOriginalName",
-                    0x94,
-                )?,
-                health: read_player_game_save_u32(source, cursor, "tagPetInformation.dwHp")?,
-                level: read_player_game_save_u32(source, cursor, "tagPetInformation.dwLevel")?,
-                experience: read_player_game_save_u32(
-                    source,
-                    cursor,
-                    "tagPetInformation.dwExperience",
-                )?,
-            });
-        }
-        player.uncreated_carriage = PlayerUncreatedCarriage {
-            original_name: read_player_game_save_string(
-                source,
-                cursor,
-                "tagCarriageInfo.strOriginalName",
-                0x94,
-            )?,
-            script: read_player_game_save_string(
-                source,
-                cursor,
-                "tagCarriageInfo.strCarriageScript",
-                0x94,
-            )?,
-            health: read_player_game_save_u32(source, cursor, "tagCarriageInfo.dwHp")?,
-        };
-        player.recreate_carriage =
-            read_player_game_save_u8(source, cursor, "m_bReCreateCarriage")? != 0;
-        player.login = read_player_game_save_u8(source, cursor, "m_bLogin")? != 0;
-        player.city_war_died_state_time_ms =
-            read_player_game_save_i32(source, cursor, "m_lCityWarDiedStateTime")?;
-        player.died_state_start_time_ms =
-            u32::from(player.city_war_died_state_time_ms > 0).wrapping_mul(now_ms);
-        player.city_war_died_state =
-            player.city_war_died_state_time_ms > 0 && player.base_properties.occupation != 6;
-
-        player.quest_progress.clear();
-        let quest_count = read_player_game_save_i32(source, cursor, "m_PlayerQuests")?;
-        for _ in 0..quest_count.max(0) {
-            let quest_id = read_player_game_save_u16(source, cursor, "tagPlayerQuest.wQuestID")?;
-            let state = read_player_game_save_u8(source, cursor, "tagPlayerQuest.byComplete")?;
-            player.quest_progress.insert_snapshot(quest_id, state);
-        }
-        player.country = read_player_game_save_u8(source, cursor, "m_btCountry")?;
-        player.contribution = read_player_game_save_i32(source, cursor, "m_lContribute")?;
-        player.jjc_data = read_player_game_save_array(source, cursor, "m_jjcdata[0x10]")?;
-        player.jjc_pk_state = read_player_game_save_u8(source, cursor, "bJJcPkState")? != 0;
-        player.decode_organizing_snapshot(source, cursor)?;
-        player.session_id = read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
-        // D8 машинной разведки: SetOwner-цикл контейнеров и UpdateProperty
-        // оригинал выполняет в других точках того же прохода (UpdateProperty —
-        // виртуал `+0x9C` в самом хвосте decoder-а, `0x0044C3D0`); Rust
-        // группирует owner-refresh здесь, а тот же UpdateProperty исполняет
-        // `CGame::complete_world_player_login` — итоговое состояние совпадает.
-        player.refresh_reached_container_owners(player.player_id());
 
         let consumed_bytes = cursor.saturating_sub(start);
         tracing::trace!(
@@ -2547,14 +1719,9 @@ impl CPlayer {
         Ok(player)
     }
 
-    /// `AddGameSaveToByteArray`: тот же persisted layout без organization
-    /// snapshot (World обновляет его самостоятельно перед следующим handoff).
-    /// Результаты `CShape::AddToByteArray`, всех 15 container serialize и
-    /// `CVariableList::AddToByteArray` машина не тестирует и всегда возвращает
-    /// 1 (`0x00441399`): false-подрезультаты цепочки отбрасываются, ошибки
-    /// ограничены безопасными границами Rust. Отдельный первый шаг оригинала
-    /// `DelAllItemInDelList` (`0x00440DDC` → `0x0043E4E0`) не воспроизводится —
-    /// сущности del-list в Rust нет (UNKNOWN).
+    /// Делегат прежней сигнатуры `AddGameSaveToByteArray`: persisted layout —
+    /// Zone `players::gamesave::encode_player_game_save` (машинные факты
+    /// `0x00441399` и `DelAllItemInDelList` UNKNOWN — там же).
     pub(crate) fn encode_game_save(
         &mut self,
         destination: &mut Vec<u8>,
@@ -2566,578 +1733,27 @@ impl CPlayer {
         carriage: &PlayerUncreatedCarriage,
         recreate_carriage: bool,
     ) -> Result<bool, PlayerGameSaveCodecError> {
-        // Оригинал не тестирует false-подрезультаты этой serialize-цепочки и
-        // всегда возвращает 1 (`0x00441399`): все результаты ниже отбрасываются
-        // именованными discard-ами, как того требует машинный факт.
-        let _shape_serialized = self.shape().add_to_byte_array(destination, true);
-        destination.extend_from_slice(&self.synchronized_base_property_wire());
-        append_player_game_save_string(destination, "strAccount", &self.account, 0x100)?;
-        append_player_game_save_string(destination, "strTitle", &self.title, 0x100)?;
-        destination.extend_from_slice(&self.combat_property_wire);
-        LegacyWriter::new(destination).write_i32(self.team_id);
-
-        append_player_game_save_count(destination, "m_setCiQingList", self.ci_qing_list.len())?;
-        for base_index in &self.ci_qing_list {
-            LegacyWriter::new(destination).write_u32(*base_index);
-        }
-        let skills: Vec<_> = self.serializable_skills().collect();
-        append_player_game_save_count(destination, "skill count", skills.len())?;
-        for skill in skills {
-            let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
-            LegacyWriter::new(destination).write_u32(packed);
-        }
-        let ex_states = self
-            .move_shape
-            .serialize_ex_states_for_save(now_ms, timed_state_now_milliseconds);
-        append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
-        destination.extend_from_slice(&ex_states);
-        append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;
-        for friend in &self.friends {
-            append_player_game_save_string(destination, "tagFriend.strName", &friend.name, 0x94)?;
-            destination.push(u8::from(friend.online));
-        }
-        destination.extend_from_slice(&self.encode_lei_ting());
-
-        let _hand_serialized = self.hand.serialize(destination, goods_factory);
-        self.equipment.serialize_with(
+        let mut parts = self.game_save_parts();
+        gamesave::encode_player_game_save(
             destination,
+            &mut parts,
             goods_factory,
-            true,
-            |goods, include_child, destination| {
-                let _goods_serialized = goods.serialize(destination, include_child);
-            },
-        );
-        let _packet_serialized = self.packet.serialize(destination, goods_factory);
-        let _auction_goods_serialized =
-            self.auction_goods.serialize(destination, goods_factory);
-        let _auction_listing_serialized =
-            self.auction_listing.serialize(destination, goods_factory);
-        let _wallet_serialized = self.wallet.serialize(destination);
-        let _auction_wallet_serialized = self.auction_wallet.serialize(destination);
-        let _yuan_bao_serialized = self.yuan_bao.serialize(destination);
-        let _ji_fen_serialized = self.ji_fen.serialize(destination);
-        append_player_game_save_string(
-            destination,
-            "m_strDepotPassword",
-            &self.depot_password,
-            0x6c,
-        )?;
-        let _bank_serialized = self.bank.serialize(destination);
-        let _depot_serialized = self.depot.serialize(destination, goods_factory);
-        let _fairy_serialized = self.fairy_container.serialize(destination, goods_factory);
-        let _battle_fairy_serialized = self
-            .battle_fairy_container
-            .serialize(destination, goods_factory);
-        let _ci_qing_serialized = self.ci_qing.serialize(destination, goods_factory);
-        let _ci_qing_compose_serialized =
-            self.ci_qing_compose.serialize(destination, goods_factory);
-        let _variables_serialized = self.variable_list.encode_world_snapshot(destination);
-        LegacyWriter::new(destination).write_i32(self.silence_minutes);
-        // Оригинал round-trip-ит сырой byte murderer state (`+0x100`, запись в
-        // `0x00441034..0x00441048`), сохранённый decoder-ом; Rust не хранит
-        // отдельный флаг и пересчитывает его из pk_count и timestamp.
-        // Расхождение наблюдаемо только на грязном wire (byte не согласован с
-        // этой парой) — сознательная нормализация; записанный ниже remainder
-        // побайтово совпадает с машинным clamp (`0x0044104C..0x00441077`).
-        let murderer_state = self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms != 0;
-        LegacyWriter::new(destination).write_u8(u8::from(murderer_state));
-        let murderer_remain = if self.murderer_time_stamp_ms == 0 {
-            0
-        } else {
-            self.murderer_time_stamp_ms
-                .wrapping_add(one_pk_count_time_ms)
-                .wrapping_sub(now_ms)
-                .min(one_pk_count_time_ms)
-        };
-        LegacyWriter::new(destination).write_u32(murderer_remain);
-        LegacyWriter::new(destination).write_i32(self.fight_state_count);
-        append_player_game_save_count(destination, "m_vUncreatedPets", pets.len())?;
-        for pet in pets {
-            append_player_game_save_string(
-                destination,
-                "tagPetInformation.strOriginalName",
-                &pet.original_name,
-                0x94,
-            )?;
-            let mut writer = LegacyWriter::new(destination);
-            writer.write_u32(pet.health);
-            writer.write_u32(pet.level);
-            writer.write_u32(pet.experience);
-        }
-        append_player_game_save_string(
-            destination,
-            "tagCarriageInfo.strOriginalName",
-            &carriage.original_name,
-            0x94,
-        )?;
-        append_player_game_save_string(
-            destination,
-            "tagCarriageInfo.strCarriageScript",
-            &carriage.script,
-            0x94,
-        )?;
-        let mut writer = LegacyWriter::new(destination);
-        writer.write_u32(carriage.health);
-        writer.write_u8(u8::from(recreate_carriage));
-        writer.write_u8(u8::from(self.login));
-        writer.write_i32(self.city_war_died_state_time_ms);
-        append_player_game_save_count(destination, "m_PlayerQuests", self.quest_progress.len())?;
-        for (quest_id, state) in self.quest_progress.iter() {
-            let mut writer = LegacyWriter::new(destination);
-            writer.write_u16(*quest_id);
-            writer.write_u8(*state);
-        }
-        LegacyWriter::new(destination).write_u8(self.country);
-        LegacyWriter::new(destination).write_i32(self.contribution);
-        destination.extend_from_slice(&self.jjc_data);
-        destination.push(u8::from(self.jjc_pk_state));
-        append_player_game_save_string(destination, "m_strSessionID", &self.session_id, 0x40)?;
-        Ok(true)
+            now_ms,
+            timed_state_now_milliseconds,
+            one_pk_count_time_ms,
+            pets,
+            carriage,
+            recreate_carriage,
+        )
+        .map(|()| true)
     }
 
     fn synchronized_base_property_wire(&self) -> [u8; PLAYER_BASE_PROPERTY_WIRE_SIZE] {
-        let mut wire = self.base_property_wire;
-        wire[BASE_LEVEL_OFFSET] = self.base_properties.level;
-        write_player_wire_u32(
-            &mut wire,
-            BASE_EXPERIENCE_OFFSET,
-            self.base_properties.experience,
-        );
-        wire[BASE_HEAD_PICTURE_OFFSET] = self.base_properties.head_picture as u8;
-        wire[BASE_FACE_PICTURE_OFFSET] = self.base_properties.face_picture as u8;
-        wire[BASE_OCCUPATION_OFFSET] = self.base_properties.occupation;
-        wire[BASE_SEX_OFFSET] = self.base_properties.sex;
-        write_player_wire_u16(
-            &mut wire,
-            BASE_PK_COUNT_OFFSET,
-            self.base_properties.pk_count,
-        );
-        write_player_wire_u32(
-            &mut wire,
-            BASE_KILL_COUNT_OFFSET,
-            self.base_properties.kill_count,
-        );
-        write_player_wire_u16(
-            &mut wire,
-            BASE_HIT_TOP_LOG_OFFSET,
-            self.base_properties.hit_top_log,
-        );
-        write_player_wire_u16(
-            &mut wire,
-            BASE_REMAIN_POINT_OFFSET,
-            self.base_properties.remain_point,
-        );
-        wire[BASE_CHARGED_OFFSET] = u8::from(self.base_properties.charged);
-        for (index, hotkey) in self.base_properties.hotkeys.iter().copied().enumerate() {
-            write_player_wire_u32(&mut wire, BASE_HOTKEY_OFFSET + index * 4, hotkey);
-        }
-        for (offset, value) in [
-            (BASE_PK_NORMAL_OFFSET, self.base_properties.pk_normal),
-            (BASE_PK_TEAM_OFFSET, self.base_properties.pk_team),
-            (BASE_PK_UNION_OFFSET, self.base_properties.pk_union),
-            (BASE_PK_BADMAN_OFFSET, self.base_properties.pk_badman),
-            (BASE_PK_COUNTRY_OFFSET, self.base_properties.pk_country),
-            (
-                BASE_FAIRY_CONTAINER_ENABLED_OFFSET,
-                self.base_properties.fairy_container_enabled,
-            ),
-            (
-                BASE_BATTLE_FAIRY_ENABLED_OFFSET,
-                self.base_properties.battle_fairy_enabled,
-            ),
-            (
-                BASE_DISPLAY_HEAD_PIECE_OFFSET,
-                self.base_properties.display_head_piece,
-            ),
-            (
-                BASE_BATTLE_FAIRY_SUMMONED_OFFSET,
-                self.battle_fairy_summoned,
-            ),
-            (
-                BASE_BATTLE_FAIRY_RECALL_OFFSET,
-                self.base_properties.battle_fairy_recall,
-            ),
-            (
-                BASE_BATTLE_FAIRY_DIED_OFFSET,
-                self.base_properties.battle_fairy_died,
-            ),
-            (
-                BASE_QUEST_ENABLED_OFFSET,
-                self.base_properties.quest_availability.enabled(),
-            ),
-        ] {
-            wire[offset] = u8::from(value);
-        }
-        for (offset, value) in [
-            (BASE_HEALTH_OFFSET, self.base_properties.health),
-            (BASE_MANA_OFFSET, self.base_properties.mana),
-            (BASE_MAXIMUM_HP_OFFSET, self.base_properties.base_maximum_hp),
-            (BASE_MAXIMUM_MP_OFFSET, self.base_properties.base_maximum_mp),
-            (BASE_STRENGTH_OFFSET, self.base_properties.base_strength),
-            (BASE_DEXTERITY_OFFSET, self.base_properties.base_dexterity),
-            (
-                BASE_CONSTITUTION_OFFSET,
-                self.base_properties.base_constitution,
-            ),
-            (
-                BASE_INTELLIGENCE_OFFSET,
-                self.base_properties.base_intelligence,
-            ),
-            (BASE_VIGOUR_OFFSET, self.base_properties.vigour),
-            (
-                BASE_MAXIMUM_VIGOUR_OFFSET,
-                self.base_properties.maximum_vigour,
-            ),
-            (BASE_ENERGY_OFFSET, self.base_properties.energy),
-            (
-                BASE_MAXIMUM_ENERGY_OFFSET,
-                self.base_properties.maximum_energy,
-            ),
-            (BASE_CREDIT_OFFSET, self.base_properties.credit),
-            (BASE_EXALT_OFFSET, self.base_properties.exalt),
-            (
-                BASE_QUEST_TIME_BEGIN_OFFSET,
-                self.base_properties.quest_availability.time_begin() as u32,
-            ),
-            (
-                BASE_QUEST_TIME_LIMIT_OFFSET,
-                self.base_properties.quest_availability.time_limit() as u32,
-            ),
-            (BASE_EXPLOIT_OFFSET, self.base_properties.exploit),
-            (BASE_BREAK_ARMOUR_OFFSET, self.base_properties.break_armour),
-            (BASE_PUNCTURE_OFFSET, self.base_properties.puncture),
-            (BASE_BREAK_ELEMENT_OFFSET, self.base_properties.break_element),
-            (BASE_BREAK_BOUND_OFFSET, self.base_properties.break_bound),
-            (BASE_POWER_OF_GOLD_OFFSET, self.base_properties.power_of_gold),
-            (
-                BASE_DAYS_HONOR_OFFSET,
-                self.base_properties.days_honor_eliminate,
-            ),
-            (
-                BASE_WEEKS_HONOR_OFFSET,
-                self.base_properties.weeks_honor_eliminate,
-            ),
-            (
-                BASE_MONTHS_HONOR_OFFSET,
-                self.base_properties.months_honor_eliminate,
-            ),
-            (
-                BASE_TOTAL_HONOR_OFFSET,
-                self.base_properties.total_honor_eliminate,
-            ),
-            (
-                BASE_RANK_OF_NOBILITY_OFFSET,
-                self.base_properties.rank_of_nobility_id,
-            ),
-            (BASE_APPELLATION_OFFSET, self.base_properties.appellation_id),
-            (BASE_MODE_OFFSET, self.base_properties.mode),
-            (BASE_FETCH_POWER_OFFSET, self.base_properties.fetch_power),
-            (
-                BASE_AUCTION_SPACE_OFFSET,
-                self.base_properties.auction_space,
-            ),
-            (BASE_JJC_LEVEL_OFFSET, self.base_properties.jjc_level),
-            (BASE_JJC_SCORE_OFFSET, self.base_properties.jjc_score),
-            (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
-            (
-                BASE_FY_ENABLE_FLAGS_OFFSET,
-                self.base_properties.fy_enable_flags.bits(),
-            ),
-            (BASE_LT_60_STAMP_OFFSET, self.base_properties.lt_60_stamp),
-            (BASE_SZL_OFFSET, self.base_properties.szl),
-            (
-                BASE_GODS_BATTLE_FACTION_OFFSET,
-                self.base_properties.gods_battle_faction as u32,
-            ),
-        ] {
-            write_player_wire_u32(&mut wire, offset, value);
-        }
-        write_player_wire_u16(
-            &mut wire,
-            BASE_LT_UP_60_COUNT_OFFSET,
-            self.base_properties.lt_up_60_count,
-        );
-        write_player_wire_u16(&mut wire, BASE_RP_OFFSET, self.base_properties.rp);
-        write_player_wire_u16(&mut wire, BASE_YP_OFFSET, self.base_properties.yp);
-        write_player_wire_u16(
-            &mut wire,
-            BASE_MAXIMUM_YP_OFFSET,
-            self.base_properties.maximum_yp,
-        );
-        write_player_wire_u16(
-            &mut wire,
-            BASE_BURDEN_OFFSET,
-            self.base_properties.base_burden,
-        );
-        write_player_wire_u16(
-            &mut wire,
-            BASE_MAXIMUM_RP_OFFSET,
-            self.base_properties.maximum_rp,
-        );
-        write_player_wire_u16(
-            &mut wire,
-            BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET,
-            self.base_properties.remain_jing_li_dan_count,
-        );
-        wire
-    }
-
-    fn restore_murderer_timestamp(
-        &mut self,
-        murderer_state: bool,
-        murderer_remain: u32,
-        now_ms: u32,
-        one_pk_count_time_ms: u32,
-    ) {
-        if self.base_properties.pk_count == 0 {
-            self.murderer_time_stamp_ms = 0;
-            return;
-        }
-        if murderer_state || self.murderer_time_stamp_ms == 0 {
-            self.murderer_time_stamp_ms = now_ms;
-        }
-        if murderer_remain != 0 {
-            let remain = murderer_remain.min(one_pk_count_time_ms);
-            self.murderer_time_stamp_ms =
-                now_ms.wrapping_sub(one_pk_count_time_ms.wrapping_sub(remain));
-        }
-    }
-
-    fn apply_base_property_wire(&mut self) {
-        let wire = &self.base_property_wire;
-        self.base_properties.level = wire[BASE_LEVEL_OFFSET];
-        self.base_properties.experience = read_player_wire_u32(wire, BASE_EXPERIENCE_OFFSET);
-        self.base_properties.head_picture = i32::from(wire[BASE_HEAD_PICTURE_OFFSET]);
-        self.base_properties.face_picture = i32::from(wire[BASE_FACE_PICTURE_OFFSET]);
-        self.base_properties.occupation = wire[BASE_OCCUPATION_OFFSET];
-        self.base_properties.sex = wire[BASE_SEX_OFFSET];
-        self.base_properties.pk_count = read_player_wire_u16(wire, BASE_PK_COUNT_OFFSET);
-        self.base_properties.kill_count = read_player_wire_u32(wire, BASE_KILL_COUNT_OFFSET);
-        self.base_properties.hit_top_log = read_player_wire_u16(wire, BASE_HIT_TOP_LOG_OFFSET);
-        self.base_properties.charged = wire[BASE_CHARGED_OFFSET] != 0;
-        self.base_properties.remain_point = read_player_wire_u16(wire, BASE_REMAIN_POINT_OFFSET);
-        for (index, hotkey) in self.base_properties.hotkeys.iter_mut().enumerate() {
-            *hotkey = read_player_wire_u32(wire, BASE_HOTKEY_OFFSET + index * 4);
-        }
-        self.base_properties.pk_normal = wire[BASE_PK_NORMAL_OFFSET] != 0;
-        self.base_properties.pk_team = wire[BASE_PK_TEAM_OFFSET] != 0;
-        self.base_properties.pk_union = wire[BASE_PK_UNION_OFFSET] != 0;
-        self.base_properties.pk_badman = wire[BASE_PK_BADMAN_OFFSET] != 0;
-        self.base_properties.pk_country = wire[BASE_PK_COUNTRY_OFFSET] != 0;
-        self.base_properties.health = read_player_wire_u32(wire, BASE_HEALTH_OFFSET);
-        self.base_properties.mana = read_player_wire_u32(wire, BASE_MANA_OFFSET);
-        self.base_properties.rp = read_player_wire_u16(wire, BASE_RP_OFFSET);
-        self.base_properties.yp = read_player_wire_u16(wire, BASE_YP_OFFSET);
-        self.base_properties.maximum_yp = read_player_wire_u16(wire, BASE_MAXIMUM_YP_OFFSET);
-        self.base_properties.maximum_rp = read_player_wire_u16(wire, BASE_MAXIMUM_RP_OFFSET);
-        self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
-        self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
-        self.base_properties.base_burden = read_player_wire_u16(wire, BASE_BURDEN_OFFSET);
-        self.base_properties.base_strength = read_player_wire_u32(wire, BASE_STRENGTH_OFFSET);
-        self.base_properties.base_dexterity = read_player_wire_u32(wire, BASE_DEXTERITY_OFFSET);
-        self.base_properties.base_constitution =
-            read_player_wire_u32(wire, BASE_CONSTITUTION_OFFSET);
-        self.base_properties.base_intelligence =
-            read_player_wire_u32(wire, BASE_INTELLIGENCE_OFFSET);
-        self.base_properties.vigour = read_player_wire_u32(wire, BASE_VIGOUR_OFFSET);
-        self.base_properties.maximum_vigour =
-            read_player_wire_u32(wire, BASE_MAXIMUM_VIGOUR_OFFSET);
-        self.base_properties.energy = read_player_wire_u32(wire, BASE_ENERGY_OFFSET);
-        self.base_properties.maximum_energy =
-            read_player_wire_u32(wire, BASE_MAXIMUM_ENERGY_OFFSET);
-        self.base_properties.credit = read_player_wire_u32(wire, BASE_CREDIT_OFFSET);
-        self.base_properties.exalt = read_player_wire_u32(wire, BASE_EXALT_OFFSET);
-        self.base_properties.display_head_piece = wire[BASE_DISPLAY_HEAD_PIECE_OFFSET] != 0;
-        self.base_properties.quest_availability = PlayerQuestAvailability::from_snapshot(
-            read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32,
-            read_player_wire_u32(wire, BASE_QUEST_TIME_LIMIT_OFFSET) as i32,
-            wire[BASE_QUEST_ENABLED_OFFSET] != 0,
-        );
-        self.base_properties.exploit = read_player_wire_u32(wire, BASE_EXPLOIT_OFFSET);
-        self.base_properties.fairy_container_enabled =
-            wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
-        self.base_properties.battle_fairy_enabled = wire[BASE_BATTLE_FAIRY_ENABLED_OFFSET] != 0;
-        self.base_properties.break_armour = read_player_wire_u32(wire, BASE_BREAK_ARMOUR_OFFSET);
-        self.base_properties.puncture = read_player_wire_u32(wire, BASE_PUNCTURE_OFFSET);
-        self.base_properties.break_element = read_player_wire_u32(wire, BASE_BREAK_ELEMENT_OFFSET);
-        self.base_properties.break_bound = read_player_wire_u32(wire, BASE_BREAK_BOUND_OFFSET);
-        self.base_properties.power_of_gold = read_player_wire_u32(wire, BASE_POWER_OF_GOLD_OFFSET);
-        self.base_properties.days_honor_eliminate =
-            read_player_wire_u32(wire, BASE_DAYS_HONOR_OFFSET);
-        self.base_properties.weeks_honor_eliminate =
-            read_player_wire_u32(wire, BASE_WEEKS_HONOR_OFFSET);
-        self.base_properties.months_honor_eliminate =
-            read_player_wire_u32(wire, BASE_MONTHS_HONOR_OFFSET);
-        self.base_properties.total_honor_eliminate =
-            read_player_wire_u32(wire, BASE_TOTAL_HONOR_OFFSET);
-        self.base_properties.rank_of_nobility_id =
-            read_player_wire_u32(wire, BASE_RANK_OF_NOBILITY_OFFSET);
-        self.base_properties.appellation_id = read_player_wire_u32(wire, BASE_APPELLATION_OFFSET);
-        self.base_properties.mode = read_player_wire_u32(wire, BASE_MODE_OFFSET);
-        self.base_properties.fetch_power = read_player_wire_u32(wire, BASE_FETCH_POWER_OFFSET);
-        self.battle_fairy_summoned = wire[BASE_BATTLE_FAIRY_SUMMONED_OFFSET] != 0;
-        self.base_properties.battle_fairy_recall = wire[BASE_BATTLE_FAIRY_RECALL_OFFSET] != 0;
-        self.base_properties.battle_fairy_died = wire[BASE_BATTLE_FAIRY_DIED_OFFSET] != 0;
-        self.base_properties.auction_space = read_player_wire_u32(wire, BASE_AUCTION_SPACE_OFFSET);
-        self.base_properties.jjc_level = read_player_wire_u32(wire, BASE_JJC_LEVEL_OFFSET);
-        self.base_properties.jjc_score = read_player_wire_u32(wire, BASE_JJC_SCORE_OFFSET);
-        self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
-        self.base_properties.fy_enable_flags = LeiTingEnableFlags::from_bits_retain(
-            read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET),
-        );
-        self.base_properties.lt_up_60_count =
-            read_player_wire_u16(wire, BASE_LT_UP_60_COUNT_OFFSET);
-        self.base_properties.remain_jing_li_dan_count =
-            read_player_wire_u16(wire, BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET);
-        self.base_properties.lt_60_stamp = read_player_wire_u32(wire, BASE_LT_60_STAMP_OFFSET);
-        self.base_properties.szl = read_player_wire_u32(wire, BASE_SZL_OFFSET);
-        self.base_properties.gods_battle_faction =
-            read_player_wire_u32(wire, BASE_GODS_BATTLE_FACTION_OFFSET) as i32;
-    }
-
-    fn apply_combat_property_wire(&mut self) {
-        let wire = &self.combat_property_wire;
-        self.combat_properties = PlayerCombatProperties {
-            maximum_hp: read_player_wire_u32(wire, 0x00),
-            maximum_mp: read_player_wire_u32(wire, 0x04),
-            maximum_yp: read_player_wire_u16(wire, 0x08),
-            maximum_rp: read_player_wire_u16(wire, 0x0a),
-            strength: read_player_wire_u32(wire, 0x0c),
-            dexterity: read_player_wire_u32(wire, 0x10),
-            constitution: read_player_wire_u32(wire, 0x14),
-            intelligence: read_player_wire_u32(wire, 0x18),
-            minimum_attack: read_player_wire_u32(wire, 0x1c),
-            maximum_attack: read_player_wire_u32(wire, 0x20),
-            attack_speed: read_player_wire_u16(wire, 0x32),
-            hit: read_player_wire_u16(wire, 0x24),
-            dodge: read_player_wire_u16(wire, 0x30),
-            cch: read_player_wire_u16(wire, 0x28),
-            burden: read_player_wire_u16(wire, 0x26),
-            defense: read_player_wire_u32(wire, 0x2c),
-            element_resistance: read_player_wire_u32(wire, 0x34),
-            add_element_attack: read_player_wire_u32(wire, 0x40),
-            hp_recovery: read_player_wire_u16(wire, 0x38),
-            mp_recovery: read_player_wire_u16(wire, 0x3a),
-            element_modify: read_player_wire_u32(wire, 0x48) as i32,
-            reank: read_player_wire_u16(wire, 0x4c),
-            attack_avoid: read_player_wire_u16(wire, 0x4e),
-            element_avoid: read_player_wire_u16(wire, 0x50),
-            full_miss: read_player_wire_u16(wire, 0x52),
-            blast_attack: read_player_wire_u16(wire, 0x54),
-            blast_element_attack: read_player_wire_u16(wire, 0x56),
-            soul_resistance: read_player_wire_u16(wire, 0x3c),
-            add_soul_attack: read_player_wire_u16(wire, 0x44),
-            blast_attack_scale_bits: read_player_wire_u32(wire, 0x58),
-            blast_defense_scale_bits: read_player_wire_u32(wire, 0x5c),
-            element_blast_attack_scale_bits: read_player_wire_u32(wire, 0x60),
-            element_blast_defense_scale_bits: read_player_wire_u32(wire, 0x64),
-            full_miss_scale_bits: read_player_wire_u32(wire, 0x68),
-            critical_rate_bits: read_player_wire_u32(wire, 0x6c),
-            resume_hp_peace: read_player_wire_u32(wire, 0x70) as i32,
-            resume_mp_peace: read_player_wire_u32(wire, 0x74) as i32,
-            resume_hp_fight: read_player_wire_u32(wire, 0x78) as i32,
-            resume_mp_fight: read_player_wire_u32(wire, 0x7c) as i32,
-            restored_hp_peace: read_player_wire_u32(wire, 0x80) as i32,
-            restored_mp_peace: read_player_wire_u32(wire, 0x84) as i32,
-            restored_hp_fight: read_player_wire_u32(wire, 0x88) as i32,
-            restored_mp_fight: read_player_wire_u32(wire, 0x8c) as i32,
-            battle_fairy_summoned: wire[0x90] != 0,
-            battle_fairy_recall: wire[0x91] != 0,
-            battle_fairy_died: wire[0x92] != 0,
-        };
-    }
-
-    fn decode_organizing_snapshot(
-        &mut self,
-        source: &[u8],
-        cursor: &mut usize,
-    ) -> Result<(), PlayerGameSaveCodecError> {
-        self.faction_id = read_player_game_save_i32(source, cursor, "m_lFactionID")?;
-        if self.faction_id > 0 {
-            self.faction_logo_id =
-                read_player_game_save_i32(source, cursor, "m_lFactionLogoID")?;
-            self.faction_level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
-            self.faction_experience =
-                read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
-            self.faction_force = i32::from(
-                read_player_game_save_i32(source, cursor, "m_lForce")? != 0,
-            );
-            self.faction_contribute = u32::from(
-                read_player_game_save_i32(source, cursor, "m_bFactionContribute")? != 0,
-            );
-            self.faction_name =
-                read_player_game_save_string(source, cursor, "m_strFactionName", 0x100)?;
-            self.faction_title =
-                read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
-            self.faction_master_id =
-                read_player_game_save_i32(source, cursor, "m_lFactionMasterID")?;
-            self.union_id = read_player_game_save_i32(source, cursor, "m_lUnionID")?;
-            self.union_master_id =
-                read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
-            for (field, destination) in [
-                ("m_EnemyFactions", &mut self.enemy_factions),
-                ("m_CityWarEnemyFactions", &mut self.city_war_enemy_factions),
-            ] {
-                let count = read_player_game_save_i32(source, cursor, field)?;
-                destination.clear();
-                for _ in 0..count.max(0) {
-                    destination.insert(read_player_game_save_i32(source, cursor, field)?);
-                }
-            }
-            let count = read_player_game_save_i32(source, cursor, "m_OwnedRegions")?;
-            self.faction_owned_regions.clear();
-            for _ in 0..count.max(0) {
-                let wire = read_player_game_save_slice(source, cursor, "m_OwnedRegions", 8)?;
-                self.faction_owned_regions.push(wire.try_into().expect("размер проверен"));
-            }
-        } else {
-            self.faction_logo_id = 0;
-            self.faction_level = 0;
-            self.faction_experience = 0;
-            self.faction_force = 0;
-            self.faction_contribute = 0;
-            self.faction_name.clear();
-            self.faction_title.clear();
-            self.enemy_factions.clear();
-            self.city_war_enemy_factions.clear();
-            self.faction_owned_regions.clear();
-            self.faction_master_id = 0;
-            self.union_id = 0;
-            self.union_master_id = 0;
-        }
-        Ok(())
-    }
-
-    fn encode_organizing_snapshot(&self) -> Option<Vec<u8>> {
-        let mut payload = Vec::new();
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_i32(self.faction_id);
-        if self.faction_id <= 0 {
-            return Some(payload);
-        }
-        writer.write_i32(self.faction_logo_id);
-        writer.write_u16(self.faction_level);
-        writer.write_i32(self.faction_experience);
-        writer.write_i32(self.faction_force);
-        writer.write_u32(self.faction_contribute);
-        writer.write_c_string(&self.faction_name);
-        writer.write_c_string(&self.faction_title);
-        writer.write_i32(self.faction_master_id);
-        writer.write_i32(self.union_id);
-        writer.write_i32(self.union_master_id);
-        writer.write_i32(i32::try_from(self.enemy_factions.len()).ok()?);
-        for faction_id in &self.enemy_factions {
-            writer.write_i32(*faction_id);
-        }
-        writer.write_i32(i32::try_from(self.city_war_enemy_factions.len()).ok()?);
-        for faction_id in &self.city_war_enemy_factions {
-            writer.write_i32(*faction_id);
-        }
-        writer.write_i32(i32::try_from(self.faction_owned_regions.len()).ok()?);
-        for region in &self.faction_owned_regions {
-            writer.write_bytes(region);
-        }
-        Some(payload)
+        gamesave::synchronized_base_property_wire(
+            &self.base_property_wire,
+            &self.base_properties,
+            self.battle_fairy_summoned,
+        )
     }
 
     pub(crate) const fn shape(&self) -> &CShape {
@@ -3153,60 +1769,29 @@ impl CPlayer {
         country_identity: u8,
         personal_shop: Option<(i32, i32, &[u8])>,
         team_member_count: usize,
-        mut now_milliseconds: impl FnMut() -> u32,
+        now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        const VISIBLE_EQUIPMENT: [u32; 11] = [0, 1, 2, 3, 4, 9, 10, 12, 13, 14, 15];
-
-        let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
-            false,
-            self.is_dead(),
+        clientsnapshot::encode_client_shape_snapshot(
+            &PlayerClientShapeParts {
+                move_shape: &self.move_shape,
+                base_properties: &self.base_properties,
+                combat_properties: &self.combat_properties,
+                equipment: &self.equipment,
+                organizing: self.organizing_snapshot(),
+                murderer_time_stamp_ms: self.murderer_time_stamp_ms,
+                contend_state: self.contend_state,
+                city_war_died_state: self.city_war_died_state,
+                emotion_index: self.emotion_index,
+                emotion_timestamp_ms: self.emotion_timestamp_ms,
+                country: self.country,
+                war_soul_state: self.war_soul_state,
+            },
+            goods_factory,
+            country_identity,
+            personal_shop,
             team_member_count,
-            &mut now_milliseconds,
-        )?;
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u8(self.base_properties.head_picture as u8);
-        writer.write_u8(u8::from(self.base_properties.display_head_piece));
-        for position in VISIBLE_EQUIPMENT {
-            writer.write_u32(
-                self.equipment
-                    .get_goods(position)
-                    .map_or(0, CGoods::base_properties_index),
-            );
-        }
-        for position in VISIBLE_EQUIPMENT {
-            writer.write_u8(self.equipment.get_goods(position).map_or(0, |goods| {
-                goods.addon_property_value(goods_factory, GAP_WEAPON_LEVEL, 1) as u8
-            }));
-        }
-        writer.write_u32(self.base_properties.health);
-        writer.write_u32(self.combat_properties.maximum_hp);
-        writer.write_u16(self.base_properties.pk_count);
-        writer.write_u8(u8::from(self.murderer_time_stamp_ms != 0));
-        writer.write_bytes(&self.encode_organizing_snapshot()?);
-        writer.write_u8(u8::from(self.contend_state));
-        writer.write_u8(u8::from(self.city_war_died_state));
-        writer.write_u8(self.base_properties.occupation as u8);
-        writer.write_u8(self.base_properties.sex as u8);
-        writer.write_u32(self.base_properties.mode);
-        if let Some((session_id, plug_id, shop_name)) = personal_shop {
-            writer.write_i32(session_id);
-            writer.write_i32(plug_id);
-            writer.write_c_string(shop_name);
-        } else {
-            writer.write_i32(0);
-            writer.write_i32(0);
-        }
-        writer.write_i32(self.emotion_index);
-        writer.write_u32(now_milliseconds().wrapping_sub(self.emotion_timestamp_ms));
-        writer.write_u8(self.country);
-        writer.write_u8(self.base_properties.face_picture as u8);
-        writer.write_u8(self.base_properties.level);
-        writer.write_u32(self.base_properties.credit);
-        writer.write_u8(country_identity);
-        writer.write_u32(self.base_properties.appellation_id);
-        writer.write_u32(self.war_soul_state);
-        writer.write_i32(self.base_properties.gods_battle_faction);
-        Some(payload)
+            now_milliseconds,
+        )
     }
 
     /// Точный полный вариант `CPlayer::AddToByteArray_ForClient(true)`,
@@ -3227,142 +1812,68 @@ impl CPlayer {
         ci_qing_quest_id: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        const SKILL_USAGE_MP_COST: u32 = 2;
-        const SKILL_USAGE_MIN_DISTANCE: u32 = 5_002;
-        const SKILL_USAGE_MAX_DISTANCE: u32 = 5_003;
-        const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-
-        self.battle_fairy_summoned = self.war_soul_state != 0;
-        let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
-            true,
-            self.is_dead(),
-            team_member_count,
-            timed_state_now_milliseconds,
-        )?;
-        payload.extend_from_slice(&self.synchronized_base_property_wire());
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_c_string(&self.account);
-            writer.write_c_string(&self.title);
-            writer.write_bytes(&self.combat_property_wire);
-            writer.write_u32(level_experience);
-
-            let skills: Vec<_> = self.serializable_skills().collect();
-            writer.write_i32(i32::try_from(skills.len()).ok()?);
-            for skill in skills {
-                let properties = skill_factory
-                    .query_skill_base_properties(skill.id(), skill.level())?;
-                writer.write_u32(
-                    (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16),
-                );
-                writer.write_u32(properties.query_property(SKILL_USAGE_DELAY_TIME));
-                let maximum = properties.query_property(SKILL_USAGE_MAX_DISTANCE);
-                writer.write_u16(if maximum == 0 { 1 } else { maximum } as u16);
-                writer.write_u16(properties.query_property(SKILL_USAGE_MP_COST) as u16);
-                writer.write_u16(properties.query_property(SKILL_USAGE_MIN_DISTANCE) as u16);
-            }
-
-            writer.write_i32(i32::try_from(self.friends.len()).ok()?);
-            for friend in &self.friends {
-                writer.write_c_string(&friend.name);
-                writer.write_u8(u8::from(friend.online));
-            }
-        }
-        payload.extend_from_slice(&self.encode_lei_ting());
-
-        if let Some(goods) = self.hand.get_goods(0)
-            && let Some(base) = goods_factory.query_goods_base_properties(goods.base_properties_index())
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_u8(1);
-            writer.write_u8(u8::from(base.goods_type() == GOODS_TYPE_EQUIPMENT));
-            writer.write_u16(goods.amount() as u16);
-            writer.write_u8(0);
-            goods.serialize_for_old_client(&mut payload, goods_factory, da_kong_enabled).then_some(())?;
-        } else {
-            payload.push(0);
-        }
-
-        let equipment = self.equipment.traversing_goods();
-        LegacyWriter::new(&mut payload).write_i32(i32::try_from(equipment.len()).ok()?);
-        for (column, goods) in equipment {
-            goods.serialize_for_old_client(&mut payload, goods_factory, da_kong_enabled).then_some(())?;
-            LegacyWriter::new(&mut payload).write_u32(column.position());
-        }
-        append_old_client_volume(&mut payload, &self.auction_goods, goods_factory, da_kong_enabled)?;
-        append_old_client_volume(&mut payload, &self.packet, goods_factory, da_kong_enabled)?;
-        append_old_client_volume(&mut payload, &self.auction_listing, goods_factory, da_kong_enabled)?;
-        append_old_client_volume(&mut payload, self.fairy_container.base(), goods_factory, da_kong_enabled)?;
-
-        for (amount, goods) in [
-            (self.wallet.currency_amount(), self.wallet.goods()),
-            (self.auction_wallet.currency_amount(), self.auction_wallet.goods()),
-            (self.yuan_bao.currency_amount(), self.yuan_bao.goods()),
-            (self.ji_fen.currency_amount(), self.ji_fen.goods()),
-        ] {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_u32(amount);
-            let guid = goods.map_or(CGuid::GUID_INVALID, |goods| goods.identity().ex_id);
-            if guid.is_invalid() {
-                writer.write_u8(0);
-            } else {
-                writer.write_u8(16);
-                writer.write_bytes(guid.as_legacy_bytes());
-            }
-        }
-
-        payload.extend_from_slice(&self.encode_organizing_snapshot()?);
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_u8(u8::from(self.contend_state));
-            // Оригинал: VA 0x0044A980–0x0044A988; клиент читает byte
-            // в 0x0045197C–0x00451989. Ширина не следует из имени m_l*.
-            writer.write_u8(u8::from(self.city_war_died_state));
-        }
-        self.append_client_quest_snapshot(&mut payload, quest_system)?;
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_u8(self.country);
-            writer.write_i32(self.contribution);
-            writer.write_u8(country_identity);
-            writer.write_u32(loan_time_limit);
-        }
-        append_old_client_volume(
-            &mut payload,
-            self.battle_fairy_container.base(),
+        let mut parts = PlayerInitialClientParts {
+            move_shape: &self.move_shape,
+            base_property_wire: &self.base_property_wire,
+            base_properties: &self.base_properties,
+            combat_property_wire: &self.combat_property_wire,
+            account: &self.account,
+            title: &self.title,
+            friends: &self.friends,
+            lei_ting_things: &self.lei_ting_things,
+            // Поля ниже изменяемые — snapshot строится поэлементно, чтобы
+            // не тянуть &self-заём метода под &mut-поля проекции.
+            organizing: PlayerOrganizingSnapshot {
+                faction_id: self.faction_id,
+                faction_logo_id: self.faction_logo_id,
+                faction_level: self.faction_level,
+                faction_experience: self.faction_experience,
+                faction_force: self.faction_force,
+                faction_contribute: self.faction_contribute,
+                faction_master_id: self.faction_master_id,
+                faction_name: &self.faction_name,
+                faction_title: &self.faction_title,
+                union_id: self.union_id,
+                union_master_id: self.union_master_id,
+                enemy_factions: &self.enemy_factions,
+                city_war_enemy_factions: &self.city_war_enemy_factions,
+                faction_owned_regions: &self.faction_owned_regions,
+            },
+            contend_state: self.contend_state,
+            city_war_died_state: self.city_war_died_state,
+            quest_progress: &self.quest_progress,
+            country: self.country,
+            contribution: self.contribution,
+            war_soul_state: self.war_soul_state,
+            hand: &self.hand,
+            equipment: &self.equipment,
+            auction_goods: &self.auction_goods,
+            packet: &self.packet,
+            auction_listing: &self.auction_listing,
+            fairy_container: &self.fairy_container,
+            wallet: &self.wallet,
+            auction_wallet: &self.auction_wallet,
+            yuan_bao: &self.yuan_bao,
+            ji_fen: &self.ji_fen,
+            battle_fairy_container: &self.battle_fairy_container,
+            ci_qing_compose: &self.ci_qing_compose,
+            ci_qing: &self.ci_qing,
+            ci_qing_open: &mut self.ci_qing_open,
+            battle_fairy_summoned: &mut self.battle_fairy_summoned,
+        };
+        clientsnapshot::encode_initial_client_snapshot(
+            &mut parts,
             goods_factory,
+            skill_factory,
+            quest_system,
             da_kong_enabled,
-        )?;
-        append_old_client_volume(&mut payload, &self.ci_qing_compose, goods_factory, da_kong_enabled)?;
-        append_old_client_volume(&mut payload, &self.ci_qing, goods_factory, da_kong_enabled)?;
-        {
-            let quest_state = self.quest_progress.raw_state(ci_qing_quest_id as u16);
-            if quest_state == Some(1) {
-                self.ci_qing_open = true;
-            }
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_u32(self.war_soul_state);
-            writer.write_u32(quest_state.map_or(2, u32::from));
-        }
-        Some(payload)
-    }
-
-    fn append_client_quest_snapshot(
-        &self,
-        destination: &mut Vec<u8>,
-        quest_system: &CQuestSystem,
-    ) -> Option<()> {
-        let active: Vec<_> = self
-            .quest_progress
-            .client_entries(|quest_id| quest_system.quest_data_by_id(quest_id))
-            .collect();
-        let mut writer = LegacyWriter::new(destination);
-        writer.write_i32(quest_system.max_quest_count);
-        writer.write_i32(i32::try_from(active.len()).ok()?);
-        for (quest_id, quest) in active {
-            append_client_quest_record(destination, quest_id, quest);
-        }
-        Some(())
+            level_experience,
+            country_identity,
+            team_member_count,
+            loan_time_limit,
+            ci_qing_quest_id,
+            timed_state_now_milliseconds,
+        )
     }
 
     pub(crate) const fn player_ai(&self) -> &CPlayerAI {
@@ -3985,22 +2496,10 @@ impl CPlayer {
         self.heart_received = true;
     }
 
+    /// LeiTing snapshot codec — Zone `players::gamesave` (совпадает с
+    /// WorldServer `AddByteArrayLeiTing`); делегат прежней сигнатуры.
     pub(crate) fn encode_lei_ting(&self) -> Vec<u8> {
-        let mut payload = Vec::with_capacity(20 + self.lei_ting_things.len() * 8);
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u32(self.base_properties.fy_enable_flags.bits());
-        writer.write_u32(self.base_properties.fy_energy);
-        writer.write_u32(self.base_properties.lt_60_stamp);
-        writer.write_u16(self.base_properties.lt_up_60_count);
-        writer.write_u16(self.base_properties.remain_jing_li_dan_count);
-        writer.write_u32(self.lei_ting_things.len() as u32);
-        for thing in &self.lei_ting_things {
-            writer.write_u16(thing.thing_id);
-            writer.write_u16(thing.count);
-            writer.write_u16(thing.max_count);
-            writer.write_u16(thing.point);
-        }
-        payload
+        gamesave::encode_player_lei_ting(&self.base_properties, &self.lei_ting_things)
     }
 
     pub(crate) fn decode_lei_ting(
@@ -4008,71 +2507,12 @@ impl CPlayer {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), PlayerLeiTingDecodeBlock> {
-        fn read_u32(
-            source: &[u8],
-            cursor: &mut usize,
-            field: &'static str,
-        ) -> Result<u32, PlayerLeiTingDecodeBlock> {
-            let offset = *cursor;
-            let available = source.len().saturating_sub(offset);
-            let mut reader =
-                LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock {
-                    field,
-                    offset,
-                    needed: 4,
-                    available,
-                })?;
-            let value = reader.read_u32().map_err(|_| PlayerLeiTingDecodeBlock {
-                field,
-                offset,
-                needed: 4,
-                available,
-            })?;
-            *cursor = reader.position();
-            Ok(value)
-        }
-        fn read_u16(
-            source: &[u8],
-            cursor: &mut usize,
-            field: &'static str,
-        ) -> Result<u16, PlayerLeiTingDecodeBlock> {
-            let offset = *cursor;
-            let available = source.len().saturating_sub(offset);
-            let mut reader =
-                LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock {
-                    field,
-                    offset,
-                    needed: 2,
-                    available,
-                })?;
-            let value = reader.read_u16().map_err(|_| PlayerLeiTingDecodeBlock {
-                field,
-                offset,
-                needed: 2,
-                available,
-            })?;
-            *cursor = reader.position();
-            Ok(value)
-        }
-
-        self.base_properties.fy_enable_flags =
-            LeiTingEnableFlags::from_bits_retain(read_u32(source, cursor, "dwfyenFlag")?);
-        self.base_properties.fy_energy = read_u32(source, cursor, "dwfyEnergy")?;
-        self.base_properties.lt_60_stamp = read_u32(source, cursor, "dwLT60Stamp")?;
-        self.base_properties.lt_up_60_count = read_u16(source, cursor, "wLTUp60Cnt")?;
-        self.base_properties.remain_jing_li_dan_count =
-            read_u16(source, cursor, "wRemainJingLiDanCnt")?;
-        self.lei_ting_things.clear();
-        let count = read_u32(source, cursor, "m_listThing count")?;
-        for _ in 0..count {
-            self.lei_ting_things.push_back(PlayerLeiTingThing {
-                thing_id: read_u16(source, cursor, "tagThing.wTID")?,
-                count: read_u16(source, cursor, "tagThing.wCnt")?,
-                max_count: read_u16(source, cursor, "tagThing.wMaxCnt")?,
-                point: read_u16(source, cursor, "tagThing.wPoint")?,
-            });
-        }
-        Ok(())
+        gamesave::decode_player_lei_ting(
+            &mut self.base_properties,
+            &mut self.lei_ting_things,
+            source,
+            cursor,
+        )
     }
 
     pub(crate) const fn change_fy_energy_flag(&mut self, index: u16) -> bool {
@@ -9357,21 +7797,6 @@ impl CPlayer {
         self.move_shape.skill(skill_id, factory).map(|skill| skill.level())
     }
 
-    fn serializable_skills(&self) -> impl Iterator<Item = &MoveShapeSkill> {
-        [
-            SkillCategory::Attack,
-            SkillCategory::Defense,
-            SkillCategory::Summon,
-            SkillCategory::State,
-        ]
-        .into_iter()
-        .flat_map(|category| {
-            self.move_shape.skills_in_category(category).filter(move |skill| {
-                category != SkillCategory::Defense || skill.id() != SKILL_BASE_DEFENSE
-            })
-        })
-    }
-
     /// Создание intrinsic skills из `CPlayer::InitSkills` (0x00440C30):
     /// отсутствующая базовая защита добавляется первой,
     /// затем профессии `0/1/2` получают соответственно обычную атаку,
@@ -11207,47 +9632,6 @@ impl CPlayer {
         journal
     }
 
-    /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
-    /// перепривязан после создания player identity или его восстановления.
-    pub(crate) const fn refresh_reached_container_owners(&mut self, player_id: i32) {
-        self.bank.base_mut().set_owner(PLAYER_TYPE, player_id);
-        self.depot
-            .base_mut()
-            .base_mut()
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.hand.set_owner(PLAYER_TYPE, player_id);
-        self.enhancement
-            .base_mut()
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
-        self.wallet.set_owner(PLAYER_TYPE, player_id);
-        self.yuan_bao.set_owner(PLAYER_TYPE, player_id);
-        self.ji_fen.set_owner(PLAYER_TYPE, player_id);
-        self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
-        self.auction_listing
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.auction_goods
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.auction_wallet.set_owner(PLAYER_TYPE, player_id);
-        self.ci_qing.base_mut().set_owner(PLAYER_TYPE, player_id);
-        self.ci_qing_compose
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.fairy_container
-            .base_mut()
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-        self.battle_fairy_container
-            .base_mut()
-            .base_mut()
-            .base_mut()
-            .set_owner(PLAYER_TYPE, player_id);
-    }
-
     pub(crate) const fn set_pk_count(&mut self, value: u16) {
         self.base_properties.pk_count = value;
     }
@@ -12648,221 +11032,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
     } else {
         value
     }
-}
-
-fn read_player_game_save_slice<'a>(
-    source: &'a [u8],
-    cursor: &mut usize,
-    field: &'static str,
-    needed: usize,
-) -> Result<&'a [u8], PlayerGameSaveCodecError> {
-    let mut reader = player_save_reader(source, *cursor, field, needed)?;
-    let bytes = reader
-        .read_bytes(needed)
-        .map_err(|block| player_save_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(bytes)
-}
-
-fn read_player_game_save_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<[u8; N], PlayerGameSaveCodecError> {
-    Ok(read_player_game_save_slice(source, cursor, field, N)?
-        .try_into()
-        .expect("player wire slice имеет запрошенную длину"))
-}
-
-fn read_player_game_save_u8(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<u8, PlayerGameSaveCodecError> {
-    let mut reader = player_save_reader(source, *cursor, field, 1)?;
-    let value = reader
-        .read_u8()
-        .map_err(|block| player_save_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn read_player_game_save_u16(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<u16, PlayerGameSaveCodecError> {
-    let mut reader = player_save_reader(source, *cursor, field, 2)?;
-    let value = reader
-        .read_u16()
-        .map_err(|block| player_save_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn read_player_game_save_u32(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<u32, PlayerGameSaveCodecError> {
-    let mut reader = player_save_reader(source, *cursor, field, 4)?;
-    let value = reader
-        .read_u32()
-        .map_err(|block| player_save_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn read_player_game_save_i32(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<i32, PlayerGameSaveCodecError> {
-    let mut reader = player_save_reader(source, *cursor, field, 4)?;
-    let value = reader
-        .read_i32()
-        .map_err(|block| player_save_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn read_player_game_save_count(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<usize, PlayerGameSaveCodecError> {
-    let count = read_player_game_save_i32(source, cursor, field)?;
-    usize::try_from(count).map_err(|_| PlayerGameSaveCodecError::NegativeCount { field, count })
-}
-
-fn read_player_game_save_string(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-    maximum: usize,
-) -> Result<Vec<u8>, PlayerGameSaveCodecError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let mut reader = player_save_reader(source, offset, field, 1)?;
-    let bytes = reader
-        .read_c_string(available)
-        .map_err(|block| player_save_read_error(field, block))?;
-    let length = bytes.len();
-    if length >= maximum {
-        return Err(PlayerGameSaveCodecError::StringTooLong {
-            field,
-            length,
-            maximum,
-        });
-    }
-    *cursor = reader.position();
-    Ok(bytes.to_vec())
-}
-
-fn append_player_game_save_count(
-    destination: &mut Vec<u8>,
-    field: &'static str,
-    length: usize,
-) -> Result<(), PlayerGameSaveCodecError> {
-    let count = i32::try_from(length)
-        .map_err(|_| PlayerGameSaveCodecError::CollectionTooLarge { field, length })?;
-    LegacyWriter::new(destination).write_i32(count);
-    Ok(())
-}
-
-fn append_old_client_volume(
-    destination: &mut Vec<u8>,
-    container: &CVolumeLimitGoodsContainer,
-    goods_factory: &CGoodsFactory,
-    da_kong_enabled: bool,
-) -> Option<()> {
-    // CPacketListener::OnTraversingContainer, VA 0x0042D35A–0x0042D3BF:
-    // префикс содержит признак экипировки, количество и младший байт
-    // позиции QueryGoodsPosition. Все семь контейнеров используют его;
-    // клиент аукциона пропускает первые три байта, но читает четвёртый.
-    let goods: Vec<_> = container.base().traversing_goods().collect();
-    LegacyWriter::new(destination).write_i32(i32::try_from(goods.len()).ok()?);
-    for goods in goods {
-        let position = container.query_goods_position(goods.identity().ex_id)?;
-        let base = goods_factory.query_goods_base_properties(goods.base_properties_index())?;
-        let mut writer = LegacyWriter::new(destination);
-        writer.write_u8(u8::from(base.goods_type() == GOODS_TYPE_EQUIPMENT));
-        writer.write_u16(goods.amount() as u16);
-        writer.write_u8(position as u8);
-        goods
-            .serialize_for_old_client(destination, goods_factory, da_kong_enabled)
-            .then_some(())?;
-    }
-    Some(())
-}
-
-fn append_player_game_save_string(
-    destination: &mut Vec<u8>,
-    field: &'static str,
-    value: &[u8],
-    maximum: usize,
-) -> Result<(), PlayerGameSaveCodecError> {
-    let length = value
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(value.len());
-    if length >= maximum {
-        return Err(PlayerGameSaveCodecError::StringTooLong {
-            field,
-            length,
-            maximum,
-        });
-    }
-    LegacyWriter::new(destination).write_c_string(&value[..length]);
-    Ok(())
-}
-
-fn player_save_reader<'source>(
-    source: &'source [u8],
-    cursor: usize,
-    field: &'static str,
-    needed: usize,
-) -> Result<LegacyReader<'source>, PlayerGameSaveCodecError> {
-    LegacyReader::at(source, cursor).map_err(|block| PlayerGameSaveCodecError::UnexpectedEnd {
-        field,
-        offset: block.offset,
-        needed,
-        available: block.available,
-    })
-}
-
-fn player_save_read_error(
-    field: &'static str,
-    block: nebokrai_shared::protocol::LegacyReadBlock,
-) -> PlayerGameSaveCodecError {
-    PlayerGameSaveCodecError::UnexpectedEnd {
-        field,
-        offset: block.offset,
-        needed: block.needed,
-        available: block.available,
-    }
-}
-
-fn read_player_wire_u16(wire: &[u8], offset: usize) -> u16 {
-    LegacyReader::at(wire, offset)
-        .and_then(|mut reader| reader.read_u16())
-        .expect("base/property wire offset проверен layout-константой")
-}
-
-fn read_player_wire_u32(wire: &[u8], offset: usize) -> u32 {
-    LegacyReader::at(wire, offset)
-        .and_then(|mut reader| reader.read_u32())
-        .expect("base/property wire offset проверен layout-константой")
-}
-
-fn write_player_wire_u16(wire: &mut [u8], offset: usize, value: u16) {
-    LegacyWriter::write_u16_at(wire, offset, value)
-        .expect("base/property wire offset проверен layout-константой");
-}
-
-fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
-    LegacyWriter::write_u32_at(wire, offset, value)
-        .expect("base/property wire offset проверен layout-константой");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
