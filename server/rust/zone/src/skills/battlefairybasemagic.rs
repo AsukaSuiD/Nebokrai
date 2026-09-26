@@ -1,32 +1,18 @@
 //! BFBaseAttack (0x224): Check/AI и Summon снаряда базовой атаки феи.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/battlefairybasemagic.cpp`; тела перенесены буквально.
+//! Quirks: MP и WarSoul в Check не проверяются (предмет требуется только
+//! позднему Summon); игрок на время выстрела реально проходит SetTileXY в
+//! POINT боевого духа и возвращается в центр исходной клетки — block/area-
+//! поля и отмена захвата сохраняются, дробная исходная позиция не
+//! восстанавливается; любая попытка Summon завершается End(1) независимо от
+//! создания снаряда; country в Master остаётся нулевой.
 //!
-//! Общий зарегистрированный вход владеет Begin, visual и End; здесь остаются
-//! Check, AI и создание самостоятельного снаряда. Check использует исходную
-//! объектную S, а путь разрешает текущую базу. MP и WarSoul здесь не проверяются:
-//! предмет требуется только позднему Summon. Конфликты состояний выбираются
-//! в порядке массива, max0 не ограничивает дальность.
-//!
-//! Первый AI записывает CAN, проверяет смерть/self и публикует visual0.
-//! Абсолютный wrapping-срок проверяется в том же проходе. Повторный GetS перед
-//! выстрелом проверяет доступность цели, но время полёта и Summon используют
-//! U/S начала AI. Игрок временно проходит реальный SetTileXY в POINT боевого
-//! духа, затем возвращается в центр исходной клетки. Оба вызова сохраняют
-//! block/area-поля и отмену захвата; дробная исходная позиция не восстанавливается.
-//! ShapeView используется лишь как краткоживущая проекция текущей геометрии.
-//!
-//! Summon требует непустой путь, очищает S до проверки figure2 и только затем
-//! читает Master/WarSoul и параметры конструктора. Clock предшествует ID,
-//! SetCenter — позднему допуску региона. Country в Master остаётся нулевым.
-//! Любая попытка Summon завершается End(1), независимо от создания снаряда;
-//! ошибки AI дают End(0). Собственный attack-time End не обнуляет.
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; регистрация снаряда выполняется делегатом через callback
-//! `complete_summon` (`BattleFairyBaseMagicSummon`) с прежним main-loop runtime;
+//! Швы: hub `battlefairyskill::BattleFairyGame`; регистрация снаряда —
+//! делегатом через callback `complete_summon` (`BattleFairyBaseMagicSummon`);
 //! figure-ветка проекции ShapeView — шов `battle_fairy_shape_figure`.
+//!
+//! Исходный владелец PDB: `appserver/skills/battlefairybasemagic.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#навыки-семейства-атрибутный-октет-bfbaseattack-transfer-fatalblow-lifeshield
 
 use crate::combat::MasterInfo;
 use crate::content::goods::GAP_BF_SPRITE;

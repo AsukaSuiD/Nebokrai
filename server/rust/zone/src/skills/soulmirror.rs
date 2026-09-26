@@ -1,42 +1,20 @@
 //! Маска, параметры клетки и живой обход области CSoulMirror (0x13C).
-//! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-//! (точная пара, RSDS match). GetScope VA 0x005A40D0, GetLength/GetHeight VA
-//! 0x005A4120/0x005A4150, AI VA 0x005A4D10, CalculateAttackPower `0x1A4A30`,
-//! Attack `0x1A4BF0`; End(H) 13-fold `0x146090` — общий CStateSkill tail,
-//! здесь не дублируется (порядок clear+End исполняет прежний kernel);
-//! исходный владелец `appserver/skills/soulmirror.cpp/.h`.
 //!
-//! Общий ZonalCast хранит зарегистрированный Attack, его U/S, Check с
-//! Player-only MP/Move0, unsigned срок start+delay и общий End. После visual1
-//! этот owner захватывает текущие регион и центр U. Начало области остаётся
-//! от этого момента, но перед каждой клеткой заново читаются level и
-//! direction: GetScope задаёт фронтальную линию ширины `2 * level - 1` в
-//! таблицах 3×3/5×5/7×7. Клетки идут X→Y и не собираются заранее, поэтому
-//! синхронный контакт меняет следующий снимок. Любой разрешённый CMoveShape
-//! делает клетку занятой; допуск, дедупликация и raw Attack относятся только
-//! к подходящим целям. Пустая проходимая клетка создаёт CSummonedCreature с
-//! fresh Master(country0) и параметрами Zone. Формулу и raw
-//! контакт сохраняет directelementattack: weapon factor, Player-only EM и
-//! единственный RNG без damage modifier, RP, CCH и второго RNG.
+//! Quirks: GetScope задаёт фронтальную линию ширины `2·level − 1` в таблицах
+//! 3×3/5×5/7×7; клетки идут X→Y и не собираются заранее — синхронный контакт
+//! меняет следующий снимок; любой разрешённый CMoveShape делает клетку
+//! занятой; пустая проходимая клетка создаёт CSummonedCreature с fresh
+//! Master(country 0); формула — один RNG без damage modifier/RP/CCH/второго
+//! RNG (directelementattack).
 //!
-//! Объявленные швы переноса (не расхождения): hub `selfcast::{SelfCastGame,
-//! SelfCastContact}` реализован у прежнего владельца; снимок фигур клетки —
-//! шов `area_cell_views` (прежний `cell_views` семейства Flash), PK-допуск —
-//! `live_skill_target_attackable_between`, элементный контакт —
-//! `apply_direct_element_contact` (`directelementattack` прежнего пакета),
-//! мастер источника — `soul_mirror_source_master` (`weaponattack` прежнего
-//! пакета), lifecycle призванного существа свёрнут в шов
-//! `add_soul_mirror_summoned_creature` (property по picture id → owner →
-//! Add → возврат owner, в порядке прежнего тела).
+//! Швы: hub `selfcast::{SelfCastGame, SelfCastContact}`; скелет Begin/Check/
+//! AI/End и кадр visual — `skills/zonalcast.rs` (вызов обхода — шов
+//! `apply_soul_mirror_area`); входные снимки существ — конверт
+//! `skills/summonshape.rs`; lifecycle существа — шов
+//! `add_soul_mirror_summoned_creature`.
 //!
-//! Общий Begin/Check/AI/End скелет зеркала и кадр его visual живут в
-//! `skills/zonalcast.rs`; вызов этого обхода оттуда — шов
-//! `ZonalCastContact::apply_soul_mirror_area`. Маска и scope области
-//! остаются этому файлу (соседям не делегируются). По визуалам: hub
-//! публикует только кадр `0xBFE01` скелета, а входные снимки порождённых
-//! зеркалом существ — wire-конверт `skills/summonshape.rs`.
+//! Исходный владелец PDB: `appserver/skills/soulmirror.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#roarcpillarcallosityenergyholding--self-касты
 
 use crate::content::CSkillBaseProperties;
 use crate::regions::ShapeIdentity;

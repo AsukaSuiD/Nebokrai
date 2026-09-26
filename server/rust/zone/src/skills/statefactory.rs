@@ -1,29 +1,24 @@
-//! Декодирование последовательности состояний из GameSave, перенесённое в Zone skills.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/statefactory.cpp;
-//! native-сторона — статический `CStateFactory::Unserialize`
-//! (`?Unserialize@CStateFactory@@SAPAVCState@@PAEAAJ@Z`, RVA `0x001D7D00`,
-//! VA `0x005D7D00`): чтение declared count, switch по ID записи с переходом
-//! к привязке владельца; таблица переходов начинается с `0x32`.
+//! Декодирование последовательности состояний из GameSave. native-сторона —
+//! статический `CStateFactory::Unserialize`.
 //!
 //! Каталог записей разнесён на две независимые таблицы: размерная
-//! (bytes/unserialize bytes/normalize, без типизации) задаёт границы записей
-//! и обход спанов, decoder — типизацию одной записи в целевой enum-каталог.
-//! Состояния передаются CMoveShape в исходном порядке, включая повторные ID.
-//! Неизвестная или усечённая запись останавливает типизацию до спорного
-//! участка: исходный хвост и остаток declared count сохраняются в
-//! LegacyStateCodec. Это техническая страховка, а не обещание native
-//! round-trip повреждённого GameSave. Размер чтения и размер cache-проекции
-//! могут различаться; продвижение исходного курсора определяется только
+//! (bytes/unserialize/normalize, без типизации) задаёт границы записей и
+//! обход спанов, decoder — типизацию записи в enum-каталог. Неизвестная или
+//! усечённая запись останавливает типизацию до спорного участка: исходный
+//! хвост и остаток declared count сохраняются в LegacyStateCodec (техническая
+//! страховка, не обещание round-trip повреждённого GameSave). Размер чтения и
+//! размер cache-проекции могут различаться; продвижение курсора — только
 //! читаемым layout.
 //!
-//! Каталог опирается только на Zone-данные: layout и decoder каждой записи —
-//! `effects`, идентичность владельца — `regions`, factory-параметр — соседний
-//! `skills::skillfactory`, целевой enum-каталог payload — арена состояний
-//! `skills::state` (`StateData`, impl ниже). Идентификаторы семей без
-//! собственного владельца в `effects` (SEAL/RUSH/RUSH2/STRIKE/KEROSENE и
-//! навыковые HEAL/SUPER_HEAL/SPIDER_POISON/SPRITE_BURN/POISON_ARROW) —
-//! нативные константы их исходных cpp-файлов; они остаются здесь до переезда
-//! соответствующих состояний.
+//! Каталог опирается только на Zone-данные: layout/decoder записей —
+//! `effects`, идентичность — `regions`, factory-параметр — `skills::skillfactory`,
+//! целевой enum-каталог — `skills::state` (`StateData`). Идентификаторы семей
+//! без владельца в `effects` (SEAL/RUSH/RUSH2/STRIKE/KEROSENE и навыковые
+//! HEAL/SUPER_HEAL/SPIDER_POISON/SPRITE_BURN/POISON_ARROW) — нативные
+//! константы их исходных cpp-файлов, остаются здесь до переезда состояний.
+//!
+//! Исходный владелец PDB: `appserver/skills/statefactory.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#state--арена-кодек-и-каталог-состояний
 
 use crate::effects::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AGILITY_STATE_2_BYTES, ATTACK_GAIN_STATE_BYTES,

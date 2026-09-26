@@ -1,33 +1,18 @@
-//! Печать `CSeal` (`0x138`) для Player и Monster. Источник: `gameserver.exe`
-//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/seal.cpp`. Полёт прицельного снаряда — общий
-//! TargetedProjectile (`targetedprojectile.cpp`, payload
-//! `TargetedProjectileProgress` в `skills/execution`), он остаётся
-//! hub-владением и сюда не переносится.
+//! Печать `CSeal` (`0x138`) для Player и Monster. Полёт прицельного снаряда
+//! — общий TargetedProjectile (hub-владение, сюда не переносится).
 //!
-//! Общий TargetedProjectile хранит зарегистрированные U/S, первую проверку,
-//! unsigned delay и flight, prepared-background и хвост Attack End. Этот
-//! владелец оставляет только подтверждённые различия Seal: Check принимает
-//! лишь S типа CMonster (визуальный отказ 10 с GS0317), затем общие
-//! reuse/путь (именованная преграда GS0295) и только для Player MP/Move0 —
-//! через швы общего `rangedweaponcast`. Общий путь берёт точку фигуры S по
-//! сохранённому user_region Begin.
+//! Живые различия Seal: Check принимает лишь S типа CMonster (отказ 10 с
+//! GS0317), общие reuse/путь (именованная преграда GS0295) и MP/Move0 только
+//! у Player; Impact пропускается при Cure; уровни читаются S→U даже после
+//! фатального попадания; новый SealState создаётся до полного End/dtor
+//! прежнего ID, занимает его место и получает только keep-time.
 //!
-//! Impact пропускается при Cure. Иначе общий DirectElement-профиль сохраняет
-//! generic MasterInfo, Player-only EM, единственный RNG и расширенную
-//! EM/FISTP-прибавку с f32-константой (hub-шов `directelementattack`). После
-//! Attack уровни читаются S→U даже после фатального попадания; новый SealState
-//! создаётся до полного End/destructor прежнего ID и занимает его прежнее
-//! место. State Begin устанавливает timestamp и visual, поэтому создание
-//! получает только keep-time.
+//! Швы: трейты — фасады прежнего владельца (делегат
+//! `appserver/skills/seal.rs` и helper-ы `rangedweaponcast`/
+//! `directelementattack`/`blindstate` старого пакета).
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CMoveShape`, реализация остаётся у
-//! делегата старого пакета (`appserver/skills/seal.rs`) и общих helper-ов
-//! `rangedweaponcast`/`directelementattack`/`blindstate`; имена членов
-//! сохраняют исходную операцию, швы потребляются статически (generic),
-//! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013). Часы приходят
-//! от делегата (fn-параметр), как в `skills/flash.rs`.
+//! Исходный владелец PDB: `appserver/skills/seal.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#seal--cseal-0x138
 
 use crate::content::CSkillBaseProperties;
 use crate::regions::ShapeIdentity;

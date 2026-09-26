@@ -1,46 +1,21 @@
 //! Яростный прорыв `CRageBreak` (0x6E): Check, AI и порядок наложения
-//! состояний. Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`)
-//! + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/ragebreak.cpp/.h`. Общий stateskill старого пакета
-//! обслуживает три Begin, registered visual loop1 и полный End (навигация
-//! делегата); здесь — конкретные Check/AI, порядок состояний и wire-visual.
+//! состояний. Общий stateskill старого пакета обслуживает три Begin,
+//! registered visual loop1 и полный End (навигация делегата); здесь —
+//! конкретные Check/AI, порядок состояний и wire-visual.
 //!
-//! Машинные якоря (VA = RVA + 0x400000): ctor `0x59F880` (0x54 байта,
-//! фабричный индекс `0x15`, `CGoodsContainer::Add` `0x469C4B`), vtable
-//! `0x65BDB4`; Begin триада `0x59F9E0` / `0x59F910` / `0x59FAD0`;
-//! CheckCastCondition `0x59FF10`; AI `0x5A00F0`; dtor `0x59FAB0`;
-//! DoesTargetEffective `0x5AFCE0` (всегда 1); End — общий хвост
-//! `0x546090` (vcall vtable+0x68; `[+0x4C]/[+0x50]` в 0, свежему U
-//! возвращается движение `0x4CCEE0(1)`, базовый вызов `0x5DFBD0`);
-//! `CRageBreakEffect` vtable `0x65BE48`, UpdateVisualEffect `0x59FB90`.
+//! Машинный порядок состояний: End+dtor первого прежнего 0x6E → новый
+//! `CRageBreakState` → свип девяти id {0x138, 0xD2, 0xC9, 0x67, 0x192, 0x191,
+//! 0x198, 0x199, 0x1A6} → у первого 0x131 только End() без dtor → новый
+//! `CCureState` → UpdateProperty → End(1). RP-расход первого прохода AI —
+//! с частичными эффектами при дефиците; обновление срока прежнего 0x6E
+//! отсутствует (это ветвь Fury, не RageBreak).
 //!
-//! Check (`0x59FF10`): reuse `0x2715` (visual13 + GS0278 при неготовности);
-//! RTTI-гейт игрока; стоимость RP `query(3) == 0` — тихий отказ без visual;
-//! signed-дефицит RP — visual8 + GS0289 с суммой; успех запрещает движение
-//! U (`0x4CCEE0(0)`).
+//! Швы: hub `statecast::StateCastGame` и RP-шов `fury::RageCastPlayer`;
+//! разрешение `begin_target`, материализация и общий End — в `stateskill.rs`
+//! делегата старого пакета.
 //!
-//! AI (`0x5A00F0`): `[+0x4C] == 0` — чистый возврат; таблица и U обязаны
-//! (отсутствие → End(0)); `IsDied(U)` → visual2 + End(1); первый проход
-//! `[+0x50] == 0` расходует RP игрока (дефицит → visual8 + GS0289 + End(0)),
-//! пишет CAN `0x2716` → `[+0x3C]`, даёт visual0; задержка `0x2711` сверяется
-//! абсолютной (`start + delay`; unsigned). После визуал1 порядок состояний:
-//! End+dtor первого прежнего 0x6E → `new CRageBreakState` (ctor `0x5FD1C0`;
-//! gain = `query(105)`, keep = `query(0x2712)`; Begin(U,U), append в хвост)
-//! → свип девяти id {0x138, 0xD2, 0xC9, 0x67, 0x192, 0x191, 0x198, 0x199,
-//! 0x1A6} (End + dtor + обнуление слота) → у первого 0x131 только End()
-//! (без destructor и обнуления) → `new CCureState` (ctor `0x5E9E50`;
-//! keep = `query(0x2712)`; Begin(U,U), append в хвост) → UpdateProperty
-//! vcall +0x9C → End(1). RP/fail диагностика и visual идут
-//! `skills/fury.rs`; обновление срока прежнего 0x6E отсутствует (это ветвь
-//! Fury, не RageBreak).
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! и RP-шов `fury::RageCastPlayer` реализованы у прежнего владельца;
-//! разрешение `begin_target`, материализация исполнения и общий полный End
-//! остаются в `stateskill.rs` делегата — точки прежнего
-//! `end_state_skill(...)` помечаются `StateCastExecutionOutcome`. Исход
-//! apply-ветки: успех — EndCompleted (`end_state_skill(1)`), ранний отказ
-//! участников — Pending, как у прежнего тела.
+//! Исходный владелец PDB: `appserver/skills/ragebreak.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#ragebreak--cragebreak-0x6e-и-cragebreakstate
 
 use super::curestate::begin_primary_cure_state;
 use super::fury::{

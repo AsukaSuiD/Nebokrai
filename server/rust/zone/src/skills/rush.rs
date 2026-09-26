@@ -1,54 +1,22 @@
 //! Прямые рывки Rush/Rush2 и их оглушающие состояния (0x73/0x7C).
-//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
-//! (RSDS match), `appserver/skills/rush.cpp` и общий предметный контракт
-//! `rush2.cpp`. Машинно установлено: Rush — MP до RP с частичным расходом,
-//! weapon category 1 (GS0287), GetTargetPathWithLength, distance-гейты
-//! `> max` Rush / `>= max` Rush2, snapshot типов `{400,600,601,602}`,
-//! first-attack контроллер только у Rush, уровни movzx → scaled keep
-//! (query 10002 / линейный scale с clamp), AddRushState общий (prev по
-//! ID → End + освобождение слота → Begin → append → knockback); Rush2 —
-//! безусловный virtual `OnBeenAttacked(false)` хвост после состояния и
-//! отбрасывания; visual Rush/Rush2 — вторая remap-таблица байт
-//! `{0→act1+dir, 1→act2, 2/7/8/13/14 персональные}`, GS-строки
-//! 0278/0287/0288/0289/0302 байт-сверены; тела RushState/RushState2 —
-//! разделяемый алиас `BlindState<ID>`, payload 8 байт.
 //!
-//! Вход CPlayer проверяет меч, signed MP/RP и Pillar; AI повторно списывает
-//! MP перед RP, сохраняет частичный расход и вызывает OnChangeStates до
-//! повторной проверки оружия. Таблица свойств AI остаётся прежней через
-//! callbacks. CAN независим от concrete фазы, задержки AI у рывков нет.
-//! Путь заданной длины принадлежит захваченному экземпляру. Перенос в последнюю
-//! свободную клетку предшествует visual0/condition/visual1; область удара —
-//! первая преграда либо исходная целевая клетка. Снимок её фигур допускает
-//! только native типы 400/600/601/602, затем проверяет смерть и IsAttackAble.
+//! Quirks: MP списывается до RP с сохранением частичного расхода;
+//! distance-гейты `> max` у Rush и `>= max` у Rush2; снимок целей допускает
+//! только типы {400,600,601,602}; AddRushState создаёт новое состояние до End
+//! прежнего и удаляет свежий остаток слота; у Rush2 — безусловный хвост
+//! `OnBeenAttacked(false)` после состояния и отбрасывания; OnAction рывных
+//! состояний пустой (Defense их не снимает, в отличие от собственно Blind).
 //!
-//! Rush сообщает PK-контакт до живых уровней; Rush2 доставляет пустой удар
-//! после состояния и отбрасывания. Новый state создаётся до прежнего End,
-//! удаляется свежий остаток слота, затем Begin/append и ForceMove. Свойства
-//! этого хвоста захвачены до state callbacks, число шагов читается повторно.
-//! Общий зарегистрированный вход завершает навык; End сбрасывает фазу,
-//! возвращает движение и лишь затем освобождает путь. Vec заменяет владение
-//! исходного списка, не копируя его через callbacks.
+//! Швы: фасады `DashSkillGame`/`DashSkillContact` (`skills/dash.rs`); ForceMove
+//! — фасад `CGame` (`gameserver/game/rush.rs`); Begin состояния — общий
+//! `begin_primary_blind_state` семейства Blind.
 //!
-//! Отдельный ID состояния сохраняется в арене и codec; OnAction рывных
-//! состояний пустой, поэтому Defense не снимает состояние, в отличие от
-//! собственно Blind.
+//! UNKNOWN: второй lock RushState::Begin, потребители raw CAN `available`.
+//! Отклонение native-UB: повторный вход AI с condition1 завершается безопасным
+//! отказом (impact жил только в локальных переменных первого входа).
 //!
-//! Объявленные швы — переходные фасады `DashSkillGame`/`DashSkillContact`
-//! (`skills/dash.rs`, реализация у прежнего владельца); расстояние до точки
-//! удара — общий `regions::shape::real_distance_between_points` (прежний
-//! `skills/baseattack.rs::real_distance` делегировал туда же, путь нормализован);
-//! ForceMove применяет существующий фасад `CGame` (`gameserver/game/rush.rs`),
-//! развёрнутый результат отбрасывается, как и раньше; Begin состояния —
-//! прежний общий `begin_primary_blind_state` семейства Blind. Оставшиеся
-//! UNKNOWN/PARTIAL разведки: второй lock RushState::Begin (fight-lock по
-//! форме), потребители raw CAN `available` — честно сохранены;
-//! `get_tile_x/y` геттеры — сквозная согласованность подтверждена.
-//!
-//! Сознательное отклонение от native-UB (сохранено со старого файла): AI
-//! держит impact только в локальных переменных первого входа — повторный вход
-//! с condition1 читал бы неинициализированную клетку; она не создаётся из
-//! нулей, повторный вход завершается безопасным отказом.
+//! Исходные владельцы PDB: `appserver/skills/{rush,rush2}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#rush--rushrush2-0x730x7c
 
 use nebokrai_shared::runtime::get_line_direction;
 

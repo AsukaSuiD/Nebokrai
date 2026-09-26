@@ -1,45 +1,20 @@
 //! Исполнение базовой атаки `CBaseAttack` (навык 1) игроком и монстром.
+//! Тела буквальные; неизменные: порядок стадий, чтения определений, выбор
+//! визуалов и обращения к общему потоку случайных чисел.
 //!
-//! Источник: gameserver.exe + GameServer.pdb, исходный владелец
-//! `appserver/skills/baseattack.cpp`. Тела перенесены буквально; неизменными
-//! остались порядок стадий, чтения определений, выбор визуалов и обращения к
-//! общему потоку случайных чисел.
+//! Quirks: Attack со свежим GetSufferer ПОСЛЕ visual(1); безусловный caller
+//! `IncreaseRp(1,0)` (у `CMonster` IncreaseRp — пустое тело, ошибкой не
+//! является); End(1) изнашивает оружие только у игрока и фиксирует reuse,
+//! End(0) — без эффектов; OnChangeRegion — End(0).
 //!
-//! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
-//! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
-//! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2; совпадение подтверждено `.local/evidence/symbols.py identity`).
-//! Класс снят машинно целиком: vtable `0x25CB0C`, AI `0x001B39B0`,
-//! Restart `0x00113E00`, свойства по ключам 5003/10001/10006/20001, часы
-//! `WINMM!timeGetTime`.
+//! Швы: kernel ведёт учёт стадий; определения перечитываются (данные уровня
+//! статичны); часы — от делегата старого main loop; трейты — фасады `CGame`.
 //!
-//! Контрактные инварианты:
+//! UNKNOWN: достижимость отдельного `Restart` — диспетчер vtbl+0x20 не
+//! установлен; повторный Begin не считается его реализацией.
 //!
-//! - `execute_stage`: гейт active → props → user → dead-check → Begin-стадия
-//!   ровно раз (direction/visual(0)/stage=1) → fall-through в тот же тик →
-//!   delay-wrap unsigned → visual(1) → Attack со свежим GetSufferer ПОСЛЕ
-//!   visual → End(1);
-//! - `calculate_attack`: порядок GetMaxAttack → GetMinAttack → span → RNG →
-//!   +Min → clamp, виды 1/3/4, критический хвост без промежуточной записи
-//!   float;
-//! - `attack`: guards включая отказ object type 500, master fill, вызван общий
-//!   virtual +15C (..., false), затем безусловный caller `IncreaseRp(1,0)`; у
-//!   `CMonster` IncreaseRp — пустое тело (ICF-факт, ошибкой не является);
-//! - `publish_base_attack_visual` (`0x000BFE01`): 16-входный switch, area
-//!   0→u8=1, 1→u8=2 с target/dest, personal {2,7,10,11,13,14,15}→[u8=0]
-//!   [u8=mode]; режимы 3,4,5,6,8,9,12 ничего не посылают;
-//! - terminal/abort: End(1) изнашивает оружие только у игрока и фиксирует
-//!   reuse, End(0) не делает ни того, ни другого; OnChangeRegion — End(0).
-//!
-//! Швы: kernel ведёт учёт стадий, определения перечитываются (данные уровня
-//! статичны), часы приходят от делегата старого main loop. Трейты ниже —
-//! фасады `CGame`, реализация остаётся у него в файле-делегате; швы
-//! потребляются статически (generic), dyn-совместимость и `Send`-контракт не
-//! вводятся (ADR-0013). Гейт приёма `+0x2A` остаётся у владельца приёмника.
-//!
-//! Открытый UNKNOWN: достижимость отдельного `Restart` (`0x00113E00`,
-//! baseattack.cpp:110, `void __thiscall Restart(void)`) — диспетчер vtbl+0x20
-//! не установлен; повторный Begin не считается его реализацией.
+//! Исходный владелец PDB: `appserver/skills/baseattack.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#baseattackruntime--исполнение-cbaseattack-навык-1
 
 use crate::app::game_message::CMessage;
 use crate::combat::{

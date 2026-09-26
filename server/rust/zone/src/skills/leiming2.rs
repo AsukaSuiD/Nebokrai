@@ -1,30 +1,19 @@
 //! CLeiming2 (0x21B, ID 32-бит) — однократный гром боевого духа: общие с
 //! CThunder Check/AI (`skills/thunder.rs`) и собственный Summon.
 //!
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), `appserver/skills/thunder2.cpp`. Адреса —
-//! истинные RVA (pub off + 0x1000; VA = RVA + 0x400000); тело перенесено
-//! буквально.
+//! Машинные quirks: Summon сохраняет порядок CCH → AddElementAtk → max →
+//! min → level → lifetime (частота и число целей не читаются); центр области
+//! устанавливается до допуска региона; AI всегда заканчивает попытку внешним
+//! End(1), независимо от исхода Summon.
 //!
-//! Машинный факт: Check и AI общие с
-//! CThunder (`0x121330`/`0x121940`, см. шапку `skills/thunder.rs`); доставка
-//! BF918 — `SendToAround(U-шейп, player)` в `CLeiming2::AI` `0x12080B`
-//! (VA `0x52080B`; установлено заново машинным чтением call site).
-//! Собственный Summon сохраняет порядок
-//! CCH → AddElementAtk → max → min → текущий level → lifetime: к вычисленному
-//! стихийному коэффициенту прибавляется AddElementAtk, частота и число целей
-//! не читаются. Clock конструктора предшествует ID; центр устанавливается до
-//! допуска региона (initialize-прохода RNG у Leiming2 нет). Отказ регистрации
-//! обрабатывает общий publisher области; AI в любом случае заканчивает попытку
-//! внешним End(1), без повторного visual или Begin. RVA тела Summon в записи
-//! свидетельства не назван — новых утверждений нет, перенос тела буквально.
+//! Швы: hub `thunder::SummonCloudGame`; конструктор `CLeimingPhalanx2`,
+//! допуск региона и входное `0xBF502` выполняются владельцем старого пакета
+//! через callback `complete_summon` (`Leiming2Summon`).
 //!
-//! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`;
-//! конструктор `CLeimingPhalanx2`, допуск региона и входное сообщение
-//! `0xBF502` выполняются владельцем старого пакета через callback
-//! `complete_summon` (`Leiming2Summon`); сам тип фаланги — zone
-//! `skills/thunder2phalanx`, владелец вызывает его конструктор фасадом.
-//! UNKNOWN списком: второй аргумент `SendToAround`; RVA тела Summon CLeiming2.
+//! UNKNOWN: второй аргумент `SendToAround` BF918; RVA тела Summon.
+//!
+//! Исходный владелец PDB: `appserver/skills/thunder2.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#leiming2--cleiming2-0x21b
 
 use crate::combat::MasterInfo;
 use crate::regions::ShapeIdentity;

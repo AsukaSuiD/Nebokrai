@@ -1,44 +1,20 @@
 //! Правила и исполнение CGodBless/CGodBless2 (0x12F/0x145), параметры и
-//! создание их состояний. Источник: gameserver.exe + GameServer.pdb
-//! (точная пара `4F5C98E0…` + RSDS match), `appserver/skills/
-//! godbless{,2}.cpp/.h`. Машинные якоря семьи: CGodBless Check `0x1B02A0`
-//! (не-Player возвращает 1 ДО MP/Move0; arg-null → тихий 0; cost0 → тихий
-//! 0; signed-diff → visual7/GS0288 с number или Move0 → 1), AI `0x1B0480`;
-//! CGodBless2 AI `0x150990` (visual10/GS0305 при не-Monster); End(H)
-//! 3-fold `0x1502F0`. Тела Check/AI перенесены буквально.
+//! создание их состояний.
 //!
-//! Оба Begin сохраняют исходную цель в общей базе, создают visual loop1
-//! и проверяют только исходного U. Нет проверки S, пути или оружия.
-//! После абсолютного reuse источник не типа Player проходит без Move0;
-//! Player MP0 означает тихий отказ, иначе signed DWORD-разность допускает
-//! Move0. Отказ Begin вызывает End0 без дополнительного visual2.
+//! Quirks: не-Player проходит Check без MP/Move0; GodBless2 требует именно
+//! Monster при каждом входе AI (иначе visual10/GS0305 + End0); дикий монстр
+//! заменяется свежим U с записью базовых type/id S — после замены GodBless2
+//! может отвергнуть уже изменившуюся S на следующем AI. Поле gains читается
+//! в порядке MIN_COEFF→MIN→MAX_COEFF→MAX→ELEMENT_COEFF→ELEMENT; значения
+//! живут через удаление прежнего состояния; выпуск — End1 даже при отказе
+//! state Begin.
 //!
-//! AI удерживает одну таблицу и найденные U/S через callbacks. GodBless
-//! при NULL S использует захваченного U; GodBless2 требует именно Monster
-//! при каждом входе AI, иначе Player получает visual10/GS0305 и End0.
-//! Обычный неприручённый монстр без Carriage AI заменяется свежим U,
-//! с записью базовых type/id S. Поэтому GodBless2 после такой замены и
-//! ожидания задержки может отвергнуть уже изменившуюся S на следующем AI.
-//! Нет проверки смерти или смены направления. Первый AI выполняет
-//! MP→OnChangeStates→CAN→visual0→condition; выпуск ждёт unsigned
-//! start+delay.
+//! Швы: hub `statecast::*`; первичная установка состояния и часы Begin —
+//! шов `GodBlessCastRuntime` старого пакета (`CGame::install_god_bless_state`
+//! со своим обходом Ex-состояний).
 //!
-//! После visual1 захваченный U даёт живой уровень оружия либо ноль.
-//! Свойства читаются в порядке MIN_COEFF→MIN→MAX_COEFF→MAX→ELEMENT_COEFF→
-//! ELEMENT. Каждое unsigned wrapping-произведение с 0.01f сохраняется в
-//! f32, затем прибавление константы отдельно сохраняется в f32. Значения
-//! живут через удаление прежнего состояния; только потом PERSIST→FISTP
-//! ELEMENT/MAX/MIN→ctor→primary Begin→append→безусловный UpdateProperty.
-//! Различие DelExStateByType у GodBless принадлежит общему установщику.
-//! Выпуск заканчивается End1 даже при отказе state Begin; ранние отказы —
-//! End0.
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у владельца старого пакета; первичная установка состояния
-//! остаётся
-//! швом старого пакета (`CGame::install_god_bless_state` со своим обходом
-//! Ex-состояний), потому часы и установка приходят вместе через трейт
-//! `GodBlessCastRuntime` — у владельца остаётся и Begin часов состояния.
+//! Исходные владельцы PDB: `appserver/skills/godbless{,2}.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#godbless--cgodblesscgodbless2-0x12f0x145
 
 use crate::combat::truncate_original;
 use crate::effects::{GOD_BLESS_STATE_2_ID, GodBlessState};

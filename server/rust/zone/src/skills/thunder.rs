@@ -3,60 +3,22 @@
 //! ветвей. CTianhuo использует только общий префикс допуска с собственными
 //! правилами часов и препятствий (`skills/tianhuo.rs`).
 //!
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), `appserver/skills/{thunder,thunder2}.cpp`.
-//! Адресная конвенция: истинный RVA (pub off + 0x1000; VA = RVA + 0x400000).
+//! Машинные quirks: BF918 расхода MP рассылается кругом (thunder/leiming2)
+//! или точечно (tianhuo) одним энкодером у своих швов; сериализация `0xBF502`
+//! безусловна даже при отказе Add области; отказ самого Summon не меняет
+//! завершающий End(1) — область живёт независимо от навыка.
 //!
-//! Машинные факты:
+//! Швы: hub-трейт `SummonCloudGame` — фасад прежнего `CGame` (делегат
+//! `appserver/skills/thunder.rs`); конструктор фаланги и регистрация области с
+//! входным `0xBF502` — прежний владелец через callback `complete_summon`
+//! (порядок SetCenter → Initialize → допуск региона U → Add → `0xBF502`).
 //!
-//! - Check `0x121330` (VA `0x521330`): S=null → тихий 0; RTTI → CPlayer;
-//!   состояния S в порядке первого совпадения (0x192 → ZHGS0046, 0xD2 →
-//!   ZHGS0047, 0x67 → ZHGS0046); reuse 10005 → visual 13 + ZHGS0048;
-//!   GetTargetPath + 5003 → visual 11 + ZHGS0049; клетки `[cell]==2` →
-//!   visual 15 + ZHGS0051; query(2)=0 → тихо; WarSoul null → тихо;
-//!   signed-дефицит MP → visual 7 + ZHGS0052 (`fild` → `fmul [0x64dbd8]` →
-//!   FISTP). Объектная S захвачена до callback базового Begin, но путь
-//!   читается через текущий GetS.
-//! - AI `0x121940` (VA `0x521940`): phase/таблица-U/S; S мёртв → visual 10 +
-//!   ZHGS0050 (только player) → End(0); расход MP `GetWarSoulGoods`/
-//!   `GetAddonPropertyValues(0x9A)` → SetAddon → `SerializeForOldClient` →
-//!   `CMessage(0xBF918)`; CAN=10006 → visual0 → advance; срок started+10001
-//!   unsigned; visual1 → Summon. Сериализация и `0xBF502` безусловны даже при
-//!   отказе Add области (безусловный `0xBF502` исполняет facade-владелец
-//!   регистрации, здесь он не переоткрывается). После visual1 Summon заново
-//!   читает Master/предмет/таблицу, затем параметры конструктора; clock
-//!   предшествует ID, SetCenter/Initialize — проверке региона U. Отказ самого
-//!   Summon не меняет завершающий End(1); область живёт независимо от навыка.
-//!   RVA тела Summon разведкой не назван; тело следует прежнему буквально.
-//! - Численные адаптеры сохраняют x87-усечение и младший DWORD результата i64.
+//! UNKNOWN: второй аргумент исходного `SendToAround` (exclude-player) —
+//! делегат доставляет без исключений; RVA тела Summon CThunder — тело
+//! перенесено буквально без новых утверждений.
 //!
-//! BF918-доставка: `CThunder::AI` `0x121BAB` (VA `0x521BAB`) и
-//! `CLeiming2::AI` `0x12080B` (VA `0x52080B`) рассылают
-//! `SendToAround(U-шейп, player)`; `CTianhuo::AI` `0x12300B` (VA `0x52300B`)
-//! шлёт точечный `SendToPlayer`. Точечная унификация верна только для
-//! tianhuo/ResetSkill/fatalblow; для thunder/leiming2 — круг: payload тот же
-//! (id, GUID, len, blob `SerializeForOldClient`), доставка — через hub-шов
-//! `send_summon_cloud_goods_update_around`. Форма кадра совпадает с точечным
-//! `send_battle_fairy_goods_update`: координатор `battlefairyskill` не
-//! открывает сборку кадра отдельно от точечной доставки, поэтому круговая
-//! ветка собирает тот же кадр у своего шва — второго энкодера формы здесь
-//! не появляется. UNKNOWN: второй аргумент исходного `SendToAround`
-//! (exclude-player) доказательной базой не покрыт; делегат доставляет без
-//! исключений (`None`).
-//!
-//! Объявленные швы переноса (не расхождения): hub-трейт `SummonCloudGame` —
-//! переходный фасад прежнего `CGame` (реализация у делегата
-//! `appserver/skills/thunder.rs`); конструктор фаланги, её Initialize(RNG) и
-//! регистрация области с входным `0xBF502` выполняются прежним владельцем
-//! через callback `complete_summon` (`ThunderSummon`/`Leiming2Summon`); сами
-//! типы фаланг — zone `skills/thunderphalanx`/`skills/thunder2phalanx`,
-//! прежний владелец вызывает их конструкторы фасадом; внутри callback
-//! машинный порядок SetCenter → Initialize → допуск региона U → Add →
-//! `0xBF502` сохранён.
-//! Потребление швов статическое (generic), dyn-совместимость и
-//! `Send`-контракт не вводятся (ADR-0013). Часы `now` — шов
-//! делегата (прежний main-loop runtime). UNKNOWN списком: второй аргумент
-//! `SendToAround` (выше); RVA тела Summon CThunder (выше).
+//! Исходные владельцы PDB: `appserver/skills/{thunder,thunder2}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#thunder--cthunder-0x21f-общие-checkai-семьи
 
 use nebokrai_shared::values::CGuid;
 

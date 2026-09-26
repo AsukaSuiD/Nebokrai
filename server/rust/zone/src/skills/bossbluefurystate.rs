@@ -1,47 +1,21 @@
 //! Живые Begin/End/Restart/AI и пересчёт монстра ярости синего босса
 //! `CBossBlueFuryState` (`0x1F7`), а также установочный Begin для навыка.
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/bossbluefurystate.cpp/.h`; тела перенесены буквально
-//! (сверка — разведка `.local/recon-de/notes/E4-bossbluefury.md`, тела
-//! `.local/recon-de/disasm/CBossBlueFuryState.txt`).
 //! Данные, срок, формула процента и 12-байтный codec — Zone
-//! `effects/bossbluefury.rs` (подтверждены побайтно; здесь не дублируются).
+//! `effects/bossbluefury.rs` (здесь не дублируются).
 //!
-//! Машинные якоря (VA = RVA + 0x400000): ctor `0x5E8A60` (arg1 factor →
-//! `[+0x38]`, arg2 keep → `[+0x3C]`, arg3 weak → `[+0x40]`; ID `0x1F7`, без
-//! чтения часов); Begin триадой `0x5E8B60`/`0x5E8C30`/`0x5E8ED0` (объектная с
-//! NULL U → ret 0; base Begin, затем SetMoveable(0) и SetFightable(0) на S,
-//! затем `new` loop=1 visual `CBossBlueFuryStateVisualEffect` без немедленного
-//! пакета); AI `0x5E8D50` (часы №1 строго позже `[+0x40]+[+0x2C]` → unlock
-//! обоих запретов на sufferer КАЖДЫЙ проход, без one-shot; часы №2 строго
-//! позже `[+0x3C]+[+0x2C]` → vcall End); End `0x5E8D10` (visual(1)? →
-//! GetSufferer → `CMoveShape::RemoveState(this)` `0x4CDAB0` → SetMoveable(1) →
-//! SetFightable(1) на том же sufferer); Restart `0x5FD450` (только
-//! `[+0x2C] = timeGetTime()`); OnUpdateProperties `0x5E8DC0` (GetSufferer →
-//! visual(0) → sufferer type `0x258` + RTTI CMonster: max живым getter
-//! `vcall+0xE8` → trunc-gain → `vcall+0x1AC`, затем min живым getter
-//! `vcall+0xE4` → gain → `vcall+0x1A8`; иначе ret 1; порядок maximum →
-//! minimum, каждый процент от живого getter после предыдущей прибавки);
-//! GetRemainedTime `0x5D5F30` (ICF, keep `[+0x3C]`); Serialize `0x5E7330` /
-//! Unserialize `0x5D6190` (кодек — effects; загруженный weak_time остаётся 0).
+//! Quirks: AI снимает оба запрета (moveable/fightable) КАЖДЫЙ проход после
+//! weak_time — без one-shot; пересчёт OnUpdateProperties идёт по живым
+//! getter-ам в порядке maximum → minimum с прибавкой процента после
+//! предыдущей записи. Диспетчерский restart моделирует путь загрузки
+//! `Begin(NULL, holder)`: timestamp/user сохраняются, запреты и loop1 visual
+//! повторяются, запись и её ключ не заменяются.
 //!
-//! Диспетчерский restart моделирует не timer-only Restart, а путь
-//! `Begin(NULL, holder)` загрузки: base Begin сохраняет timestamp/user,
-//! запреты и loop=1 visual повторяются, готовая запись и её ключ не заменяются.
-//! Установка нового состояния машинно — Begin(U,U): участники хранятся
-//! записью (ex_id сброшен), запреты идут до выделения visual; запись арены —
-//! `encoded_for_install`; экземпляр добавляется в хвост. Узкая достижимость
-//! нескольких записей `0x1F7` (дублированные записи БД, загруженных Restart-ом
-//! без продува) снимается машинным продувом навыка — см. `skills/bossbluefury.rs`.
+//! Швы: hub `statecast::StateCastGame` (+ метод `fightable` у
+//! `StateCastMoveShape`); монстровый пересчёт — фасад `BossBlueFuryStateGame`
+//! (делегат `appserver/skills/bossbluefurystate.rs` старого пакета).
 //!
-//! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! (арена, property/end visual, удаление `RemoveState(pointer)`) реализован у
-//! владельца старого пакета; `fightable` открыт методом `StateCastMoveShape`
-//! (помимо `moveable`). Монстровый пересчёт OnUpdateProperties — фасад
-//! `BossBlueFuryStateGame` (реализация у делегата
-//! `appserver/skills/bossbluefurystate.rs`); live-getter порядок maximum →
-//! minimum сохранён двум отдельными прибавками.
+//! Исходный владелец PDB: `appserver/skills/bossbluefurystate.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#bossbluefurystate--cbossbluefurystate-0x1f7
 
 use crate::effects::{
     BOSS_BLUE_FURY_STATE_BYTES, BossBlueFuryState,

@@ -1,28 +1,19 @@
 //! Накопление и расход энергии CEnergyHoldingState.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/energyholdingstate.cpp`. Машинные якоря:
-//! state ctor `0x1EC410`, AddEnergy `0x1EC490`, GetRemainedTime `0x201200`;
-//! данные, signedness лимита, 12-байтная запись и формула множителя —
-//! `effects/energyholding.rs`. Тела перенесены буквально.
+//! Данные, signedness лимита, 12-байтная запись и формула множителя —
+//! `effects/energyholding.rs`.
 //!
-//! Заряд ограничен сохранённым уровнем. AddEnergy требует живого GetUser и
-//! публикует снятие, затем установку; loop1 остаётся живым между пакетами.
-//! Первичный Begin ничего не публикует, первый Add предшествует push_back.
-//! End разрешает Sufferer заново и удаляет именно этот экземпляр его арены.
-//! InverseChopped выбирает первый непустой слот ID89, включая ended, вызывает
-//! End и уничтожает свежий остаток той же позиции даже при несовпадении RTTI.
+//! Quirks: заряд ограничен сохранённым уровнем; первичный Begin ничего не
+//! публикует, первый Add предшествует push_back; InverseChopped выбирает
+//! первый непустой слот ID89 включая ended (End + dtor даже при несовпадении
+//! RTTI); процент не сохранён в DB — Unserialize оставляет его нулём, и
+//! клиентские remaining/additional тоже нулевые, а не процент усиления.
 //!
-//! DB содержит только ID/уровень/число зарядов (12 байт). Процент не сохранён:
-//! фабрика вызывает пустой ctor, Unserialize оставляет его равным нулю.
-//! Клиентские remaining/additional тоже равны нулю, а не проценту усиления.
-//! Владение и порядок слотов обеспечивает общая SlotMap-арена; локальный
-//! visual первичного Begin оставляет ей незавершённое loop1-состояние.
+//! Швы: hub `selfcast::SelfCastGame`; машина `accumulatedstate` — швы
+//! `add_energy_holding_state` и `update_energy_holding_accumulated_visual`
+//! (пока у старого пакета, поделена с SoulCollect).
 //!
-//! Объявленные швы переноса (не расхождения): hub `selfcast::SelfCastGame`
-//! реализован у владельца старого пакета; машина накопления `accumulatedstate`
-//! (`add_accumulated_state`, `update_accumulated_visual`) остаётся у старого
-//! пакета, поделена с SoulCollect и объявлена швами `add_energy_holding_state`
-//! и `update_energy_holding_accumulated_visual`.
+//! Исходный владелец PDB: `appserver/skills/energyholdingstate.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#roarcpillarcallosityenergyholding--self-касты
 
 use crate::regions::ShapeIdentity;
 

@@ -1,59 +1,22 @@
 //! Периодический гром CThunderPhalanx — живая область боевого духа навыка
 //! CThunder (0x21F; вызывающий путь — `skills/thunder.rs`).
 //!
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), `appserver/skills/thunderphalanx.cpp`.
-//! Адресная конвенция: истинный RVA (pub off + 0x1000; VA = RVA + 0x400000).
-//! Run-делегации (Attack-обход, регистрация) остаются у прежнего владельца.
-//! Размещение — отдельный flat-модуль: Initialize и AddToByteArray у фаланги
-//! ICF-фолднуты с `CGodThunderPhalanx2`, но ctor/Calc/Attack/AI собственные,
-//! поэтому класс живёт рядом с `godthunder`, а не внутри него; общая маска
-//! 7×7 берётся из `godthunder` без дублирования.
+//! Отдельный flat-модуль: Initialize и AddToByteArray у фаланги ICF-фолднуты
+//! с `CGodThunderPhalanx2`, но ctor/Calc/Attack/AI собственные — класс живёт
+//! рядом с `godthunder`, а не внутри него; общая маска 7×7 берётся из
+//! `godthunder` без дублирования (одна на все уровни — свойство сборки).
 //!
-//! Машинные факты:
+//! Машинные quirks: нулевая frequency заменяется единицей конструктором;
+//! 49-ячеечные окна Initialize — массив для клиента, не серверный выбор.
+//! PARTIAL: полный маппинг 9 аргументов ctor не досмотрен.
 //!
-//! - ctor `0x1E4FE0` (VA `0x5E4FE0`): 9 аргументов; часы и id приходят
-//!   аргументами. Полный маппинг J/K по push-порядку — PARTIAL (записан
-//!   только по уже видимому, без досмотра). Нулевая frequency заменяется
-//!   единицей конструктором, в том числе для выделения и сериализации
-//!   массива (прежний факт тела, сохранён).
-//! - Calc `0x1E5250` (VA `0x5E5250`): базовый урон сохраняет расширенный
-//!   порядок x87, усечение в `i64` и чтение младших 32 бит исходного
-//!   результата. Первый RNG использует диапазон конструктора и расходуется
-//!   до свежего WarSoul/таблицы; второй берёт живые min/max. Поздний отказ
-//!   сохраняет метаданные без записи урона.
-//! - Attack `0x1E5460` (VA `0x5E5460`): сам обход целей и его вызывающие
-//!   остаются у прежнего владельца (региональные run-делегации не
-//!   переносятся).
-//! - AI `0x1E5560` (VA `0x5E5560`): три чтения часов — срок по
-//!   `+0xB4`+`+0xB0`, частота `+0xC4`, lastAttack `+0xC8`; обход маски
-//!   X снаружи, Y внутри.
-//! - Initialize ICF = `CGodThunderPhalanx2::Initialize` `0x1EEF30`
-//!   (VA `0x5EEF30`): центр читается после SetCenter, пары RNG
-//!   расходуются по окнам не более чем для 49 целей — это массив для
-//!   клиента, а не выбор серверных попаданий.
-//! - AddToByteArray ICF `0x1EF0C0` (VA `0x5EF0C0`, группа
-//!   GodThunder/GodThunder2/ThunderPhalanx): пятипольный префикс совпадает
-//!   с zone-конвертом семейства (Master, а не identity области; оставшееся
-//!   время после ID/level/Master); доказательная база конверта и таблица
-//!   11 тел — `skills/summonshape.rs`. Расширенный хвост счётчика
-//!   `n = ([B0]/[C4])*[DC]` + raw 8n здесь не переоткрывается: wire сохраняет
-//!   исходный счётчик `(lifetime/frequency)*targetCount` и читает префикс
-//!   массива на 49 ячеек на окно независимо от границы заполнения, как
-//!   делало прежнее тело; при некорректном счётчике чтение ограничено
-//!   буфером вместо исходного выхода за его границу.
-//! - Replace ICF `0x1FDCA0` (VA `0x5FDCA0`).
-//! - Маска 7×7 — одна для всех уровней; конфиг-зависимость маски —
-//!   свойство сборки, зафиксирована константой сборки
-//!   `godthunder::ROUNDED_THUNDER_SCOPE`.
+//! Швы: hub `battlefairyskill::BattleFairyGame` (игрок, WarSoul, таблица,
+//! RNG); оружейный шов `ThunderPhalanxGame` — делегат старого пакета
+//! `appserver/skills/thunderphalanx.rs`. Run-делегации (Attack-обход,
+//! регистрация) остаются у прежнего владельца.
 //!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame` — разрешение игрока, WarSoul (`battle_fairy_war_soul_addon`
-//! повторяет прежнюю цепочку find_player → `war_soul_goods` → addon),
-//! таблица свойств и RNG (`skill_random_below`); оружейный шов
-//! `ThunderPhalanxGame` — факторы globe и живой `weapon_modifier` игрока,
-//! реализация у делегата старого пакета `appserver/skills/thunderphalanx.rs`.
-//! UNKNOWN списком: полный маппинг 9 аргументов ctor (PARTIAL, см. выше).
+//! Исходный владелец PDB: `appserver/skills/thunderphalanx.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#области-cthunderphalanx-cleimingphalanx2-ctianhuophalanx
 
 use nebokrai_shared::protocol::LegacyWriter;
 use nebokrai_shared::values::CGuid;

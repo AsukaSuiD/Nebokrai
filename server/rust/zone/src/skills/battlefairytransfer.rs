@@ -1,34 +1,18 @@
 //! Передача ресурсов CHuoxieshu/CLingzhishu: Check/AI.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/{huoxieshu,lingzhishu}.cpp`; тела перенесены буквально.
+//! Quirks: нулевая цена допускается без чтения ресурса; Health оставляет одно
+//! HP; Mana в Check допускает точную цену, а в AI требует остаток не меньше
+//! одного; оба AI при нехватке — ZHGS0052 с ценой без масштабирования, Check
+//! Health — ZHGS0054 с ценой+1. По сроку visual1 предшествует свежему
+//! GetWarSoulGoods: при отсутствии предмета AI повторяет visual без повторного
+//! расхода. BF918 шлётся и при отказе Serialize (точечно).
 //!
-//! Общий registered-вход сохраняет base Begin, visual loop1 и исходные часы;
-//! Check требует CPlayer и ненулевой GetS, но не предмет или регион. Нулевая
-//! цена допускается без чтения ресурса. Health оставляет одно HP, Mana в
-//! Check допускает точную цену, а в AI также требует остаток не меньше одного.
-//! Разность проверяется как signed DWORD, с исходным wrapping.
+//! Швы: hub `battlefairyskill::BattleFairyGame`; Health/Mana — фасад
+//! `BattleFairyPlayer`; доступ к предмету — швы war-soul и equipment слота 10.
+//! Собственный End(bool) с visual3 — у координатора.
 //!
-//! AI больше не читает S и не проверяет смерть. Отсутствие CPlayer либо
-//! equipment[10] оставляет ожидание; NULL региона U и нехватка ресурса дают
-//! End(0). Расход → OnChangeStates → CAN → visual0 → condition; затем живой
-//! condition и абсолютный start+delay. Отдельного начального clock нет.
-//! Оба AI при нехватке используют ZHGS0052 с ценой без масштабирования,
-//! даже Health; его Check использует ZHGS0054 с ценой плюс один.
-//!
-//! По сроку visual1 предшествует свежему GetWarSoulGoods. При отсутствии
-//! предмета AI повторит этот visual в следующем такте без повторного расхода.
-//! Восстановление читает current → поздний gain из таблицы начала AI → max,
-//! при превышении максимума повторяет GetMax, затем пишет один раз.
-//! Общий setter перезагружает уже существующие fairy-проекции до Serialize.
-//! BF918 отправляется и при отказе Serialize — точечно, решение C
-//! (якоря `0x501BDE..0x501C61`/`0x51F249`, шапка координатора
-//! `skills/battlefairyskill.rs`). Собственный End(bool) с visual3 принадлежит
-//! координатору, не дублируется внешним End(int).
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; Health/Mana игрока — фасад `BattleFairyPlayer`; доступ к
-//! предмету — швы war-soul (marker-допуск) и equipment слота 10.
+//! Исходные владельцы PDB: `appserver/skills/{huoxieshu,lingzhishu}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#навыки-семейства-атрибутный-октет-bfbaseattack-transfer-fatalblow-lifeshield
 
 use crate::content::CSkillBaseProperties;
 use crate::content::goods::{GAP_BF_HP, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP};

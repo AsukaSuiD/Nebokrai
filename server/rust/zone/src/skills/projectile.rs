@@ -1,195 +1,23 @@
-//! Общая база прицельных снарядов Archery, BaseMagic и FireBolt и
-//! площадных областей FireBall и GodPunishment:
-//! снимок полёта, физический контакт Archery, элементный контакт,
-//! усилитель душами, общий серверный decoder снимка и живые композиты
-//! FireBall и GodPunishment.
+//! Общая база прицельных снарядов Archery, BaseMagic и FireBolt и площадных
+//! областей FireBall и GodPunishment: снимок полёта, физический и элементный
+//! контакт, усилитель душами, серверный decoder и живые композиты FireBall и
+//! GodPunishment.
 //!
-//! Размещение в `skills/`: полёт строится на конверте `summonshape`, а
-//! боевые формулы принадлежат навыковым владельцам, как у соседних
-//! `elementphalanx` и `directelement`.
+//! Размещение в `skills/`: полёт строится на конверте `summonshape`, боевые
+//! формулы принадлежат навыковым владельцам; live-разрешение полей источника
+//! и доставка контакта остаются у владельца `CGame` (обёртка
+//! `elementprojectileattack` старого пакета). Выделенный ctor-ом `CScope`
+//! объектов семьи остаётся у прежнего владельца AI и не переносится.
 //!
-//! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
-//! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
-//! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`
-//! age 2, совпадение подтверждено `.local/evidence/symbols.py identity`).
+//! Машинные quirks, сохранённые дословно: физический roll Archery берёт
+//! ширину `max(max - min, 0)` БЕЗ +1 (элементная формула — `abs(max - min) + 1`);
+//! Archery хранит неиспользуемые аргументы MIN/MAX/ELEMENT из ctor.
+//!
 //! Исходные владельцы PDB: `appserver/skills/archeryphalanx.cpp/.h`,
 //! `basemagicphalanx.cpp/.h`, `fireboltphalanx.cpp/.h`,
-//! `fireballphalanx.cpp/.h` и `godpunishmentphalanx.cpp/.h`; базовый класс —
-//! `appserver/summonshape.cpp/.h` (кто хранит слоты полёта, master и skill id,
-//! см. `skills/summonshape`).
-//!
-//! Pub-адреса (`.local/evidence/symbols.py pubs`): ctor `CArcheryPhalanx`
-//! `1:00200aa0`, общий `End` `1:00200c10`,
-//! `CArcheryPhalanx::CalculateAttackPower` `1:00200c40`,
-//! `CArcheryPhalanx::AI` `1:00201000`,
-//! `CBaseMagicPhalanx::CalculateAttackPower` `1:00201240`,
-//! `CFireBoltPhalanx::CalculateAttackPower` `1:001fc970`,
-//! `CFireBoltPhalanx::AddToByteArray` `1:001fad20` (то же тело у FireBall),
-//! `CGodPunishmentPhalanx::AddToByteArray` `1:001f44d0`
-//! (оба encoder-а читают общий `CSummonShape::GetRemainedTime` `1:001e8870`),
-//! `CFireBallPhalanx::AI` `1:001f75f0`,
-//! `CArcheryPhalanx::DecordFromByteArray` `1:001ea070` (RVA `0x1EB070`),
-//! серверные декодеры FireBall `1:001fafa0` (RVA `0x1FBFA0`) и
-//! GodPunishment `1:001ff7c0` (RVA `0x2007C0`),
-//! базовый `CSummonShape` ctor `1:001e87a0`, `CShape::DecordFromByteArray`
-//! pub offset `0x5a280`.
-//!
-//! Сроки полёта: VERIFIED_DISASSEMBLY. `CArcheryPhalanx::AI` (RVA
-//! `0x201000`) дважды вызывает часы через IAT `0x64B264`
-//! (`WINMM!timeGetTime`): истечение `now > started + lifetime` и готовность
-//! атаки `now > started + attack_delay` считаются dword-сложением по модулю
-//! 2^32 с беззнаковыми `ja`/`jbe`; строгость неравенств сохранена дословно.
-//! Между проверками стоит NULL-проверка выделенного конструктором `CScope`
-//! (`+0xBC` → общий End) — сама область и её время жизни остаются у прежнего
-//! владельца AI и не переносятся.
-//!
-//! Общий End: VERIFIED_DISASSEMBLY. Тело по адресу `1:00200c10` —
-//! `mov dword ptr [ecx+0x80], 1; ret`, оно свёрнуто линкером как минимум
-//! для Archery и FireBolt: тихая пометка `SHAPE_CHANGE_DELETE` без рассылки.
-//!
-//! Конструктор `CArcheryPhalanx` (pub `1:00200aa0`): VERIFIED_DISASSEMBLY
-//! для хранимого снимка. Базовый `CSummonShape` (pub `1:001e87a0`) принимает
-//! master и срок жизни: вложенный `tagMasterInfo` конструируется и
-//! присваивается по `+0x84` (ctor/assign VA `0x50A610/0x50A640`, см.
-//! `combat/masterinfo`), срок жизни кладётся в `+0xB0`, живой `timeGetTime` —
-//! в `+0xB4`, а skill id предустановлен `0x7FFFFFFF` в `+0xB8`. Archery
-//! перезаписывает `+0xB8` литералом `2` (= прежнему `ARCHERY_SKILL_ID`
-//! адаптера), уровень аргументом в `+0xCC`, неиспользуемые дальше аргументы
-//! MIN/MAX/ELEMENT — в `+0xC0/+0xC4/+0xC8` (не дублируются), задержку атаки
-//! в `+0xD0`, цель type/id в `+0xD4/+0xD8`; отдельно выделяется не участвующий
-//! в расчёте `CScope` (`+0xBC`). Машинный `AI` подтверждает назначение слотов
-//! дедлайнами `+0xB4`+`+0xB0` и `+0xB4`+`+0xD0` и поиском цели по
-//! `+0xD4/+0xD8`.
-//!
-//! Физический удар Archery: VERIFIED_DISASSEMBLY по
-//! `CArcheryPhalanx::CalculateAttackPower` (pub `1:00200c40`). Сначала
-//! `GetGame()` (pub `?GetGame@@YAPAVCGame@@XZ`) и поиск CPlayer в map игроков
-//! по `attacker_id` атаки независимо от сохранённого типа, затем NULL-проверка
-//! цели и живая таблица через pub
-//! `?QuerySkillBaseProperties@CSkillFactory@@SAPAVCSkillBaseProperties@@W4tagSkillID@@J@Z`
-//! (skill id из `+0xB8`, уровень из `+0xCC`); отсутствие игрока или таблицы
-//! оставляет атаку прежней, записи полей идут после. Из снимка объекта
-//! пишутся skill id, байт уровня и нулевой damage modifier; уровень цели
-//! читается vtable `+0x110` как байт (movzx), живой weapon modifier — vtable
-//! `+0x184` игрока с записью в damage factor, hit — `QueryProperty(20001)`
-//! (`push 0x4E21`; чтения 20002 нет). Физический roll: чтения MAX
-//! (vtable `+0xE8`) и MIN (`+0xE4`), ширина `max(max - min, 0)` БЕЗ +1
-//! (`sub` + `jns`/`xor` — отличие от элементной формулы ниже, сохранено
-//! дословно), второе чтение MIN до RNG глобального `random` (pub
-//! `?random@@YAHH@Z`), сумма второй MIN со сгенерированным значением и нижняя
-//! граница ноль; далее компонент Element (vtable `+0x118`) с той же нижней
-//! границей, компонент Soul (vtable `+0x11C`, movzx u16) и критический хвост:
-//! CCH (vtable `+0x114`, movzx u16), RNG(100), флаг и float-масштабирование
-//! FILD/FMUL/FISTP только компонентов видов 1/3/4 (Physical/Element/Soul) —
-//! тот же фильтр и та же последовательность, что у элементной формулы.
-//! Выделения `new tagAttackPower` (ctor `0x5D3C80`) и `std::vector::push_back`
-//! выражены `Vec::push`; множитель крита читается из изменяемой BSS-глобали
-//! (`fmul dword ptr [0xEF3E5C]`) и передаётся параметром `critical_rate`
-//! живого чтения владельца, как у элементной формулы.
-//!
-//! Элементная формула: VERIFIED_DISASSEMBLY по четырём телам семьи —
-//! `CFireBoltPhalanx::CalculateAttackPower` (RVA `0x1FC970`),
-//! `CBaseMagicPhalanx::CalculateAttackPower` (RVA `0x201240`),
-//! `CFireBallPhalanx::CalculateAttackPower` (pub `1:001f6df0`, RVA
-//! `0x1F7DF0`) и `CGodPunishmentPhalanx::CalculateAttackPower` (pub
-//! `1:001fce10`, RVA `0x1FDE10`). Живой element_modify игрока читается
-//! первым (прямая загрузка `[player+0x3F0]`, до трёх записей снимка), живой
-//! таблицы навыка в этих телах нет — min/max/element_modifier берутся из
-//! снимка; затем уровень цели (vtable `+0x110`) и живой weapon modifier
-//! (vtable `+0x184`, float в `damage_factor`), `hit_modifier = 100`,
-//! знаковое `element_modifier * element_modify / 100` (магия 0x51EB851F),
-//! ширина `abs(max - min) + 1`, RNG, сохранённый MIN, живой AddElementAtk
-//! (vtable `+0x118`), необязательное усиление душами и нижняя граница ноль;
-//! единственная атака вида Element (исходное kind=3). Критический хвост
-//! общий: живой CCH (vtable `+0x114`, movzx u16), RNG(100), затем флаг
-//! `critical` и масштабирование компонентов видов 1/3/4 (Physical/Element/
-//! Soul) float-множителем с усечением FISTP. Тела различаются только
-//! смещениями боевых слотов снимка и наличием усилителя: FireBolt и
-//! FireBall — один профиль (min/max/element `+0xC0/+0xC4/+0xC8`, souls
-//! count/variable `+0xCC/+0xD0`, уровень `+0xD4`, усилитель есть);
-//! BaseMagic — те же min/max/element, уровень `+0xCC`, без souls;
-//! GodPunishment — уровень `+0xC8`, min/max/element `+0xBC/+0xC0/+0xC4`,
-//! без souls. Сумма трёх слагаемых по модулю 2^32 не зависит от порядка
-//! сложения.
-//!
-//! Усилитель душами: VERIFIED_DISASSEMBLY (участок RVA `0x1FDAC0`..`0x1FDB14`
-//! у FireBolt; идентичная цепочка в теле FireBall RVA `0x1F7DF0`, обе
-//! ссылаются на одни адреса констант `0x64DBD0` и `0x64DB50`, прочитанные
-//! из EXE как 0.01f и 1.0f): обе нулевые проверки `count == 0` /
-//! `variable == 0`, затем x87-цепочка `fild variable`, `fimul count`,
-//! `fmul float(0.01)`, `fadd float(1.0)`, `fimul damage` и одно усечение
-//! FISTP без промежуточной float-записи. У BaseMagic и GodPunishment
-//! усилителя в теле нет (между суммой и нижней границей ничего).
-//!
-//! Клиентский снимок `encode_client_snapshot` делегируется общему конверту
-//! `summonshape` (master type/id вложенного `tagMasterInfo`, не сохранённая
-//! цель): статус см. там.
-//!
-//! Серверный `DecordFromByteArray` (pub `1:001ea070`, RVA `0x1EB070`):
-//! VERIFIED_DISASSEMBLY. Линкер сливает в одно тело декодеры
-//! `CArcheryPhalanx`, `CBaseMagicPhalanx` и `CBFBaseAttackPhalanx`; hub не
-//! используется, поэтому тело перенесено. Пять DWORD читаются подряд с
-//! продвижением offset: skill id в `+0xB8`, уровень в `+0xCC`, master type/id
-//! вложенного `tagMasterInfo` в `+0x84/+0x88` (остальные восемь полей master
-//! не трогаются) и остаток времени в слот срока жизни `+0xB0` — зеркально
-//! префиксу `encode_related_phalanx_prefix`; затем одно чтение часов через
-//! IAT `0x64B264` перезапускает отсчёт в `+0xB4`, и хвост делегируется
-//! `CShape::DecordFromByteArray` (pub offset `0x5a280`; достигнутый
-//! `decode_from_byte_array` в `regions::shape`) с проброшенным
-//! `include_ex_data`. Неконтролируемые native-чтения выражены проверками
-//! `UnexpectedEnd`: уже записанные поля префикса сохраняются, как и у
-//! оригинала, возвращавшего FALSE после частичных записей. Достижимого
-//! caller-а у оригинала нет; часы приходят параметром, как у клиентского
-//! encoder-а.
-//!
-//! Серверные декодеры FireBall (pub `1:001fafa0`, RVA `0x1FBFA0`) и
-//! GodPunishment (pub `1:001ff7c0`, RVA `0x2007C0`): VERIFIED_DISASSEMBLY.
-//! Линкер оставил каждому своё тело, но оба повторяют общую форму
-//! decoder-а семьи: пять DWORD (skill id → `+0xB8`, уровень → слот
-//! профиля `+0xD4` FireBall и `+0xC8` GodPunishment, master `+0x84/+0x88`,
-//! остаток → `+0xB0`), одно чтение часов через IAT `0x64B264` в `+0xB4`
-//! и хвост `CShape::DecordFromByteArray` (pub offset `0x5a280`). Общий
-//! префикс `decode_server_snapshot` покрывает оба тела: `skill_level`
-//! префикса владелец относит к слоту своего профиля. Достижимого caller-а
-//! у оригинала нет.
-//!
-//! Боевые слоты снимков BaseMagic и FireBolt: VERIFIED_DISASSEMBLY
-//! перекрёстной сверкой ctor↔CAP (ctor BaseMagic pub `1:002010b0`, FireBolt
-//! pub `1:001fc7d0`; контрольно FireBall pub `1:001f6cc0` и GodPunishment
-//! pub `1:001fcd80`): каждый читаемый CAP боевой слот пишется ctor из
-//! собственного J-аргумента (порядок аргументов между слотами перемешан,
-//! семантику слота фиксируют чтения CAP; для Archery layout сверен выше по
-//! её собственному ctor). Аргументы-остатки, не читаемые CAP: у BaseMagic
-//! три лишних слота `+0xD0/+0xD4/+0xD8`, у FireBolt `+0xD8/+0xDC/+0xE0` —
-//! Archery-quirk неиспользуемых MIN/MAX/ELEMENT сюда не распространяется,
-//! у этих типов min/max/element читаются CAP. Литерал навыка кладётся в
-//! `+0xB8`: BaseMagic 3, FireBolt 0x132, FireBall 0x13D, GodPunishment
-//! 0x13A. BaseMagic, FireBolt и FireBall выделяют CScope (`+0xBC`, остаётся
-//! у владельца AI; у FireBall статические шаблоны `g_bScope` заменяет
-//! итератор `FireBallPath::scope_cells` окном 3×3 X→Y), у FireBall ctor
-//! дополнительно копирует вектор клеток области (аргумент) в `+0xDC..+0xE8`
-//! — он хранится независимым снимком `FireBallPath`; у GodPunishment CScope
-//! нет, и layout сдвинут на слот (min в `+0xBC`).
-//!
-//! Оставшиеся слоты движения FireBall: VERIFIED_DISASSEMBLY по ctor
-//! `1:001f6cc0` и AI `1:001f75f0`. Ctor кладёт аргумент speed в `+0xD8`
-//! и обнуляет `+0xEC` (текущая позиция), `+0xF0/+0xF4` (endpoint) и
-//! `+0xF8` (признак ForceMove). AI считает дедлайн очередной клетки
-//! dword-сложением `+0xB4 + позиция · speed`, пишет endpoint перед
-//! BLOCK3-областью, растит позицию после неё и однократно отправляет
-//! ForceMove последней клетки с длительностью `len · speed`, ставя
-//! признак после callback. Независимый `Vec` заменяет исходный STL-вектор;
-//! endpoint клиентскому encoder-у не нужен.
-//! Точные имена полей PDB не фиксировались.
-//!
-//! Живые композиты `CFireBallPhalanx` и `CGodPunishmentPhalanx` следуют
-//! старому адаптеру: flight `BaseProjectileFlight` + элементный снимок
-//! `ElementProjectileAttack` (у FireBall — с движением `FireBallPath` и
-//! усилителем душами из cast-а, у GodPunishment — без CScope и без
-//! усилителя). Состав полей и порядок записей без новых машинных оснований,
-//! статусы — выше по шапке. Live-разрешение полей источника и доставка
-//! контакта остаются у владельца `CGame` (обёртка `elementprojectileattack`
-//! старого пакета).
+//! `fireballphalanx.cpp/.h`, `godpunishmentphalanx.cpp/.h`; базовый класс —
+//! `appserver/summonshape.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#projectile-прицельные-снаряды-и-композиты-fireballgodpunishment
 
 use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo, truncate_original};

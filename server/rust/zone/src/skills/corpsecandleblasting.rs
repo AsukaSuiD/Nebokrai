@@ -2,64 +2,22 @@
 //! задержки взрывает сам себя, обходит восемь клеток маски 3×3 без центра,
 //! бьёт каждую живую цель и уходит на удаление по кадру смерти.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/corpsecandleblasting.cpp`; тела
-//! execute_owned, wire-кадры и формула перенесены буквально.
+//! Машинные quirks: отказ 600→600 исполняется внутри Attack (scan его не
+//! делает); формула читает MIN/MAX ключами 20008/20009 и hit ключом 20001
+//! (машинные `push` тела Calculate); после обхода — stage-for-delete
+//! `[U+0x80]=1`, смерть-скрипт при `script_file[0] != 0x30` и кадр `0xBF60B`;
+//! очистка `CMonster` вызывает End и без взрыва (отмена/Stiffen).
 //!
-//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
-//! D2-corpsecandleblasting.md`, тела `.local/recon-de/disasm/
-//! CCorpseCandleBlasting.txt`) подтверждает всё, кроме исправленного FIX F1:
+//! Швы: hub-трейты `monsterattack` (факты, кандидаты клеток, снимок цели,
+//! применение попадания, цикл каста); подход/расписание — `ai::monsterai`;
+//! дамп `script_file` и stage-for-delete — фасады `CorpseCandleGame`,
+//! `RunScript` — фасад `CorpseCandleContact` прежнего скриптового owner-а.
 //!
-//! - vtable `0x25AEF4`: Check `0x582600` — ICF-фолд со `CSporeBlasting`
-//!   (null S → 0; reuse 10005 → visual(13); срок — SetMoveable(0), ret 1);
-//!   Begin-скелет `0x582670`/`0x582740`/`0x582870`; End `0x582810` — ICF со
-//!   SporeBlasting (`[+0x50]=0`,`[+0x4C]=0` → GetUser → SetMoveable(1) →
-//!   `CAttackSkill::End`). Общая очистка `CMonster` вызывает его после
-//!   сообщения смерти либо при отмене/Stiffen без взрыва; скрипт, урон и
-//!   пометка удаления не являются побочными эффектами End.
-//! - AI `0x5830E0`: `[+0x4C]==0` → out; props null → End(0); U null → End(0);
-//!   первая фаза — updateVE(0); delay `Query(10001)+[+0x2C]` unsigned → out;
-//!   updateVE(1); регион — RTTI `[U+0x40]` → null → End(0); центр
-//!   `GetTileX/Y(U) − length/2 / height/2` (обе 3 → −1).
-//! - Обход: внешний X (esi), внутренний Y (ebp), маска `g_bScope[x + 3·y]`
-//!   — девять байт `[1,1,1,1,0,1,1,1,1];` GetShape клетки → RTTI
-//!   CShape→CMoveShape → `IsAttackAble(U)` `vcall+0x134` → `Attack(U, S)`.
-//! - Attack `0x582FC0`: отдельный отказ 600→600 внутри Attack (scan его не
-//!   делает); info ctor-дефолт; U==400 → MasterInfo-поля игрока; Calculate →
-//!   `vcall+0x15C` приёмника.
-//! - После обхода: `[U+0x80]=1` (stage-for-delete); RTTI CMonster + GetSufferer
-//!   RTTI→CPlayer: оба живы и `script_file[0] != 0x30` → `RunScript`
-//!   (stRunScript с регионом/игроком/файлом, NULL point); затем кадр смерти
-//!   `0xBF60B`: `long 0, long 0, long 600, long id, long 0, byte 2`;
-//!   SendToAround(U, 0); End(1) `vcall+0x68`.
-//! - Wire `0xBFE01` (updateVE `0x582930`, живы плечи 0/1): кадры старта и
-//!   исполнения байт-в-байт совпадают со сборщиками ниже.
+//! PARTIAL: значения строки навыка в БД — проектный UNKNOWN (машинная форма
+//! чтений отсутствующего ключа даёт 0).
 //!
-//! **FIX F1 (формула, основание — тело Calculate `0x582EA0`):** прежняя
-//! реконструкция читала MIN/MAX урона ключами `20_001/20_002` и hit-
-//! модификатор ключом `3`; машина кверит hit-модификатор `push 0x4E21`
-//! (`20_001` → `[info+0x18]`, 0x582EE8) и диапазон `push 0x4E29`/`push
-//! 0x4E28` (`20_009` max, `20_008` min, 0x582F33/0x582F45/0x582F68). Ключи
-//! исправлены на машинные; остальная формула — MATCH: `|max − min| + 1`
-//! (cdq-abs), один RNG, `GetAddElementAtk` `vcall+0x118` монстра ≡ 0
-//! (свёрнут), jns-clamp, kind 3 (Element), mp_damage = 0. Узкая
-//! достижимость: значения строки навыка — вне машинной базы (строки БД —
-//! проектный UNKNOWN плана D/E): отсутствующий ключ даёт
-//! `query_property == 0`, машинная форма чтений не меняется.
-//!
-//! Объявленные швы переноса (не расхождения): hub-трейты `monsterattack`
-//! (`monster_combat_facts`, `monster_attack_cell_candidates`,
-//! снимок цели, применение попадания, зарегистрированный цикл каста),
-//! подход/расписание — `ai::monsterai` через контакт; `ServerRegionOwner`
-//! переиспользуется до синхронной смерти, продолжение заново получает
-//! оставшегося владельца, не создавая замену исчезнувшему региону; дамп
-//! `script_file` и stage-for-delete — фасады `CorpseCandleGame`, сам
-//! `RunScript` прежнего скриптового owner-а — фасад `CorpseCandleContact`.
-//! Потребление статическое (generic), dyn-совместимость и `Send`-контракт
-//! не вводятся (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/corpsecandleblasting.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#corpsecandleblasting--ccorpsecandleblasting-0x194
 
 use crate::app::game_message::CMessage;
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType};
@@ -80,7 +38,7 @@ use crate::ai::monsterai::schedule_attack_interval;
 
 pub const CORPSE_CANDLE_BLASTING_SKILL_ID: u32 = 0x194;
 
-// FIX F1: машинные ключи Calculate 0x582EA0 (push 0x4E28/0x4E29/0x4E21).
+// Машинные ключи Calculate 0x582EA0 (push 0x4E28/0x4E29/0x4E21).
 const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 
@@ -162,7 +120,7 @@ pub fn corpse_candle_death_message(monster_id: i32) -> CMessage {
     message
 }
 
-/// Формула Calculate `0x582EA0` (FIX F1): MIN/MAX 20008/20009, `|max −
+/// Формула Calculate `0x582EA0`: MIN/MAX 20008/20009, `|max −
 /// min| + 1` со знаковым abs, один RNG, элементная запись kind 3 с
 /// jns-clamp; `GetAddElementAtk` монстра свёрнут в ноль заранее.
 fn corpse_candle_blasting_attack<Game: MonsterCombatGame>(

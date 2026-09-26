@@ -4,49 +4,21 @@
 //! старого пакета (общий для пяти усилений), обвязка состояния —
 //! `skills/daubpoisonstate.rs` рядом.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/daubpoison.cpp`; тело apply перенесено буквально.
+//! Машинные quirks: замена ищет первый НЕпустой слот id `0xDF` без
+//! RTTI/ended-фильтра; keep-time ctor-а — только из Query(10002); отказ Begin
+//! state не отменяет End(1) навыка (проверки результата установки нет).
 //!
-//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
-//! D4-daubpoison.md`, тела `.local/recon-de/disasm/CDaubPoison.txt`)
-//! подтверждает всё:
+//! Источник не типа Player отклоняется переходным hub `selfstatecast`
+//! (нативный код выполнял небезопасный доступ к MP `[U+0x284]` без проверки
+//! типа — основание в шапке hub); здесь воспроизводится только машинно
+//! достижимый путь, поведение hub не меняется.
 //!
-//! - vtable `0x259B74` (VA `0x00659B74`): Begin-скелет трёх форм
-//!   `0x565FE0`/`0x565F10`/`0x5660D0` (форвард `CAttackSkill::Begin` → new
-//!   effect `0xC` → `[+0x34]` → BeginVisualEffect(1) → Check `vcall+0x64`;
-//!   провал — End(0), успех — `[+0x4C]=1`, `[+0x50]=0`), AI `0x566690`,
-//!   Check(U) `0x5664B0`, End `0x546090` (ICF `CAgility::End`),
-//!   DoesTargetEffective `0x5AFCE0` (mov eax,1, ICF). Check/AI самого
-//!   навыка — hub `selfstatecast` (сверено там MATCH): reuse 10005 →
-//!   visual(13) + GS0278; player Query(2)==0 → тихий ret 0; signed MP →
-//!   visual(7) + GS0288; SetMoveable(0); не-player — без MP/Move0. AI:
-//!   IsDied(U) → visual(2) → End(1) (hub `RejectedAfterUse`); MP → SetMP →
-//!   `vcall+0x164` (OnChangeStates) → CAN(10006, dword); visual(0) →
-//!   delay 10001 unsigned → visual(1) → apply ниже → End(1).
-//! - apply после visual(1): скан вектора `[U+0x11C]` — первый НЕпустой слот
-//!   id `0xDF` (без фильтра RTTI или ended) → End `vcall+0x1C` →
-//!   deleting-dtor `vcall+0x10(1)` свежего остатка позиции → slot = 0;
-//!   ctor `0x5F17B0` с keep **только из Query(10002)** (`esp`-трекер
-//!   подтвердил ту же таблицу props); Begin(U,U) `vcall+0x08` → true:
-//!   push_back append, false: deleting-dtor нового; затем End(1). Проверки
-//!   результата установки нет — отказ Begin не отменяет завершение навыка.
+//! Швы: hub `statecast::StateCastGame` (арена `find_state_position`/
+//! `end_and_destroy_state_at`) и `daubpoisonstate::begin_primary_daub_poison_state`;
+//! драйвер `selfstatecast.rs` старого пакета не меняется.
 //!
-//! **Сознательное отклонение hub (подтверждено, не чинится):**
-//! hub `selfstatecast` отклоняет источник не типа Player в Begin-стадии AI
-//! (`Rejected`), тогда как нативная фаза 0 читает MP `[U+0x284]` без
-//! RTTI-гейта (небезопасный доступ для монстра). Разведка подтвердила
-//! отклонение осознанным (шапка hub, «deliberate»); zone-файл здесь
-//! воспроизводит только машинно достижимый путь, не изменяя поведение hub.
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! (арена `find_state_position`/`end_and_destroy_state_at`) и соседний
-//! `daubpoisonstate::begin_primary_daub_poison_state`; драйвер
-//! `selfstatecast.rs` старого пакета не меняется. Потребление
-//! статическое (generic), dyn-совместимость и `Send`-контракт не вводятся
-//! (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/daubpoison.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#daubpoison--cdaubpoison-0xdf-и-cdaubpoisonstate
 
 use crate::content::CSkillBaseProperties;
 use crate::effects::DAUB_POISON_STATE_ID;

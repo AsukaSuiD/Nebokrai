@@ -1,46 +1,23 @@
 //! Атрибутные навыки CPojia..CYufa (октет Po/Yu, 0x212..0x219): Check/AI.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}.cpp`;
-//! тела перенесены буквально.
-//! Единый скелет и константы октета подтверждены машинно (CYujia vs CPojia —
-//! 167/167 инструкций); собственный `End(bool)` 8-fold `0x1246C0` остаётся у
-//! координатора (`skills/battlefairyskill.rs`); state — 9-fold AI/End/
-//! Serialize/Unserialize/GetRemainedTime/OnChangeRegion, данные и формулы —
+//! Quirks: восстановление использует delay, а не reuse; MP0 допускается без
+//! чтения MP; только Yumo списывает ненулевую стоимость уже в Check (первый
+//! AI затем списывает её повторно — машинная особенность); Po держит
+//! состояние на S (state-U=S/state-S=U), Yu — на U. Pojia сериализует BF918
+//! до CAN/visual0/condition, остальные семь — после; отказ Serialize не
+//! подавляет пакет (точечная доставка — `send_battle_fairy_goods_update`).
+//!
+//! Скелет и константы октета общие для всех восьми классов; собственный
+//! `End(bool)` — у координатора `battlefairyskill`; state, данные и формулы —
 //! `effects/battlefairy.rs`, живой hub-lifecycle — `battlefairyattributestate.rs`
-//! старого пакета. Отдельный признак двойного списания у
-//! одного класса (extra QueryProperty у Yumo: расход уже в Check, затем
-//! повторно в первом AI) сохранён `YUMO_SKILL_ID`-веткой.
+//! старого пакета.
 //!
-//! Координатор выполняет общий Begin с visual loop1 и завершает тот же
-//! зарегистрированный экземпляр. Check принимает исходного CPlayer,
-//! требует equipment[10] с маркером боевой феи и ненулевой GetSufferer; тип,
-//! здоровье и дальность цели здесь не проверяются. Восстановление использует
-//! delay, а не reuse. MP0 допускается без чтения MP. Только Yumo списывает
-//! ненулевую стоимость уже в Check; первый AI затем списывает её повторно.
+//! Швы: hub `battlefairyskill::BattleFairyGame`; арена и Begin — hub-швы
+//! `battle_fairy_end_first_state` и `begin_battle_fairy_attribute_state`.
 //!
-//! AI сохраняет таблицу свойств и фактические U/S до побочных эффектов.
-//! Отсутствие CPlayer или equipment[10] оставляет ожидание; смерть S у всех
-//! восьми завершает с End(1), отсутствие S/региона U и нехватка MP — End(0).
-//! OnChangeStates следует после записи MP. Pojia сериализует и отправляет
-//! BF918 до CAN/visual0/condition, остальные семь — после. Отказ Serialize
-//! не подавляет пакет. Дальше перечитывается condition и проверяется
-//! абсолютный wrapping-срок start + delay, без нового начального clock.
-//!
-//! Первый прежний exact-ID проходит End и destructor свежего остатка слота.
-//! Только затем из сохранённой таблицы читаются keep/value: primary Begin
-//! с собственными часами и silent loop1 → append. Po держит состояние на S
-//! с state-U=S/state-S=U; Yu — на U с обоими указателями U. Внешний Update
-//! обязателен у Po и Yujia, у остальных Yu — лишь после успешного Begin.
-//! Собственный End(bool) остаётся у координатора и отличается от внешнего
-//! унаследованного End(int); ручного visual или второго завершения здесь нет.
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; зарегистрированный вход — `execute_registered_battle_fairy_state`
-//! там же; доступ к предмету — швы equipment/war-soul слота 10; арена
-//! состояний и Begin — hub-швы `battle_fairy_end_first_state` и
-//! `begin_battle_fairy_attribute_state`. Доставка BF918 — точечный
-//! `send_battle_fairy_goods_update` (решение C, якоря в шапке координатора).
+//! Исходные владельцы PDB: `appserver/skills/{pojia,pobing,pomo,pofa,yujia,
+//! yubing,yumo,yufa}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#навыки-семейства-атрибутный-октет-bfbaseattack-transfer-fatalblow-lifeshield
 
 use nebokrai_shared::values::CGuid;
 

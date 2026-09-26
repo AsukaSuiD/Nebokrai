@@ -1,58 +1,22 @@
 //! Двухударная быстрая атака `CMonsterFastAttack` (ID `0x2d1`): константы
 //! сроков, wire-кадр выпуска и машинная база исполнения. Монстр проходит
 //! через hub `execute_owned_monster_base_attack` старого пакета;
-//! player-dispatch, отмена и завершение используют общий
-//! двухударный owner `lordfastattack` с отдельными формулой, MP и cooldown
-//! (player-ветвь fast остаётся у `lordfastattack` — связка
-//! `SKILL_USAGE_FIRST_TIME`/`SKILL_USAGE_SECOND_TIME` сохранена здесь для
-//! будущего lord-владельца).
+//! player-dispatch, отмена и завершение используют общий двухударный owner
+//! `lordfastattack` с отдельными формулой, MP и cooldown (player-ветвь fast
+//! остаётся у `lordfastattack` — связка `SKILL_USAGE_FIRST_TIME`/
+//! `SKILL_USAGE_SECOND_TIME` сохранена здесь для будущего lord-владельца).
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterfastattack.cpp`; тела перенесены буквально.
+//! Машинные quirks: нулевая MP-цена в Check — молчаливый ret 0; удары по
+//! кумулятивным срокам от начала cast (`delay+15001`, далее `+15002`);
+//! мёртвая S или U==S → End(0) БЕЗ reuse; Attack без проверок U==S/500/
+//! IsAttackAble и без IncreaseRp.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
-//! исполнение hub старого пакета соответствует:
+//! Швы: состояние двух ударов (`MonsterFastAttackProgress`) живёт в
+//! `skills/execution`; исполнение монстра и оркестрация hub — у владельца
+//! старого пакета.
 //!
-//! - ctor (RVA `0x112910`): `[+4] = 0x2d1`, `[+0x4C] = [+0x50] = [+0x58] =
-//!   [+0x54] = 0`; фабричный QuerySkill 0x2D1 → этот класс.
-//! - Begin-скелет три формы (`0x1129A0`/`0x112A70`/`0x112BB0`): форвард
-//!   `CAttackSkill::Begin` → new effect → effect `VT[0](1)` → слот `+0x60`
-//!   CheckCastCondition; провал — `End(0)` и ret 0 БЕЗ терминального кадра,
-//!   успех — `[+0x4C] = 1`, `[+0x50] = 0`.
-//! - CheckCastCondition (RVA `0x1131D0`): U/S null → ret 0 без кадра;
-//!   props null → ret 0; reuse (`QueryProperty(10005) + [+0x40]` vs
-//!   timeGetTime, unsigned) → кадр `{0xBFE01, 0, 13}` + GS1143 только у
-//!   player; `RealDistance(U, S) > QueryProperty(5003)` → `{0, 0xb}`; ячейка
-//!   `GetTargetPath` с `block == 2` → `{0, 0xf}`; **нулевая стоимость MP
-//!   (`QueryProperty(2) == 0`) — молчаливый ret 0** (0x5133CF); MP-player <
-//!   cost → `{0, 7}` + GS1144; успех — SetMoveable(0) (только player веток).
-//!   Исходное разыменование null player в MP-проверке не воспроизводится.
-//! - AI (RVA `0x113810`): S null или U null → `End(0)` без кадра; мёртвая S
-//!   или U==S → кадр `{0, 10}` + `End(0)` БЕЗ reuse. Фазы `[+0x50]/[+0x54]/
-//!   [+0x58]`: первая — MP повторно списывается только у player (`SetMP`,
-//!   `OnChangeStates` vt+0x164; нехватка → `{0, 7}` + GS1144), SetDir к S и
-//!   старт-кадр (mode 0), `[+0x3C] = QueryProperty(10006)`; вторая — по
-//!   `timeGetTime >= start + delay(10001)` кадр fire (mode 1), `[+0x3C] = 0`;
-//!   удары по двум **кумулятивным** срокам от начала: первый
-//!   `delay + 15001`, второй `delay + 15001 + 15002` (unsigned), затем
-//!   `End(1)` со штампом reuse.
-//! - Attack (RVA `0x113700`): пропуск null U/S до расчёта и OnBeenAttacked;
-//!   НЕТ проверки U==S/500/IsAttackAble, НЕТ IncreaseRp; записи 1/3/4 идут в
-//!   исходном порядке в `OnBeenAttacked(&info, 0)` (vt+0x15C).
-//! - Calculate (RVA `0x113490`): физический разброс `max(max-min, 0) + 1`,
-//!   clamp `max(0)` по min+roll; критический roll `random(100) < GetCCH`
-//!   только после успешного cast в CPlayer, множитель — float по
-//!   `[player+0x414]` с x87-усечением. У монстра этого RNG-вызова нет.
-//! - End (RVA `0x112B50`): нули фаз, `[+0x3C] = 1`, SetMoveable(U, 1),
-//!   CAttackSkill::End(H): только успех изнашивает оружие и ставит
-//!   cooldown.
-//!
-//! Объявленные швы переноса: состояние двух ударов (`MonsterFastAttackProgress`)
-//! живёт в `skills/execution`; wire-кадр ниже — зональный конструктор.
-//! Исполнение монстра и оркестрация hub остаются у владельца старого пакета.
+//! Исходный владелец PDB: `appserver/skills/monsterfastattack.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterfastattack--cmonsterfastattack-0x2d1
 
 use crate::app::game_message::CMessage;
 

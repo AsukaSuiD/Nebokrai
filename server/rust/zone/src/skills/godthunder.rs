@@ -1,8 +1,8 @@
 //! Окна целей, клиентские поля и живая форма областей
 //! CGodThunderPhalanx/CGodThunderPhalanx2.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
+//! идентификаторы —
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки.
 //! Конструкторы VA 0x005F5B50/0x005EF190, Initialize 0x005F59C0/0x005EEF30,
 //! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0,
 //! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).

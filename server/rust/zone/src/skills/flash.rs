@@ -1,33 +1,19 @@
-//! Рывок CFlash (0x69). Источник: точная пара `gameserver.exe` `4F5C98E0…` +
-//! `GameServer.pdb` (RSDS match), appserver/skills/flash.cpp; тела Check/AI,
-//! helpers и visual перенесены буквально. Машинная сверка подтверждает:
-//! AI-стадии Flash — порядок
-//! GetTargetPath → direction → path → player-only weapon addon==2 → RageBreak
-//! id `0x6E` → MP → RP → OnChangeStates → teleport back → VE(1) → condition=1
-//! → attack-фаза `condition && !attacked` (region else — End(0) без VE) →
-//! tick ≤ started+10009 → pending; иначе SetMoveable(1) → VE(3) → End(1);
-//! visual — прямой 16-switch с `{0→1, 1→2, 3→3}` и personal-множеством
-//! `{2,4,7,8,10,11,13,14,15}`; GS-строки 0278/0288/0289/0301-0304 байт-сверены.
+//! Рывок CFlash (0x69).
 //!
-//! Check не использует S: sword, signed MP/RP и отсутствие Pillar проверяются
-//! после reuse. AI требует разрешимую S, но не проверяет её здоровье; направление
-//! и отдельный path строятся до повторной проверки оружия. Первый RageBreak
-//! завершается с удалением свежего остатка до поздних MP/RP queries. Списание
-//! MP сохраняется и при последующем отказе RP. OnChangeStates предшествует
-//! переносу, visual1 и condition; CAN этим навыком не изменяется.
+//! Quirks: Check не использует S (sword, signed MP/RP и отсутствие Pillar —
+//! после reuse); первый RageBreak завершается с удалением свежего остатка до
+//! поздних MP/RP queries; списание MP сохраняется и при последующем отказе
+//! RP; CAN навыком не изменяется; поклеточный удар выполняет fresh Calculate,
+//! raw OnBeenAttacked и RP; после strict unsigned срока — Moveable1 и
+//! visual3; единственный End и AfterUse — у общего входа.
 //!
-//! Path и список уже атакованных принадлежат конкретному зарегистрированному
-//! навыку и остаются доступны callbacks. AI читает живой path на каждой клетке,
-//! ограничивает его дополнительным max и проверяет каждый объект через IsAttackAble.
-//! Общий удар семейства выполняет fresh Calculate, raw OnBeenAttacked и RP.
-//! После strict unsigned срока start+interval идут Moveable1 и visual3;
-//! единственный End, очистка двух списков и AfterUse принадлежат общему входу.
+//! Швы: фасады `DashSkillGame`/`DashSkillContact` (`skills/dash.rs`);
+//! find_state_position RageBreak свёрнут в `move_shape_state_position`.
 //!
-//! Объявленные швы — фасады `DashSkillGame`/`DashSkillContact`
-//! (`skills/dash.rs`, реализация у владельца старого пакета); find_state_position
-//! RageBreak свёрнут в `move_shape_state_position`, развёрнутый результат
-//! End состояния отбрасывается, как и раньше. Оставшийся UNKNOWN — место
-//! push в Attack-списке CFlash (низкий риск, зафиксирован разведкой).
+//! UNKNOWN: место push в Attack-списке CFlash.
+//!
+//! Исходный владелец PDB: `appserver/skills/flash.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#dashflashlittleflash--рывки
 
 use nebokrai_shared::runtime::get_line_direction;
 

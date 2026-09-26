@@ -1,7 +1,7 @@
 //! Движущаяся область CChaosSpherePhalanx и её живая форма.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
+//! идентификаторы —
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки.
 //! Summon VA 0x005A8290, ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0,
 //! AI VA 0x005FF270 (appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h).
 //! Композит `CChaosSpherePhalanx` (CShape + область) перенесён буквально из

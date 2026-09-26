@@ -51,7 +51,7 @@ pub use record::{
 
 /// Полная запись зарегистрированного навыка фигуры: скалярная база
 /// `SkillIdentity` (Zone `regions/skillregistry`), execution kernel и retained
-/// данные полёта. До волны Z-M4 alias жил в hub `appserver/moveshape.rs` из-за
+/// данные полёта. Раньше alias жил в hub `appserver/moveshape.rs` из-за
 /// hub-владения payload монстра; теперь оба операнда специализации принадлежат
 /// этому компоненту, и hub сохраняет только re-export прежнего имени.
 pub type MoveShapeSkill = RegisteredSkillRecord<MonsterSkillExecution>;

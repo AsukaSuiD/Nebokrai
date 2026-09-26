@@ -1,43 +1,20 @@
 //! Общий прямой снаряд `CChuckStone` (`0x19D`) и `CSkeletonArchery`
-//! (`0x1A1`). Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), исходные владельцы `chuckstone.cpp` и
-//! `skeletonarchery.cpp`; тела Check/AI и helpers перенесены буквально.
-//! ICF-свёртка классов доказана по RVA:
-//! ChuckStone ≡ SkeletonArchery 4 тела `0x5377A0/0x53BF10/0x53BF30/0x569330`;
-//! базовые Begin — CAttackSkill `0x5DEB00…`; общий End обоих владельцев
-//! `0x0056A330` зафиксирован у payload `DirectProjectileProgress`
-//! (`skills/execution/payload.rs`).
+//! (`0x1A1`): классы ICF-идентичны, тела Check/AI и helpers буквальны.
 //!
-//! Все Begin создают effect до Check. Check требует только U, таблицу,
-//! исходный GetTargetPath/MAX и для игрока оружие категории 3 или 4;
-//! MP, reuse, блоки пути и самонацеливание ему не принадлежат. Первый AI
-//! читает живого S либо сохранённую точку, удерживает U до абсолютного
-//! `start + delay`, затем повторяет путь, выбирает первую BLOCK_UNFLY или
-//! BLOCK_SHAPE с `S.IsAttackAble(U)` и выпускает снаряд. ChuckStone строит
-//! выпуск с принудительной длиной MAX, SkeletonArchery — обычный путь.
-//! Преграда заменяет S точкой базы, после чего GetS закрепляет объект этой
-//! клетки. Следующий AI читает живую S; координаты текущего вызова остаются
-//! локальными. NULL S на входе AI даёт два End(1) после удара.
-//! После полёта оба обходят все `CMoveShape` клетки без нового допуска,
-//! фильтра типа, проверки смерти или дедупликации.
+//! Quirks: Check не содержит MP/reuse/блоков пути/самонацеливания; преграда
+//! заменяет S точкой базы, после чего GetS закрепляет объект этой клетки;
+//! после полёта обходятся все `CMoveShape` клеток без допуска, фильтра типа,
+//! проверки смерти или дедупликации; NULL S на входе AI даёт два End(1)
+//! после удара; ChuckStone строит выпуск с принудительной длиной MAX.
 //!
-//! `DirectProjectileProgress` заменяет поля C++-объекта и хранится в том же
-//! зарегистрированном экземпляре игрока или монстра. End очищает доступность,
-//! проверку условия, начало выстрела и время полёта до Move1;
-//! `m_bAutoRestart` конструируется ложным, не меняется, а унаследованный
-//! Restart пуст.
+//! Payload `DirectProjectileProgress` заменяет поля C++-объекта (общий End
+//! `0x0056A330` зафиксирован там); `m_bAutoRestart` ложен неизменно, Restart
+//! пуст. Швы: трейты — фасады `CGame`/`CMoveShape` старого пакета (делегат
+//! `appserver/skills/directprojectile.rs`); контактный `OnBeenAttacked` и
+//! общий End — runtime-швы main loop; часы — fn-параметр делегата.
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — фасады
-//! `CGame`/`CMoveShape` старого пакета, реализация остаётся у
-//! делегата (`appserver/skills/directprojectile.rs`); имена
-//! членов сохраняют исходную операцию, швы потребляются статически (generic),
-//! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013). Первичный гейт
-//! существования региона первого объекта клетки сохранён у шва
-//! (`direct_projectile_shape_view_at` перечитывает owner-а на каждый вызов,
-//! как `dash_*` фасады `skills/dash.rs`); резолв фабрики предметов и
-//! отсутствующего оружия — у владельца. Контактный `OnBeenAttacked` и общий
-//! End семейства остаются runtime-швами старого main loop; часы приходят от
-//! делегата (fn-параметр), как в `skills/flash.rs`.
+//! Исходные владельцы PDB: `appserver/skills/{chuckstone,skeletonarchery}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#снаряды-монстров-direct-path-littlestar-yunshenglightning
 
 use nebokrai_shared::runtime::get_line_direction;
 

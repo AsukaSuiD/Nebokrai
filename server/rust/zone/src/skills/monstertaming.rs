@@ -4,70 +4,18 @@
 //! рассылает `0xC0201`; регион и монстр остаются опубликованы через
 //! синхронные End, пакет читает живую shape без копирования владельца.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monstertaming.cpp`; тела перенесены буквально.
+//! Машинные quirks: нулевая MP-цена в Check — молчаливый ret 0, а Begin
+//! всех трёх форм после КАЖДОГО CheckCastCondition-отказа (включая
+//! молчаливые) шлёт терминальный кадр `{0xBFE01, 0, 2}`; шанс — единственный
+//! `random(10000) <= Query(40001)` после всей цепочки гейтов; успех шлёт
+//! кадр `0xC0201` с legacy-C-строкой имени.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
-//! исправления расхождений DIFF-T1/DIFF-T2 выполнены в этом же участке:
+//! Швы: hub-трейты `skills/monsterattack.rs`; часы — fn-параметр
+//! `now_milliseconds` делегата старого main loop; сроки reuse/delay — общий
+//! `CSkill::IsRestored` + wrapping-сложение.
 //!
-//! - ctor (RVA `0x17B5C0`): `[+4] = 0xd4`; Begin-скелет всех TРЁХ форм
-//!   (`0x17B650`/`0x17B730`/`0x17B870`): форвард `CAttackSkill::Begin` → new
-//!   effect (vtable `0x65AAC0`) → `VT[0](1)` → слот `+0x60` CheckCastCondition;
-//!   **провал — терминальный кадр mode 2 + `End(0)` + ret 0** во всех трёх
-//!   Begin; успех — `[+0x4C] = 1`, `[+0x50] = [+0x54] = [+0x58] = 0`.
-//!   DIFF-T2: message-owner updateVE (RVA `0x17B940`, remap16
-//!   `00 01 02 08 08 08 08 03 08 08 04 05 08 06 08 07`): mode 1 → fire-кадр,
-//!   mode 2 → **`{0xBFE01, 0, 2}` SendToPlayer** (entry2 == 0x57BCEC,
-//!   подтверждено разбором jump-таблицы 0x57BD74 и байт-remap 0x57BD98);
-//!   поэтому режим Begin-отказа получает терминальный кадр `{0xBFE01, 0, 2}`.
-//!   Прежний Rust терминальный кадр пропускал — исправлено: он посылается
-//!   после КАЖДОГО CheckCastCondition-отказа ниже (включая молчаливый T1 и
-//!   отказ по null-свойствам/цели, где сам CheckCastCondition кадра не шлёт).
-//! - CheckCastCondition (RVA `0x17BDB0`): U null → ret 0 без кадра; цель не
-//!   dyn-CMonster или не IsTamable → `{0xBFE01, 0, 10}` + GS0294/GS0312/
-//!   GS0286; props null → ret 0 без кадра; S null → `{0, 10}` + GS0294;
-//!   reuse (10005, unsigned) → `{0x0d}` + GS0278; path size > Query(5003) →
-//!   `{0x0b}` + GS0290; ячейка с block == 2 → `{0x0f}` + GS0295(с именем
-//!   цели); **нулевая стоимость MP (`QueryProperty(2) == 0`) — молчаливый
-//!   ret 0 (jbe 0x57C1D5)** — DIFF-T1, прежний Rust принимал такой cast:
-//!   исправлено на молчаливый reject (с терминальным кадром T2 от Begin);
-//!   MP < cost → `{0, 7}` + GS0288(`%u`); успех — SetMoveable(0).
-//! - AI (RVA `0x17C2A0`): U/S null → `End(0)`; IsDied(S) → `{0, 10}` +
-//!   GS0285 + `End(0)`; первая фаза повторно списывает MP (`js` → `{0, 7}` +
-//!   GS0288 + `End(0)`), SetMP + OnChangeStates (vt+0x164), SetDir +
-//!   старт-кадр; delay (10001) → SetMoveable(U, 1), повторный путь по 5003
-//!   (`{0x0b}` + GS0290 + `End(0)`), fire, затем IsTamable →
-//!   IncreaseTameAttemptCount → safe-cell (block == 2 у цели или источника →
-//!   GS0315) → уровни (`target > player` → GS0314) → оружейный порог
-//!   (`weaponLevel − Query(20018) < targetLevel` → GS0314) → лимит питомцев
-//!   (`GetValidPetsAmount >= Query(31001)` → GS0313) → единственный
-//!   `random(10000) <= Query(40001)`.
-//! - Успешная ветвь AI (0x57C802..0x57C98E): `StopAllSkills` монстра до
-//!   `DoesCreatureBeenTamed` и назначения master; после увеличения счётчика
-//!   попыток IsTamable не перепроверяется; только auxiliary CPet получает
-//!   смену режима и OnLoseTarget (vt+0x2C); primary AI, его команды и hate
-//!   не очищаются. `AddPet` → `UpgradePetLevel` → кадр `0xC0201` (тип/id
-//!   монстра, тип/id игрока, legacy-C-строка имени, GetPetLevel,
-//!   GetPetExperience, GetHP, GetMaxHP) → refresh-record
-//!   `GetMonsterRefeash(...)[+0x38] -= 1` → `End(1)` с SetMoveable(U, 1)
-//!   и reuse-штампом владельца.
-//! - `CMonster::SetTamedSign` (RVA `0x0E64A0`, хвост прочитан): пишет только
-//!   `[monster+0x224] = 1` (после tame-popыток гейт); живую figure НЕ трогает.
-//!   `CMonster::GetFigure` (vt `+0x8C`, тело `0x0E7D20`) читает байт
-//!   `[tagMonster+0x20]` живой региональной записи, заполненный при спавне
-//!   той же строкой setup (`MonsterProperties.figure`), — Rust живой record
-//!   держит тем же скаляром. Поэтому снимок `property.figure` в `AddPet`
-//!   эквивалентен живому байту на момент read (diff-вопрос UNKNOWN#3 закрыт
-//!   так: доказаний расхождения нет; заполнение спавна — владение региона).
-//!   Кадр имени — legacy-C-строка (обрезка по NUL).
-//!
-//! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; часы —
-//! fn-параметр `now_milliseconds` делегата старого main loop; абсолютный
-//! срок reuse — общий `CSkill::IsRestored`, cast-delay — wrapping
-//! сложение как у машины.
+//! Исходный владелец PDB: `appserver/skills/monstertaming.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monstertaming--cmonstertaming-0xd4
 
 use nebokrai_shared::runtime::get_line_direction;
 use nebokrai_shared::resources::MonsterProperties;

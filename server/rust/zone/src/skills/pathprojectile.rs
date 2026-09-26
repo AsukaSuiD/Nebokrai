@@ -1,44 +1,21 @@
 //! Пошаговые снаряды `CEnergyBolt` (`0x1A0`), `CSnakeBolt` (`0x1A5`) и
-//! `CZombieClaw` (`0x1A2`). Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`)
-//! + `GameServer.pdb` (RSDS match), исходные владельцы `energybolt.cpp`,
-//! `snakebolt.cpp` и `zombieclaw.cpp`. ICF-свёртка классов доказана по RVA:
-//! EnergyBolt ≡ SnakeBolt ≡ ZombieClaw, общий End `0x53AF50`; базовые
-//! Begin — CAttackSkill `0x5DEB00…`. Payload полёта и область удара —
-//! `skills/execution/payload.rs` (`PathProjectileProgress`/
+//! `CZombieClaw` (`0x1A2`): классы ICF-идентичны. Payload полёта и область
+//! удара — `skills/execution/payload.rs` (`PathProjectileProgress`/
 //! `PathProjectileScope`).
 //!
-//! CPlayer и CMonster разделяют зарегистрированный жизненный цикл Attack: Begin
-//! создаёт эффект до Check, первый AI повторно списывает MP и поворачивает U,
-//! а выпуск ждёт беззнакового start+delay. Путь принудительно ограничен MAX,
-//! сохраняется после выпуска и обрабатывается по одной клетке через
-//! start+delay+flying*position. Область создаётся только после успешного Check
-//! и сохраняется между End; уровни 1/2 дают 1×1, остальные (включая 0) — 3×3.
-//! End очищает текущий путь и скаляры до Move1, но не сохранённую область.
-//! У всех трёх позиция начинается с 0 в Begin; выпуск меняет флаги, но
-//! не перезаписывает позицию, в том числе после вложенного вызова.
-//! В Check нулевая MP-цена EnergyBolt не запрещает движение, а SnakeBolt и
-//! ZombieClaw его запрещают; первый AI Player во всех трёх случаях выполняет
-//! MP→OnChangeStates.
+//! Quirks: путь форсирован MAX и сохраняется после выпуска, обработка по
+//! одной клетке через `start+delay+flying·position`; область 1×1 уровням 1/2,
+//! иначе 3×3, сохраняется между End; позиция начинается с 0 в Begin и не
+//! перезаписывается выпуском (в т.ч. после вложенного вызова); у EnergyBolt
+//! нулевая MP-цена не запрещает движение, у SnakeBolt/ZombieClaw — запрещает.
 //!
-//! Каждый контакт читает живой список CMoveShape области X→Y. Формула прямой
-//! стихии, снимок/End SoulCollect, PK и непосредственный OnBeenAttacked
-//! остаются hub-владением `directelementattack` (объявленный шов ниже); здесь
-//! — порядок области, visual target и жизненный цикл. Общий путь строится по
-//! сохранённой базе Begin и живому S, поэтому point/object Begin не получают
-//! искусственного отказа.
+//! Швы: трейты — фасады `CGame`/`CMoveShape` старого пакета (делегат
+//! `appserver/skills/energybolt.rs`); проверка/списание MP (`rangedweaponcast`),
+//! стихийный удар (`directelementattack`) и полный End — runtime-швы main loop;
+//! часы — fn-параметр делегата.
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CMoveShape`, реализация остаётся у
-//! делегата старого пакета (`appserver/skills/energybolt.rs`); имена членов
-//! сохраняют исходную операцию, швы потребляются статически (generic),
-//! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013). Первичный гейт
-//! существования текущего региона сохранён отдельным фасадом
-//! (`path_projectile_region_exists` + `path_projectile_skill_cell_block`,
-//! owner перечитывается на каждый вызов, как `dash_*` фасады
-//! `skills/dash.rs`). Общие проверка/списание MP (`rangedweaponcast`),
-//! стихийный удар (`directelementattack`) и полный End семейства остаются
-//! runtime-швами старого main loop; часы приходят от делегата (fn-параметр),
-//! как в `skills/flash.rs`.
+//! Исходные владельцы PDB: `appserver/skills/{energybolt,snakebolt,zombieclaw}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#снаряды-монстров-direct-path-littlestar-yunshenglightning
 
 use nebokrai_shared::runtime::get_line_direction;
 

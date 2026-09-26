@@ -1,54 +1,21 @@
 //! Круговая атака `CMonsterRangeAttack` (ID `0x2ef`): player-путь
-//! (Check/AI/Calc) и монстровые Begin/prepare/контакт маски 7x7 вокруг
+//! (Check/AI/Calc) и монстровые Begin/prepare/контакт маски 7×7 вокруг
 //! источника. На время прямого удара настоящий CPlayerAI опубликован в
 //! CPlayer: вложенные обработчики смерти видят и изменяют ту же очередь
 //! источника.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterrangeattack.cpp`; тела перенесены буквально.
-//! Hub оркестрации монстра остаётся у `execute_owned_monster_base_attack`
-//! старого пакета.
+//! Машинные quirks: нулевая MP-цена у player — молчаливый ret 0, non-player
+//! проходит без MP и без SetMoveable; старт-кадр без поворота; обход маски
+//! `x+7y`, начало `tile − 3`, IsAttackAble кандидата перед дедупликацией,
+//! цель в список после Attack; calc — вид 3 с добавкой
+//! `trunc(unsigned(EM)×0.01f×ElementModify)`; RP не увеличивается.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`)
-//! подтверждает:
-//!
-//! - ctor (RVA `0x111590`): `[+4] = 0x2ef`; статические
-//!   `g_dwLength/g_dwHeight == 7`, маска `g_bScope` по `0x006A0ECC`.
-//! - CheckCastCondition (RVA `0x111CF0`): param null / props null → ret 0
-//!   без кадра; reuse (10005) → `{0xBFE01, 0, 13}` + GS1143 только у
-//!   dyn-CPlayer; **non-player проходит без MP и без SetMoveable** (je
-//!   0x511E1F); player: **нулевая стоимость MP → молчаливый ret 0** (jbe
-//!   0x511EA1), MP < cost → `{0, 7}` + GS1144(`%u`) → ret 0; успех —
-//!   SetMoveable(param, 0).
-//! - AI (RVA `0x112500`): `[+0x4C] == 0` → выход; props null → `End(0)`
-//!   (0x512900); U null → `End(0)`; первая фаза повторно списывает MP
-//!   только у dyn-CPlayer (`MP - Query(2)`, js → `{0, 7}` + GS + End(0);
-//!   `SetMP` + vt+0x164 OnChangeStates), start-кадр (mode 0) **без
-//!   поворота**, `[+0x3C] = QueryProperty(10006)`; delay — абсолютный
-//!   unsigned-срок `[+0x2C] + QueryProperty(10001)`; fire-кадр (mode 1) с
-//!   центром U; регион из `[U+0x40]` (null → `End(1)`); обход
-//!   g_dwLength×g_dwHeight: X внешний, Y внутренний, индекс маски **x+7y**,
-//!   начало `tile - 3`; клетка читается после предыдущих ударов;
-//!   `IsAttackAble(U)` кандидата **перед** дедупликацией; цель добавляется
-//!   в список **после** Attack; конец обхода — `End(1)` со штампом reuse.
-//! - Calculate (RVA `0x112170`): id/уровень записываются в seed; hit =
-//!   `Query(20001)`; damage_factor = `U->vt+0x184(S->vt+0x110())` float;
-//!   **span `abs(max-min) + 1`, вид 3**; значение = AddElementAtk(U) +
-//!   min(20008) + random(span из 20009−20008) + **trunc(unsigned(EM=20015)
-//!   × 0.01f(const 0x64DBD0) × ElementModify)** (unsigned-переход через
-//!   fild+fadd 2^32, `fimul` по EC); критический roll только у dyn-CPlayer
-//!   (`random(100) < vt+0x114`, `×[player+0x414]` с x87-усечением); монстр
-//!   player-ветвей не выполняет — его ElementModify/AddElementAtk == 0.
-//! - Attack (RVA `0x1123E0`): RP атакующего **не** увеличивается (в отличие
-//!   от базовой атаки семьи). End общего владельца 0x146090: нули фаз,
-//!   SetMoveable(U, 1), аргумент в CAttackSkill::End.
-//!
-//! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; derived
-//! `g_dwLength/g_dwHeight` read через константы ниже; часы — fn-параметр
+//! Швы: hub-трейты `skills/monsterattack.rs`; hub оркестрации монстра —
+//! `execute_owned_monster_base_attack` старого пакета; часы — fn-параметр
 //! `now_milliseconds` делегата старого main loop.
+//!
+//! Исходный владелец PDB: `appserver/skills/monsterrangeattack.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterrangeattack--cmonsterrangeattack-0x2ef
 
 use crate::app::game_message::CMessage;
 use crate::combat::{

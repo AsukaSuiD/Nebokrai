@@ -11,16 +11,16 @@ mod battlefairytransfer; // Check/AI CHuoxieshu/CLingzhishu (точечная BF
 pub mod battlefairysummon; // призыв, следование и гибель/воскрешение боевого духа у CPlayer: SetWarSoulStaus, SummonBF±1, ComputeWarSoulXY, spatial tails и death/revive (view/closure-швы прежнего hub CPlayer).
 pub mod blind; // CBlind (0x76): kernel-вход, visual и AddBlindState (hub-швы `selfcast`).
 pub mod blindstate; // общий lifecycle 8-байт lock-состояний Blind/Rush/Rush2/BoaLock/KnockOut/KnightCut/SpiderWeb/Seal/Strike.
-pub mod bossbluefury; // CBossBlueFury (0x1F7): Check/AI и продув состояний (продув каждого 0x1F7 → новый state → UpdateProperty → End(1)); FIX F3 — машинный полный sweep вместо первого ключа; visual с BYTE-формой отказов (hub-швы `statecast`+`fury`, монстр-вход — hub `monsterattack`).
+pub mod bossbluefury; // CBossBlueFury (0x1F7): Check/AI и продув состояний (каждый живой слот 0x1F7 → новый state → UpdateProperty → End(1)); visual с BYTE-формой отказов (hub-швы `statecast`+`fury`, монстр-вход — hub `monsterattack`).
 pub mod bossbluefurystate; // живые Begin/End/Restart/AI и OnUpdateProperties CBossBlueFuryState с швом fightable (данные/кодек — `effects/bossbluefury`).
 pub mod callosity; // Check/AI взаимно исключающих CCallosity/CCallosity2 (hub-швы `selfcast`).
 pub mod callositystate; // живые replace/restart/AI/End CCallosityState/CCallosityState2.
 mod chaossphere; // движущаяся область CChaosSpherePhalanx, её живая форма и тело Summon.
-pub mod corpsecandleblasting; // CCorpseCandleBlasting (0x194): execute_owned буквально (маска x+3y с дырой в центре, X→Y, 600→600 внутри Attack, BF60B-кадр, stage-for-delete, death-скрипт); FIX F1 — MIN/MAX 20008/20009 и hit 20001 из Calc 0x582EA0 (hub `monsterattack` + фасады скрипта/удаления).
-pub mod corpseptomaine; // CCorpsePtomaine (0x19F): обе ветви буквально, полный 3×3, MP-fаза player, AddState-замена первого 0x191; FIX F2 — player-scan без allowlist типов (AI 0x53A230) (hub `monsterattack` + общая арена `spiderpoison`).
+pub mod corpsecandleblasting; // CCorpseCandleBlasting (0x194): execute_owned буквально (маска x+3y без центра, 600→600 внутри Attack, BF60B-кадр, stage-for-delete, death-скрипт); формула — MIN/MAX 20008/20009, hit 20001 (hub `monsterattack` + фасады скрипта/удаления).
+pub mod corpseptomaine; // CCorpsePtomaine (0x19F): обе ветви буквально, полный 3×3, MP-fаза player, AddState-замена первого 0x191; player-scan принимает любой живой CMoveShape (hub `monsterattack` + общая арена `spiderpoison`).
 pub mod cure; // Check/AI CCure, числовое правило и выбор снимаемых состояний CastCure (hub-швы `statecast`).
 pub mod curestate; // живые Begin/restart/AI/End CCureState над hub-швами `statecast`.
-pub mod daubpoison; // CDaubPoison (0xDF): правило срока и apply с заменой первого непустого 0xDF-слота (ctor keep только из Query(10002), Begin(U,U)); скелет Check/AI — hub `selfstatecast`, отклонение не-player в AI — подтверждённое сознательное.
+pub mod daubpoison; // CDaubPoison (0xDF): правило срока и apply с заменой первого непустого 0xDF-слота (ctor keep только из Query(10002), Begin(U,U)); скелет Check/AI — hub `selfstatecast` (он же отклоняет источник не типа Player).
 pub mod daubpoisonstate; // живые Begin/restart/update/End CDaubPoisonState над hub `statecast`; данные/кодек — `effects/daubpoison`.
 pub mod dash; // рывки: общая геометрия пути, единый visual и контакт Flash/LittleFlash + hub-швы DashSkillGame семейства.
 mod directelement; // числовой расчёт прямых элементальных ударов.
@@ -41,7 +41,7 @@ pub mod fury; // общая RP-подготовка CFury/CRageBreak (check/ра
 pub mod godbless; // Check/AI CGodBless/CGodBless2 и параметры создания их состояний (clock/install-шов `GodBlessCastRuntime`).
 pub mod godblessstate; // живые callbacks CGodBlessState/CGodBlessState2.
 mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2, живая форма CGodThunderPhalanx и тела их Summon.
-pub mod heal; // Check/AI квартета CHeal/CHeal2/CSuperHeal/CSuperHeal2 с ID навыков (FREQ машинно 6001, якорь 0x581861).
+pub mod heal; // Check/AI квартета CHeal/CHeal2/CSuperHeal/CSuperHeal2 с ID навыков (FREQ — ключ 6001).
 pub mod healstate; // живые Begin/restart/AI/End состояний периодического лечения.
 pub mod hearten; // Check/AI CHearten и параметры нового состояния.
 pub mod heartenstate; // живые Begin/restart/AI/End CHeartenState.
@@ -54,11 +54,11 @@ pub mod littlestar; // CLittleStar (0x1A4): кадры visual, формулы, �
 mod masked_area; // маска неподвижных областей FireWall и YinYang и живая форма MaskedElementPhalanx.
 pub mod monsterbasedispatch; // диспетчерский костяк CMonsterBaseAttack: select/change навыка и продолжение cast из OnFighting; реестр исполнителей остаётся hub-швом.
 pub mod monsterattack; // общая доставка удара боевых навыков монстров: допуск целей, клеточный resolver 400/500/600/1100/1200, снимок цели и применение попадания; hub-трейты `MonsterCombat*`.
-pub mod monsterbaseattack; // CMonsterBaseAttack (0x2bd): player-путь Check/AI и машинная база семьи (500-skip, IsAttackAble-вирт, IncreaseRp, max(max-min,0)+1, записи 1/3/4, weapon-фактор vt+0x184, dyn-CPlayer crit); End без movement-restore; монстр-вход — hub прежнего dispatcher; FIX B1 — End(1)+reuse при мёртвой цели mid-cast (якорь 0x114820).
+pub mod monsterbaseattack; // CMonsterBaseAttack (0x2bd): player-путь Check/AI и машинная база семьи (500-skip, IsAttackAble-вирт, IncreaseRp, max(max-min,0)+1, записи 1/3/4, weapon-фактор vt+0x184, dyn-CPlayer crit); End без movement-restore; мёртвая цель mid-cast — End(1)+reuse; монстр-вход — hub прежнего dispatcher.
 pub mod monsterfastattack; // CMonsterFastAttack (0x2d1): фазы +0x50/+0x54/+0x58, кумулятивные сроки 15001/15002, MP только player, двойной Attack с End(1), calc max(max-min,0)+1.
 pub mod monsterrangeattack; // CMonsterRangeAttack (0x2ef): Check (player-only MP + молчаливый нулевой cost), AI без поворота, маска 7×7 (x+7y, центр −3, dedup после hit), calc trunc(unsigned(EM)×0.01f×EC).
 pub mod monsterthorn; // CMonsterThorn (0x197): Check/AI/Attack/Calc и shared End 0x146090; обязательный второй RNG crit-roll (vt+0x114 ≡ 0 у монстра); монстр-вход буквально.
-pub mod monstertaming; // CMonsterTaming (0xd4): player-путь приручения; FIX T1 — нулевой MP-cost → молчаливый reject (jbe→ret0 0x57C18B), FIX T2 — терминальный кадр {0xBFE01,0,2} после каждого CheckCastCondition-отказа всех трёх Begin.
+pub mod monstertaming; // CMonsterTaming (0xd4): player-путь приручения; нулевой MP-cost — молчаливый reject; терминальный кадр {0xBFE01,0,2} после каждого CheckCastCondition-отказа всех трёх Begin.
 pub mod pathprojectile; // CEnergyBolt/CSnakeBolt/CZombieClaw (0x1A0/0x1A5/0x1A2): Check/AI путевого снаряда буквально + hub-швы делегата.
 pub mod pillar; // Check/AI и параметры стойки CPillar (hub-швы `selfcast`).
 pub mod pillarstate; // живые toggle/restart/AI/End CPillarState.
@@ -87,14 +87,14 @@ pub mod state; // клиентские контракты состояний: п
 pub mod statefactory; // декодирование последовательности состояний из GameSave.
 pub mod summoncreatureskill; // семья CSummonSkill (0x19A/0x19B/0x19C/0x1F9): Begin/AI/Summon буквально + hub-швы SummonSkill семьи; поворот внешний.
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
-mod thunder; // CThunder (0x21F): семейные Check/AI громовых облаков, круг BF918 (fix №2) и hub-трейт `SummonCloudGame`.
+mod thunder; // CThunder (0x21F): семейные Check/AI громовых облаков, круговая BF918 и hub-трейт `SummonCloudGame`.
 mod thunder2phalanx; // живая область CLeimingPhalanx2: одна активная ячейка, expiry-attack, собственные Replace/AddTo/Decord.
-pub mod thunderblow; // CThunderBlow (0x13F) и его живая область CThunderBlowPhalanx: Begin/Check/AI/Summon и формула; FIX — MP/поворот до повторной дальности (якорь 0x17A520).
+pub mod thunderblow; // CThunderBlow (0x13F) и его живая область CThunderBlowPhalanx: Begin/Check/AI/Summon и формула; MP/поворот — до повторной дальности.
 pub mod thunderblow2; // CThunderBlow2 (0x14D): Check/AI с отбрасыванием/контактом по impactattack-швам и wire-visual 0xBFE01 modes 0/1/3 (visual слит из thunderblow2visual — один исходный thunderblow2.cpp).
-pub mod thunderfirephalanx; // форма CThunderFirePhalanx (0x322) предметного CItemSkill_2: путь с разовым ForceMove, calc с GetWeaponModifier; FIX #2 — idx>=count завершает форму только в due-ветке с регионом (якорь 0x5E1970).
+pub mod thunderfirephalanx; // форма CThunderFirePhalanx (0x322) предметного CItemSkill_2: путь с разовым ForceMove, calc с GetWeaponModifier; исчерпание пути завершает форму только в due-ветке с регионом.
 mod thunderphalanx; // живая область CThunderPhalanx: 49-ячеечные окна, три часа, wire со счётчиком окон и calc с оружейным швом.
 pub mod thunderslash; // CThunderSlash (0x72) и слитый visual CThunderSlashEffect (один cpp): Check оружия/MP/RP, двухфазный AI с consume первого 0x6E без RTTI/ended-фильтра, Summon свежей таблицы (hub-швы поверх `statecast`).
-pub mod thunderslashphalanx; // форма CThunderSlashPhalanx: три часа со штампом freq до разрешения региона, цель собственной клетки, Attack с IncreaseRp(1,0); FIX #1 — Calc info[+0] := instance-id [this+8] (якорь 0x5F77B0).
+pub mod thunderslashphalanx; // форма CThunderSlashPhalanx: три часа со штампом freq до разрешения региона, цель собственной клетки, Attack с IncreaseRp(1,0); Calc пишет в info[+0] живой instance-id формы.
 mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже при нулевой цене, точечная BF918, поворот U, свёртка старой области.
 mod tianhuophalanx; // живая область CTianhuoPhalanx: скан клетки каждый проход, End→BF504, x87-calc.
 mod visualeffect; // visual-ресурс зарегистрированного навыка.
@@ -248,8 +248,7 @@ pub use monstertaming::{MONSTER_TAMING_SKILL_ID, cancel_player_monster_taming,
 // обвязка у прежнего hub), 0x194, 0x19F, 0xDF (+state), 0x21E и 0xCF
 // (скелет 0xDF — hub `selfstatecast`, BF-координатор 0x21E — hub
 // `battlefairyskill`, удар/формула 0xCF — швы `rangedweaponcast`/
-// `crossbowattack`); FIX F1 (MIN/MAX/hit ключи Calc 0x582EA0) и FIX F2
-// (player-scan без allowlist) зафиксированы в шапках владельцев.
+// `crossbowattack`); машинные quirks линии зафиксированы в шапках владельцев.
 pub use spiderpoison::{SPIDER_POISON_SKILL_ID, SpiderPoisonBeginTarget, SpiderPoisonGame,
     SpiderPoisonMoveShape, SpiderPoisonStateArena, check_spider_poison_cast,
     execute_spider_poison_ai, is_player_spider_poison_dispatch};

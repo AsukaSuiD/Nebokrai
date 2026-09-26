@@ -1,34 +1,20 @@
 //! Hub-швы и общий wire-кадр visual state-кастов пятёрки
 //! (CCure, CHearten, CPromotion, CGodBless/CGodBless2) и heal-квартета
-//! (CHeal/CHeal2/CSuperHeal/CSuperHeal2). Источник:
-//! gameserver.exe + GameServer.pdb, `appserver/states/stateskill.cpp`
-//! и совместимые `appserver/skills/{cure,hearten,promotion,godbless{,2},
-//! heal{,2},superheal{,2}}.cpp/.h` (точная пара `gameserver.exe`
-//! `4F5C98E0…` + `GameServer.pdb` RSDS match).
+//! (CHeal/CHeal2/CSuperHeal/CSuperHeal2).
 //!
-//! Общий кадр `publish_state_cast_visual` — перенос тела
-//! `publish_state_skill_visual` переходного `stateskill.rs`: wire `0xBFE01`,
-//! личная ветвь отказов BYTE-парой `[0, mode]` только игроку, around-кадр
-//! с S (fallback U) для mode 1. У пятёрки нет flight-хвоста; DWORD-форма
-//! отказов `[dword 0][byte mode]` принадлежит Fury/RageBreak —
-//! `RageCastVisualContract` + `publish_rage_cast_visual` ниже
-//! (якорь `UpdateVisualEffect@CRageBreakEffect` VA `0x59FB90`).
+//! Кадр `0xBFE01`: личная ветвь отказов BYTE-парой `[0, mode]` только
+//! игроку, around-кадр с S (fallback U) для mode 1; у пятёрки нет
+//! flight-хвоста. DWORD-форма `[dword 0][byte mode]` принадлежит
+//! Fury/RageBreak — `RageCastVisualContract` + `publish_rage_cast_visual`.
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`, реализация
-//! остаётся у него в файле-делегате `appserver/skills/statecast.rs`;
-//! имена членов сохраняют исходную операцию. Швы потребляются статически
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (прецедент
-//! ADR-0013 семейства dash). Общие хелперы старого пакета — MP/путь
-//! `rangedweaponcast` (`check_cast_mana`/`spend_cast_mana`/`check_skill_path`)
-//! и обвязка арены `states/state.rs` (`end_and_destroy_state_at`,
-//! `end_move_shape_state`, `remove_applied_state_from`,
-//! `resolve_applied_state_sufferer`, `update_property_state_visual`,
-//! `update_applied_state_end_visual`, `update_player_state_properties`) —
-//! переносятся не как тела, а объявляются швами `{check,spend}_cast_mana`,
-//! `check_skill_path` и одноимёнными методами трейта.
-//! Аргумент `now` — часы прежнего main loop (делегат передаёт
-//! `runtime.now_milliseconds()`), как в `skills/flash.rs`.
+//! Швы: трейты ниже — переходные фасады прежнего владельца (файл-делегат
+//! `appserver/skills/statecast.rs` старого пакета); MP/путь —
+//! `rangedweaponcast`, обвязка арены — `states/state.rs` старого пакета;
+//! часы — `now` делегата прежнего main loop.
+//!
+//! Исходные владельцы PDB: `appserver/states/stateskill.cpp` и совместимые
+//! `appserver/skills/{cure,hearten,promotion,godbless{,2},heal{,2},superheal{,2}}.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#statecast--общий-wire-кадр-visual
 
 use nebokrai_shared::values::CGuid;
 

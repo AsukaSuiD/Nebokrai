@@ -1,36 +1,19 @@
 //! Общая блокировка движения и боя для Blind и состояний рывка в Zone;
 //! BoaLock использует тот же lifecycle, но запрещает только движение.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/blindstate.cpp` и `boalockstate.cpp`.
-//! Тела перенесены буквально. Данные и 8-байтная
-//! запись семейства — `effects/blind.rs` (там же адреса конструкторов и
-//! общего кодека: Serialize `0x1F51E0`, Unserialize `0x1EAAC0`,
-//! GetRemainedTime `0x1F2CD0`, AI-fold `0x1D5BA0`); Begin самого CBlind —
-//! `0x16DA30` (`skills/blind.rs`).
+//! Данные и 8-байтная запись семейства — `effects/blind.rs` (там же адреса
+//! конструкторов и общего кодека).
 //!
-//! Объектный Begin требует S; NULL U сохраняет timestamp. Visual Update(0)
-//! предшествует move/fight-lock и публикации нового экземпляра в общей арене.
-//! Перезапуск обновляет существующий visual и S, не заменяя payload и его срок.
-//! End выполняет visual → актуальная S → fight-unlock → move-unlock →
-//! RemoveState того же объекта. Отсутствующая S не снимает запреты держателя.
+//! Quirks: строгий wrapping deadline действует и при нулевом сроке; End не
+//! снимает запреты держателя при отсутствующей S; общие AI/End обслуживают
+//! также KnockOut/SpiderWeb/Seal/Strike/KnightCut/BoaLock; OnAction не
+//! объединён — Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
+//! остальные ничего не делают.
 //!
-//! Строгий wrapping deadline действует и при нулевом сроке. Восьмибайтный
-//! ID/remaining codec читает часы перед remaining при Load и после ID при Save.
-//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike/KnightCut/BoaLock. Для primary
-//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut/BoaLock payload-адаптер и Seal сохраняют тот же Begin;
-//! caller выбирает append либо освобождённый прежний слот без второго хранилища.
-//! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
-//! Rush/Rush2/SpiderWeb/Strike/BoaLock ничего не делают.
+//! Швы: hub `selfcast::SelfCastGame`; обвязка арены — прежний
+//! `states/state.rs` (одноимённые методы трейта).
 //!
-//! Объявленные швы переноса (не расхождения): hub `selfcast::SelfCastGame`
-//! реализован у прежнего владельца; обвязка арены (`begin_base_applied_state`,
-//! `begin_applied_state_visual`, `update_applied_state_visual_base`,
-//! `update_applied_state_end_visual`, `resolve_applied_state_sufferer`,
-//! `remove_applied_state_from`, `end_and_destroy_state_at`) остаётся у
-//! прежнего `states/state.rs` и объявлена одноимёнными методами трейта.
-//! Часть свидетельства разведки оставлена машинно честной: конструктор
-//! CBoaLockState (`0x5FB560`) машинно НЕ CBlind (`0x607380`) — общими у
-//! семейства остаются данные/codec/AI, а не конструктор.
+//! Исходные владельцы PDB: `appserver/skills/{blindstate,boalockstate}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#blindstate--8-байтный-lifecycle-blindlock-семейства
 
 use nebokrai_shared::values::CGuid;
 

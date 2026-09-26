@@ -1,35 +1,22 @@
 //! Правила зарегистрированной self-state семьи: Agility `0xDA`, Agility2
 //! `0x81`, Natural `0xDC`, Rapture `0xDB`, DaubPoison и щиты ManaShield/
-//! MachineShield.
-//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb` (пара
-//! `4F5C98E0…`, RSDS match), `appserver/skills/{agility,agility2,natural,
+//! MachineShield: ID-карта семьи, выбор ветки состояния, текст MP-отказа и
+//! создание Agility-состояний после завершения старых.
+//!
+//! Quirks: ManaShield не проверяет смерть U и удаляет первый встреченный ID
+//! `0x141`; Agility2 заменяет только первый `0x81`; постоянное семейство
+//! завершает все `0xDA/0xDB/0xDC`; visual object Begin — loop1 у постоянных,
+//! loop0 у временной Agility2; BFE03/BFE04 несут time=0 и additional=0.
+//!
+//! Живой обход Game (арена, участники, очередь, часы) — за переходным
+//! `appserver/skills/{selfstatecast,selfshield,agility,agilitystate,
+//! agilitystate2}.rs`; данные состояний и формулы — zone/effects.
+//! UNKNOWN: тела AI Natural/Rapture/DaubPoison/MachineShield и ctor-маппинг
+//! MachineShield не сняты; общие цепочки подтверждены по ManaShield.
+//!
+//! Исходные владельцы PDB: `appserver/skills/{agility,agility2,natural,
 //! rapture,daubpoison,manashield,machineshield}.cpp` и owners состояний.
-//!
-//! Машинно установлено: Check после reuse (usage 10005 общего cast) не даёт
-//! источнику не типа Player Move0, а у игрока MP0 означает тихий отказ;
-//! щиты требуют
-//! Player и допускают Move0 даже при MP0. Строки ошибок GS0278/GS0279/GS0288
-//! байт-сверены. AI: первая фаза читает MP, заново спрашивает цену, выполняет
-//! signed DWORD-проверку, затем SetMP → OnChangeStates → CAN → visual0 →
-//! condition; выпуск ждёт unsigned start+delay и публикует visual1. Смерть U
-//! у пяти усилений даёт visual2/End(1), ManaShield её не проверяет и удаляет
-//! первый встреченный ID `0x141`; Agility2 заменяет только первый `0x81`, а
-//! постоянное семейство обходит и завершает все `0xDA/0xDB/0xDC`. Бонус и
-//! persist читаются после завершения старых состояний; Agility2 затем
-//! дополнительно читает persist. Visual object Begin — loop1 у постоянных,
-//! loop0 у временной Agility2; BFE03 и BFE04 несут time=0 (клиентский
-//! остаток — у Agility2) и additional=0.
-//! UNKNOWN честные: тела `CNatural::AI`, `CRapture::AI`, `CDaubPoison::AI`,
-//! `CMachineShield::AI` и ctor-маппинг MachineShield дизассемблом не сняты;
-//! разделяемые ими строки/цепочки подтверждены по ManaShield
-//! (ctor-мэппинг keep `0x2712`, life `0x271A`, phys `0x271B`, elem `0x271C`,
-//! `0x4E38`/`0x4E39` и MP-отказ visual7+GS0288 — 1:1).
-//!
-//! Живой обход Game (арена состояний, участники, очередь исполнения, часы)
-//! остаётся за переходным `appserver/skills/{selfstatecast,selfshield,
-//! agility,agilitystate,agilitystate2}.rs`; данные состояний и формулы —
-//! zone/effects. Здесь ID-карта семьи, выбор ветки состояния, текст MP-отказа
-//! и создание Agility-состояний по таблице свойств после завершения старых.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#selfstate--правила-self-state-семьи
 
 use crate::effects::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AgilityState2, MACHINE_SHIELD_SKILL_ID,

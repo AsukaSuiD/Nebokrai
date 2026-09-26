@@ -1,28 +1,21 @@
 //! Правила зарегистрированного цикла immediate-состояний TaiJi, Origin,
-//! трёх Enlarge, четырёх Swordship и пяти WuXing.
-//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb` (пара
-//! `4F5C98E0…`, RSDS match), `appserver/skills/{taiji,origin,enlargefullmiss,
-//! enlargemaxhp,enlargemaxmp,swordship,swordship2,swordship3,swordship4,wuxing*}.cpp`.
+//! трёх Enlarge, четырёх Swordship и пяти WuXing: ID-карта семьи, подстановка
+//! S, ветка установки, End-политика и подготовка payload по таблице свойств.
+//! Живой обход Game, арена, публикация и часы — у старого
+//! `appserver/skills/immediatestate*.rs`.
 //!
-//! Машинная сверка подтверждает: общий Begin-цикл пятнадцати навыков
-//! выполняет Check чтением `[skill+0x64]`, при отказе — End(0), при успехе — phase=1; reuse, MP,
-//! visual и Move в цикле отсутствуют. AI читает свойства до GetU и допускает
-//! при NULL U подстановку GetS, кроме Swordship, которому нужен именно U.
-//! `CTaiJi::AI` VA `0x005AF770` и `COrigin::AI` VA `0x005AEA70`: создание и
-//! первичный Begin нового состояния до поиска первого старого ID, затем End
-//! старого, destroy свежего остатка и установка в ту же позицию,
-//! UpdateProperty и End(1). Три Enlarge исполняют End первого ID до чтения
-//! прибавки и добавляют новое состояние в конец, UpdateProperty безусловно
-//! даже при отказе Begin; Swordship1-4 завершают AI вызовом End(0), включая
-//! успешную установку. Остальные immediate-семейства дают End(1) включая
-//! отказ Begin состояния. UNKNOWN честные: writer/reader тела
-//! Serialize/Unserialize состояний (шапки данных — zone/effects).
+//! Quirks: общий Begin-цикл без reuse/MP/visual/Move; подстановка GetS при
+//! NULL U везде, кроме Swordship (ему нужен именно U); три Enlarge выполняют
+//! UpdateProperty безусловно даже при отказе Begin; Swordship1-4 завершают AI
+//! вызовом End(0) включая успешную установку; остальные — End(1) включая
+//! отказ Begin состояния; Swordship читает MIN перед MAX.
 //!
-//! Живой обход Game (поиск участников, арена состояний, публикация, часы
-//! машины) остаётся за старым `appserver/skills/immediatestate*.rs`;
-//! здесь ID-карта семьи, подстановка S, ветка установки, End-политика и
-//! подготовка payload по таблице свойств. Swordship читает MIN перед MAX —
-//! порядок подтверждён property callback и writer состояний.
+//! UNKNOWN: writer/reader тел Serialize/Unserialize состояний (данные —
+//! zone/effects).
+//!
+//! Исходные владельцы PDB: `appserver/skills/{taiji,origin,enlargefullmiss,
+//! enlargemaxhp,enlargemaxmp,swordship{,2,3,4},wuxing*}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#immediate--цикл-immediate-состояний-15-навыков
 
 use crate::effects::{
     ENLARGE_FULL_MISS_STATE_ID, ENLARGE_MAX_HP_STATE_ID, ENLARGE_MAX_MP_STATE_ID,

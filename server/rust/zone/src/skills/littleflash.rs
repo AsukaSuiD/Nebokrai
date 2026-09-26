@@ -1,30 +1,20 @@
 //! Малые рывки сквозь строй: LittleFlash и LittleFlash2.
 //!
-//! Источник: точная пара `gameserver.exe` `4F5C98E0…` + `GameServer.pdb`
-//! (RSDS match), appserver/skills/littleflash.cpp и littleflash2.cpp; тела
-//! перенесены буквально. Машинная сверка подтверждает: LF — MP→OnChangeStates до
-//! повторного weapon (GS0292), CAN=raw, delay → VE(1) до SetTileXY(back),
-//! финал delay+10009; LF2 — sufferer опционален, gate assigned region,
-//! не требует занятую клетку и очищает одиночный закрытый выход
-//! (`clear_single_blocked`); GS-строки 0278/0288/0290/0292/0302/0309
-//! байт-сверены.
+//! Quirks: только первый вариант требует S и занятую клетку на пути; второй
+//! движется к сохранённой точке и отвергает одиночную заблокированную клетку
+//! (`clear_single_blocked`); MP списывается до повторной проверки меча без
+//! возврата при отказе; visual публикует последнюю клетку пути до настоящего
+//! SetTileXY; пролог End освобождает путь перед списком целей.
 //!
-//! Независимые регистрации используют общий lifecycle, но только первый
-//! вариант требует S и занятую клетку на пути. Второй может двигаться к
-//! сохранённой точке и отвергает одиночную заблокированную клетку.
-//! MP списывается до повторной проверки меча; отказ не возвращает ресурс.
-//! Visual публикует последнюю клетку пути до настоящего SetTileXY. Во время
-//! удара поклеточный снимок сохраняется, а путь и список поражённых остаются
-//! у зарегистрированного экземпляра и видны синхронному End. Его пролог
-//! освобождает путь перед списком целей; общий Attack-End владеет AfterUse.
+//! Швы: фасады `DashSkillGame`/`DashSkillContact` (`skills/dash.rs`);
+//! проверка меча — общий предикат `flash::weapon_is_valid` (category 2).
+//! `SKILL_USAGE_CAN_BE_BREAKED` — usage `10006`, локальная константа по
+//! конвенции per-owner файлов старого пакета.
 //!
-//! Объявленные швы — фасады `DashSkillGame`/`DashSkillContact`
-//! (`skills/dash.rs`, реализация у владельца старого пакета); проверка меча —
-//! общий предикат `flash::weapon_is_valid` (category 2), как в старом
-//! пакете. `SKILL_USAGE_CAN_BE_BREAKED` — usage `10006`, локальная константа
-//! по конвенции per-owner файлов старого пакета (единая таблица — World
-//! skill cache). Оставшийся UNKNOWN разведки — потребители raw CAN
-//! `available` (низкий риск).
+//! UNKNOWN: потребители raw CAN `available`.
+//!
+//! Исходные владельцы PDB: `appserver/skills/{littleflash,littleflash2}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#dashflashlittleflash--рывки
 
 use nebokrai_shared::runtime::get_line_direction;
 

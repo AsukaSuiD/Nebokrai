@@ -1,35 +1,22 @@
-//! Малая звезда `CLittleStar` (`0x1A4`) для игроков и монстров. Источник:
-//! точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
-//! (RSDS match), исходный владелец `appserver/skills/littlestar.cpp`.
-//! ICF-свёртки класса доказаны по RVA:
-//! `CLittleStar::End` ≡ `CSevenShootingStar::End` `0x5345F0`,
-//! `CheckAttackPath` ≡ `CChainLightning` `0x534650`; базовые Begin —
-//! CAttackSkill `0x5DEB00…`. Payload исполнений —
-//! `skills/execution/payload.rs` `PlayerLittleStarExecutionState`/
-//! `LittleStarProgress`.
+//! Малая звезда `CLittleStar` (`0x1A4`) для игроков и монстров: числовые
+//! правила, формулы, геометрия пути и wire-кадры visual `0x000BFE01` обеих
+//! ветвей. Payload исполнений — `skills/execution/payload.rs`.
 //!
-//! Сюда перенесены буквально числовые правила, формулы, геометрия пути и
-//! wire-кадры visual `0x000BFE01` обеих ветвей (player/monster): после
-//! задержки один раз строится прямой путь предельной длины, публикуется его
-//! конечная клетка, и до строгой границы длительности периодически
-//! обходятся клетки до первой `BLOCK_UNFLY`. Каждая допустимая цель получает
-//! ровно один вызов legacy RNG. Стихийная прибавка вычисляется в расширенной
-//! точности x87 из целых свойств и сохранённой `f32`-константы, затем
-//! усекается к нулю. Player и monster ветви используют абсолютный срок
-//! `CSkill::IsRestored`; периодические тики и общая длительность остаются
+//! Quirks: объектный Begin обнуляет fallback (+0x24/+0x28), поэтому до
+//! построения пути он равен (0,0), а не позиции источника; один путь
+//! предельной длины с публикацией конечной клетки, периодический обход до
+//! первой `BLOCK_UNFLY`, один вызов legacy RNG на цель, x87-прибавка из целых
+//! свойств с сохранённой f32-константой и усечением к нулю. Player и monster
+//! ветви — абсолютный срок `CSkill::IsRestored`; тики и длительность —
 //! elapsed.
 //!
-//! Hub-утяжеление остаётся у делегата старого пакета и здесь не переносится:
-//! обход клеток и допуск целей пути типа 400/600 перед Calculate, применение
-//! атак (`apply_owned_skill_attack_to_player/monster`,
-//! `apply_owned_monster_attack_hit`), публикация настоящего `CPlayerAI` и
-//! временное владение `ServerRegionOwner` общего death/End callback,
-//! `finish_summon_skill`, зарегистрированный цикл монстра и доставка кадров.
-//! Потеря объектной цели не отменяет уже начатый cast: AI (`0x00535E34`)
-//! использует резервные координаты +0x24/+0x28; объектный Begin обнуляет их
-//! (`0x005DBDBA`), поэтому до построения пути fallback равен (0, 0), а не
-//! позиции источника. Player `End` и monster `End` (`0x005355F0`) сохраняют
-//! свой порядок у владельца старого пакета.
+//! Швы: обход клеток, допуск целей 400/600 перед Calculate, применение атак,
+//! публикация `CPlayerAI`, `finish_summon_skill`, зарегистрированный цикл и
+//! доставка кадров — делегат старого пакета; player/monster `End` сохраняют
+//! свой порядок у его владельца.
+//!
+//! Исходный владелец PDB: `appserver/skills/littlestar.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#снаряды-монстров-direct-path-littlestar-yunshenglightning
 
 use crate::app::game_message::CMessage;
 use crate::combat::truncate_original;

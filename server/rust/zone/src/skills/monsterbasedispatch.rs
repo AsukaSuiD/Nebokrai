@@ -3,55 +3,18 @@
 //! уже начатого cast-а из `OnFighting` через реестр зарегистрированных
 //! исполнителей.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Координатор старого пакета —
-//! `appserver/skills/monsterbaseattack.cpp`; native-функции семьи:
-//! `CMonsterAI::OnChangeSkill` (RVA `0x1DCBC0`), `CMonsterAI::SelectAttackSkill`
-//! (RVA `0x1DD0B0`), проекция `OnFighting` общего `CBaseAI::Run`
-//! (RVA `0x0C7D10`, ветка `AI_EVENT 2`) и общий `CSkill::GetCurrentSkill`,
-//! наследуемый `CPet::OnAttackingSchedule`/`OnStayingSchedule` (RVA
-//! `0x0E9A20`/`0x0E9650`).
+//! Реестр исполнителей `owned_registered_cast_executor` НЕ переносится и
+//! остаётся владением старого `appserver/skills/monsterbaseattack.rs`; сюда
+//! перенесён только диспетчерский костяк (continue-решение `OnFighting`,
+//! выбор и смена навыка). Специфические selector-ы боссов, владыки и
+//! стационарных лучников — швы своих групп (`bossblue`, `bossfiend`, `lord`,
+//! `fixedpositionarcher`).
 //!
-//! Машинная база (VERIFIED по этой паре):
+//! UNKNOWN: состав и порядок обхода массивов default-ID по категориям
+//! `GetDefaultAttackSkillID` — у владельца реестра `moveshape`.
 //!
-//! - `OnChangeSkill`: `SelectAttackSkill` → уже выбранный concrete skill
-//!   проверяется `IsRestored` (vt `+0x80`: `QueryProperty(10005) + [+0x40] <
-//!   timeGetTime`; null-props → 1) → готово; иначе
-//!   `SetCurrentSkill(GetDefaultAttackSkillID())`; возврат всегда 1.
-//! - `SelectAttackSkill`: `dynamic_cast CMonster`, один `random(10000)`,
-//!   обход списка в исходном порядке, первый ID с префикс-суммой odds ≥ r,
-//!   иначе default. AI5/AI23 вместо отката ждут полный restore delay в
-//!   собственном FIFO; CPet (vtable `0x00652D0C`, `+0x24 → 0x1DCBC0`,
-//!   `+0x8C → 0x1DD0B0`) наследует общий порядок, поэтому приручение отключает
-//!   boss/lord-selector, но сохраняет исходный список odds, один RNG и
-//!   default/IsRestored. WORD-уровень dispatch проверяется до Begin без
-//!   усечения.
-//! - Уже начатый cast продолжается тем же `OnFighting` входом: общий объектный
-//!   навык 1 уходит в `CBaseAttack`, остальные — в executor реестра по
-//!   точному ID; реестр не меняет и не повторяет допуск расписания.
-//!
-//! Объявленные швы переноса (не расхождения):
-//!
-//! - Сам реестр исполнителей `owned_registered_cast_executor` НЕ переносится:
-//!   он остаётся владением старого `appserver/skills/monsterbaseattack.rs`
-//!   (его отображение ID → concrete executor складывается по мере переноса
-//!   владельцев).
-//!   Сюда перенесён только диспетчерский костяк: continue-решение
-//!   `OnFighting`, выбор и смена навыка. Реестр и продолжение общей базовой
-//!   атаки приходят hub-швами `execute_registered_cast` /
-//!   `continue_common_base_attack`; специфические selector-ы боссов, владыки и
-//!   стационарных лучников — швами своих групп владельцев (`bossblue`,
-//!   `bossfiend`, `lord`, `fixedpositionarcher`).
-//! - Hub-фасады семейства `MonsterDispatcher*` (`ai/monsterai.rs`) открывают
-//!   state-машину `CMonster`, текущий навык через фабрику и reuse timestamp.
-//! - Часы проверки restore читаются отдельным вызовом `now_milliseconds`
-//!   (fn-параметр делегата старого main loop).
-//!
-//! Честные UNKNOWN: состав и порядок обхода массивов default-ID по
-//! категориям `GetDefaultAttackSkillID` (0x004CE240) — у владельца реестра
-//! `moveshape`; поле `tdI[2]` связанного setup здесь не участвует.
+//! Исходный владелец PDB: `appserver/skills/monsterbaseattack.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterbasedispatch--диспетчер-cmonsterai
 
 use nebokrai_shared::resources::MonsterProperties;
 

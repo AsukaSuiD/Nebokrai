@@ -2,48 +2,21 @@
 //! клеточный resolver 400/500/600/1100/1200, снимок цели для конкретного
 //! удара и применение попадания через опубликованный производный регион.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходные владельцы PDB:
-//! `appserver/skills/monsterattack.cpp` (общий контакт) и
-//! `appserver/monster.cpp` (`CMonster::IsAttackAble`). Тела перенесены
-//! буквально поверх hub-трейтов ниже.
+//! Во время попадания производный регион публикуется целиком: получатель
+//! видит живые защиты, HP/MP, источник и выбранный AI цели; возврат из
+//! callback требует заново получить регион и объекты, а не применять
+//! сохранённые до защиты снимки. У NPC нулевой combat HP:
+//! `CMoveShape::IsDied` истинен независимо от action.
 //!
-//! Статусы по этой паре:
+//! Швы: трейты ниже — фасады `CGame`/`CPlayer`/`CServerRegion`/
+//! `ServerRegionOwner` старого пакета (делегат `appserver/skills/monsterattack.rs`);
+//! статическое потребление (generic), без dyn-совместимости (ADR-0013).
+//! Применение попадания использует общий `BaseAttackContact` контактной
+//! стадии. Часы — fn-параметр `now_milliseconds` делегата старого main loop.
 //!
-//! - `CMonster::IsAttackAble` (RVA `0x0E7230`, VERIFIED): первый класс-гейт
-//!   типа цели — ветвь `[edi+4] == 0x190` (player) и `0x258` (monster);
-//!   остальные типы отклоняются до PK/tame-ветвей.
-//! - `end_owned_monster_skill_without_reuse` — отображение на owner
-//!   `End(0)` живого cast без reuse-штампа (VERIFIED косвенно: owner
-//!   `CMonsterThorn::AI` 0x142180 выполняет End(0) для мёртвой/длинной цели,
-//!   `CMonsterBaseAttack::End` 0x1B3010 не восстанавливает движение и не
-//!   перечитывает свойства).
-//! - `monster_attack_cell_candidates`: список допустимых типов
-//!   400/500/600/1100/1200 и исключение источника — PARTIAL (свидетельство
-//!   прежнего владельца импортировано; resolver полного региона и фильтр
-//!   исчезнувших форм — шов старого хоста).
-//! - Во время попадания настоящий производный регион публикуется целиком:
-//!   общий получатель видит живые защиты, HP/MP, источник и выбранный AI
-//!   цели; возврат из callback требует заново получить регион и объекты, а
-//!   не применять сохранённые до защиты снимки (контракт прежнего владельца,
-//!   сохранён).
-//! - У NPC нулевой combat HP: наследуемый `CMoveShape::IsDied` (GetHP == 0)
-//!   истинен независимо от action — снимок цели держит этот факт здесь, а не
-//!   в навыках (контракт прежнего владельца, не изменён переносом).
-//!
-//! Объявленные швы переноса (не расхождения): трейты ниже — фасады
-//! `CGame`/`CPlayer`/`CServerRegion`/`ServerRegionOwner` старого пакета;
-//! реализация остаётся у делегата старого пакета
-//! (`appserver/skills/monsterattack.rs`). Потребление статическое
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
-//! `QuerySkillBaseProperties` (skillfactory), `GetShapes`/региональный
-//! resolver, чтение живой цели (player/monster/npc/build) и around-доставка —
-//! швы трейта. Применение попадания использует общий `BaseAttackContact`
-//! контактной стадии. Часы приходят fn-параметром `now_milliseconds` от
-//! делегата старого main loop (точное значение blanket
-//! `GameClockContext::now_milliseconds = game_tick_milliseconds`).
+//! Исходные владельцы PDB: `appserver/skills/monsterattack.cpp`,
+//! `appserver/monster.cpp` (`CMonster::IsAttackAble`).
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterattack--общая-доставка-и-допуск
 
 use nebokrai_shared::resources::{GlobeSetupSnapshot, MonsterProperties};
 

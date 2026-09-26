@@ -4,63 +4,20 @@
 //! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
 //! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterthorn.cpp`; тела перенесены буквально.
-//! Монстр-кейсы диспетчера остаются у hub старого пакета.
+//! Машинные quirks: `BLOCK_UNFLY` после задержки → End(1) БЕЗ удара; второй
+//! RNG crit-roll выполняется всегда, но `vt+0x114` монстра ≡ 0 — крит
+//! никогда не срабатывает; провал Begin — End(0) без терминального кадра
+//! (отличие от `CMonsterTaming`); мёртвая первая цель клетки не заменяется
+//! следующей допустимой. Монстр-кейсы диспетчера остаются у hub старого
+//! пакета.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`)
-//! подтверждает:
-//!
-//! - ctor (RVA `0x141490`): `[+4] = 0x197`; Begin-скелет трёх форм
-//!   (`0x141520`/`0x1415F0`/`0x1416E0`): форвард `CAttackSkill::Begin` →
-//!   new effect → `VT[0](1)` → слот `+0x60` CheckCastCondition; провал —
-//!   `End(0)` (0x541751) и ret 0 БЕЗ терминального кадра (отличие от
-//!   `CMonsterTaming`), успех — `[+0x4C] = 1`, `[+0x50] = 0`; первый AI
-//!   остаётся невыполненным (`[+0x50] = 0` уходит из Begin).
-//! - CheckCastCondition (RVA `0x141C40`): S null / props null → ret 0 без
-//!   кадров; reuse (10005, unsigned) → `{0xBFE01, 0, 13}`; path size >
-//!   Query(5003) → `{0, 0xb}`; любая ячейка с `[+8] == 2` (`BLOCK_UNFLY`)
-//!   → `{0, 0xf}`; успех — SetMoveable(0) (0x541DDD). GS-строк нет.
-//! - AI (RVA `0x142180`): props null → `End(0)` (0x5423E2); U null →
-//!   `End(0)`; dead S → `{0, 10}` + `End(0)` (0x5421FA); S==NULL → fallback
-//!   `{0, 0, fb_x, fb_y}` из `[+0x24]/[+0x28]`; старт-фаза до delay:
-//!   `[+0x3C] = QueryProperty(10006)`, SetDir к клетке и старт-кадр (mode 0);
-//!   delay — абсолютный unsigned wrapping-срок (unsigned jb по 0x5422AF);
-//!   слишком длинный путь → `{0, 0xb}` + `End(0)` (0x542314); `BLOCK_UNFLY`
-//!   после задержки → updateVE `{0, 15}` + `End(1)` БЕЗ удара
-//!   (0x542386..0x54239B); fire (mode 1) → `Attack(U, S)` → `End(1)` со
-//!   штампов AfterUse/reuse. End живого cast не сбрасывает AI-цель и очередь
-//!   движения.
-//! - Attack (RVA `0x142060`): пропуск только null/self до расчёта и
-//!   OnBeenAttacked; IsAttackAble/god не являются допуском этого owner-а;
-//!   IncreaseRp нет.
-//! - Calculate (RVA `0x141E10`): id/уровень/hit (20001) в seed; span
-//!   **`abs(max-min)+1`** (cdq/xor/sub), clamp `max(0)`; записи 1/3/4;
-//!   **второй RNG crit-roll обязателен даже при монструсе**: `vt+0x114`
-//!   монстра ≡ 0, поэтому крит не срабатывает никогда, `random(100)`
-//!   выполняется всегда; множитель из **глобалки float 0xEF3E5C**
-//!   (`globe_setup().critical_rate()`), x87-усечение.
-//! - message-owner updateVE (RVA `0x1417A0`, remap16
-//!   `00 01 02 08 08 08 08 03 08 08 04 05 08 06 08 07`): mode 0 → старт-кадр
-//!   (action 1, направление), mode 1 → fire-кадр (action 2, S/fallback x/y),
-//!   mode 2 → `{0xBFE01, 0, 2}` self (0x541B7F), failure-кадры 7/10/11/13/15
-//!   самому игроку.
-//! - Shared End (RVA `0x146090`): нули `[+0x50]/[+0x4C]`, SetMoveable(U, 1),
-//!   исходный аргумент в `CAttackSkill::End`.
-//! - Объектный Begin (type/id) хранит заданную identity и нулевой fallback
-//!   независимо от разрешения объекта; исчезнувшая объектная цель оставляет
-//!   пустой GetTargetPath — message-owner пишет нулевые type/id и fallback
-//!   x/y, затем Attack пропускает null, а AI выполняет End(1). Координатный
-//!   player-вход выбирает первый CMoveShape клетки, включая NPC и постройки;
-//!   мёртвую первую цель не заменяет следующей допустимой.
-//!
-//! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; общий
+//! Швы: hub-трейты `skills/monsterattack.rs`; общий
 //! `approach_attack_range`/`schedule_attack_interval` — зонский
 //! `ai::monsterai` через прежний адаптер; часы — fn-параметр
 //! `now_milliseconds` делегата старого main loop.
+//!
+//! Исходный владелец PDB: `appserver/skills/monsterthorn.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterthorn--cmonsterthorn-0x197
 
 use nebokrai_shared::runtime::get_line_direction;
 

@@ -1,55 +1,21 @@
-//! Арена экземпляров `CMoveShape::m_vStates` из GameServer.exe/GameServer.pdb
-//! (пара gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-//! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
-//! Contract: docs/gameplay/attributes-and-states.md.
-//! Перенесена из переходного Game: хранилище — бывший
-//! `appserver/moveshape/state_storage.rs`, `CanonicalStateStorage` и
-//! `LegacyStateCodec` — бывший `appserver/moveshape.rs`.
-//! Сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20): append/remove/insert
-//! записей — соседний `mutations`,
-//! AddExStatesToByteArray (0x004D10F0) — `serialization`,
-//! общий UpdateAbnormality (0x004CFD00) остаётся у владельца hub moveshape
-//! в его states/state.rs.
-//! Порядок добавления и пустые позиции после удаления принадлежат этому
-//! контейнеру; уплотнение выполняется только явно. Новый экземпляр получает
-//! новый поколенческий ключ даже при замене в прежней позиции. Общий End
-//! вызывается снаружи и может изменить тот же список до перечитывания позиции.
-//! Активный CSpiderMist не входит в этот контейнер: exact RTTI 0x0066F16C
-//! задаёт CSummonSkill→CSkill→CState, а три Begin не вызывают AddState.
-//! Проверка ID 0x198 внутри CastCure сама по себе не создаёт state-owner.
-//! SlotMap заменяет владение сырыми указателями, Vec сохраняет нативный порядок.
-//! Для пяти участков чистого расчёта CFightDefense существует временный slice-
-//! адаптер StateBatch: ключи и позиции остаются живыми при вынутом payload.
-//! Между take_batch и restore_batch не допускаются игровые callbacks; возврат
-//! заполняет только ещё живые пустые слоты, не воскрешая удалённый экземпляр.
-//! Единственный enum-каталог объединяет существующие typed payload, не вводя
-//! второго каталога игровых ID. Codec и таймеры повторного приёма предметов
-//! остаются отдельными данными владельца, а не дополнительными состояниями.
-//! Игровой AI/End-dispatch находится в hub states/state.rs; это хранилище не
-//! вызывает callbacks при Drop и не подменяет End общим сбросом payload.
-//! Запись арены различает runtime-установку и загрузку: StartAllStates
-//! (0x004CE050) вызывает Begin(nullptr, holder), не превращая пустой GetUser
-//! в текущего держателя. Это существенно для базового End (0x005DBCE0).
-//! Loaded ctor начинает с ended=true и visual=NULL. Runtime-регистрация
-//! фиксирует результат уже исполненного concrete Begin: ended=false и
-//! состояние base visual из единого callback-каталога, без повторной рассылки.
-//! Различаются loop=1, живой loop=0 GodBless2, уже завершённые one-shot
-//! Agility2/Promotion и owners без ресурса; повторный Begin заменяет ресурс.
-//! DecodeExStates 0x004D1B18 записывает sufferer type/id держателя, но оставляет
-//! region=0 из CState ctor 0x005DBCA0. Object Begin устанавливает текущий
-//! sufferer-region. Первичная установка GodBless/Fog/BF/Ex/CHBY/Undead/Ride записывает фактические
-//! User/Sufferer identity и region, включая допустимый NULL; Begin(NULL,holder)
-//! при повторном входе сохраняет User. Для ещё не перенесённых primary owners
-//! остаётся явная holder-привязка. Отдельный признак from_save больше не
-//! подменяет GetUser; сохранённый нулевой region не заменяется fallback.
-//! Cache-span загруженной записи принадлежит тому же поколенческому ключу.
-//! Это технические границы Serialize-cache, не native input-offset:
-//! Tian читает 10 байт, но пишет 12. Удаление/вставка сдвигает общие spans,
-//! не разрешая отдельному typed payload перезаписать неизвестный raw-tail.
-//! Serializer заимствует ту же арену в ReadOnly либо Save-режиме. Только Save
-//! допускает запись уже вычисленного remaining в текущий ключ до следующей
-//! позиции; адаптер не знает игровых типов, не копирует арену и не читает часы.
-//! Клиентская проекция записей и runtime-план visual — соседний `catalog`.
+//! Арена экземпляров `CMoveShape::m_vStates`. Contract:
+//! docs/gameplay/attributes-and-states.md. Перенесена из переходного Game
+//! (бывшие `appserver/moveshape/state_storage.rs`, `CanonicalStateStorage` и
+//! `LegacyStateCodec` из `appserver/moveshape.rs`).
+//!
+//! Порядок добавления и пустые позиции после удаления принадлежат контейнеру
+//! (уплотнение — только явное); новый экземпляр получает новый поколенческий
+//! ключ даже при замене в прежней позиции; общий End вызывается снаружи и
+//! может изменить список до перечитывания позиции. Запись различает
+//! runtime-установку и загрузку (Loaded ctor — ended=true, visual=NULL).
+//! Между take_batch и restore_batch игровые callbacks не допускаются; возврат
+//! заполняет только ещё живые пустые слоты.
+//!
+//! Мутации append/remove/insert — соседний `mutations`; DB-кодек — соседний
+//! `serialization`; клиентская проекция — `catalog`; AI/End-dispatch — hub
+//! `states/state.rs` (Drop не вызывает callbacks).
+//!
+//! Доказательства: docs/reconstruction/gameserver-skills.md#state--арена-кодек-и-каталог-состояний
 
 use std::ops::{Deref, DerefMut};
 

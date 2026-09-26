@@ -1,30 +1,23 @@
 //! Исполнение боевого навыка монстра в Zone; сформировано растворением
-//! hub-сварки. Раньше enum-каталог `MonsterSkillProgress` и обёртка
-//! `MonsterSkillExecution` (kernel + typed progress) жили в hub
-//! `appserver/monster.rs`, а `impl MonsterSkillExecutionAccess` и каталог
-//! impl-ов `MonsterSkillProgressState<M>` — в `appserver/moveshape.rs`; запись
-//! Zone `RegisteredSkillRecord<M>` связывалась с этими hub-данными только
-//! generic-трейтами. Теперь payload исполнения монстра — данные этого
-//! компонента, alias `MoveShapeSkill` (в `skills/execution/mod.rs`)
-//! специализирует запись монстра-владельцем, а hub `appserver` сохраняет
-//! re-export прежних имён без правок потребителей. Тела каталога, обоих
-//! макросов и сварки перенесены буквально; hub-пути payload заменены прямыми
-//! Zone-типами `execution/payload`. Источник: gameserver.exe + GameServer.pdb,
-//! `appserver/monster.h/.cpp`, `appserver/moveshape.h/.cpp` и конкретные
-//! `appserver/skills/*.cpp/.h`.
+//! hub-сварки: payload `MonsterSkillProgress` и обёртка `MonsterSkillExecution`
+//! — данные этого компонента, alias `MoveShapeSkill` (в `execution/mod.rs`)
+//! специализирует запись монстра-владельцем, hub `appserver` сохраняет
+//! re-export прежних имён. Тела каталога, макросов и сварки буквальные.
 //!
-//! Kernel и типизированный ресурс cast принадлежат `MonsterSkillExecution`
-//! конкретного `MoveShapeSkill`; reuse хранится в том же зарегистрированном
-//! экземпляре. Каталог вариантов прогресса задаёт и доступ, и End-hooks:
-//! `prepare_derived_end` снимает фазу и подтверждённые флаги полёта без
-//! удаления payload, `clear_end_paths` затем очищает owned пути в порядке
-//! `SkillOwner::end_policy`. Destination у SpiderMist и YunShengLightning не
-//! обнуляется вместе с derived-полётными флагами: End 0x0057B810 пишет только
-//! +0x4C/+0x50/+0x54/+0x58 перед GetUser, а координаты базового CState
-//! очищаются уже общим хвостом. Тип dispatch активного cast-а монстра — Zone
-//! `ai/monsterai.rs`; полная запись реестра
-//! навыков фигуры и скалярная база `SkillIdentity` — Zone
-//! `regions/skillregistry.rs`.
+//! Kernel и типизированный ресурс cast принадлежат `MonsterSkillExecution`;
+//! reuse — в том же зарегистрированном экземпляре. End-hooks: `prepare_derived_end`
+//! снимает фазу и подтверждённые флаги полёта без удаления payload,
+//! `clear_end_paths` затем очищает пути в порядке `SkillOwner::end_policy`.
+//! Destination у SpiderMist и YunShengLightning не обнуляется вместе с
+//! derived-полётными флагами (машинное тело End; координаты базового CState
+//! очищаются общим хвостом).
+//!
+//! Тип dispatch активного cast-а — Zone `ai/monsterai.rs`; полная запись
+//! реестра и скалярная база `SkillIdentity` — Zone `regions/skillregistry.rs`.
+//!
+//! Исходные владельцы PDB: `appserver/monster.h/.cpp`,
+//! `appserver/moveshape.h/.cpp`, конкретные `appserver/skills/*.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#execution--запись-и-исполнения
 
 use super::payload::{
     BossFiendPenetrateProgress, ChainLightningProgress, LightningProgress, LittleStarProgress,

@@ -1,42 +1,21 @@
 //! Живые Begin/restart/AI/End периодического лечения:
 //! CHealState/CHeal2State и CSuperHealState/CSuperHeal2State.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/{healstate,healstate2,superhealstate,
-//! superhealstate2}.cpp` и первичные `heal*.cpp`; тела перенесены буквально.
-//! Данные, кодек и правило тика
-//! принадлежат Zone `effects/heal.rs` (там же адреса vtable).
+//! Данные, кодек и правило тика — Zone `effects/heal.rs`.
 //!
-//! Machine-факты state-квартета: AI/End/Unserialize fold
-//! `0x1EEDF0/0x1EEBA0/0x1EEC70`, Serialize 5-fold `0x1F65F0` (с CRoarState).
+//! Quirks: завершается первый прежний ID без RTTI/ended-фильтра (SuperHeal
+//! удаляет D3, остальные — собственный ID); Begin/End не отправляют
+//! BFE03/BFE04; запись SuperHeal2 остаётся у выбранной цели, но её U/S
+//! указывают на заклинателя; End удаляет собственный указатель через свежего
+//! S без записи ended — при чужом или отсутствующем S запись остаётся у
+//! держателя; native читает WORD первого ID без RTTI — чужой layout здесь не
+//! имитируется; строгий wrapping срок даёт не более одного тика.
 //!
-//! Четыре варианта имеют один payload и отличаются ID. Сначала завершается
-//! первый прежний ID без RTTI/ended-фильтра, затем создаётся новый
-//! экземпляр. SuperHeal удаляет D3, остальные — собственный ID. Begin
-//! читает часы, сохраняет U/S и запускает loop=1 visual до append;
-//! счётчик сбрасывается после BeginVisual. Begin и End не отправляют
-//! BFE03/BFE04. Loop=1 не вызывает внешний callback; арена публикует
-//! готовый visual вместе с записью.
+//! Швы: hub `statecast::*`; `end_and_destroy_state_at` арены — `states/state.rs`
+//! старого пакета.
 //!
-//! Запись SuperHeal2 остаётся у выбранной цели, но её U/S указывают на
-//! заклинателя. Эти привязки живут только в общей арене, не в копии
-//! payload. End удаляет собственный указатель через свежего S без записи
-//! ended; при чужом или отсутствующем S запись остаётся у держателя.
-//! SetRegion меняет только регион S. Restart сохраняет U/старт,
-//! назначает S=holder, заново начинает visual и обнуляет счётчик.
-//!
-//! AI разрешает S и проверяет смерть до часов. Promotion читается перед
-//! первым clock; строгий unsigned wrapping срок даёт не более одного тика.
-//! Count++ предшествует свежим HP/MAX, setter и OnChangeStates; MAX
-//! читается повторно при ограничении. После callbacks отдельно читаются
-//! часы срока. Полный unsigned gain умножается на сохранённый f32-множитель
-//! и усекается FISTP без промежуточного f32. HP складывается с
-//! DWORD-переполнением. OnUpdateProperties возвращает 1 без побочных
-//! эффектов. Native читает WORD первого ID без RTTI; чужой layout здесь
-//! не имитируется.
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у владельца старого пакета; `end_and_destroy_state_at` арены
-//! остаётся у `states/state.rs` и объявлен швом.
+//! Исходные владельцы PDB: `appserver/skills/{healstate,healstate2,
+//! superhealstate,superhealstate2}.cpp` и первичные `heal*.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#healstate--живые-состояния-heal-квартета
 
 use crate::combat::truncate_original;
 use crate::effects::{DefenseShieldState, HEAL_STATE_BYTES, HealState};

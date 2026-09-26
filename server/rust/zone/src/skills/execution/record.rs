@@ -1,31 +1,22 @@
 //! Запись зарегистрированного навыка `CMoveShape` в Zone: скалярная база
 //! `SkillIdentity`, исполнение и retained данные полёта; раньше эти поля
-//! были hub-владением записи `appserver/moveshape.rs`, тела перенесены
-//! буквально.
-//! Источник: gameserver.exe + GameServer.pdb, `appserver/moveshape.h/.cpp`,
-//! `appserver/states/skill.cpp/.h` и конкретные `appserver/skills/*.cpp/.h`.
+//! были hub-владением записи `appserver/moveshape.rs`, тела буквальные.
 //!
 //! Исполнение игрока и боевого духа — конкретные Zone-каталоги
-//! (`execution/player.rs`, `execution/battlefairy.rs`); их dispatch-типы уже
-//! Zone (`skills/dispatch.rs`). Исполнение монстра — соседний
-//! `execution/monster.rs` волны Z-M4 (Zone-владение `MonsterSkillExecution`
-//! вместе с его progress-каталогом); запись связана с ним generic-сварками
-//! `MonsterSkillExecutionAccess`
-//! (kernel/стадии/End-hooks/три общих progress-типа) и
-//! `MonsterSkillProgressState<M>` (typed извлечение и установка progress),
-//! по прецеденту трейтов `StateRecordTarget` и `SkillIdentityAccess`.
+//! (`execution/player.rs`, `execution/battlefairy.rs`); dispatch-типы —
+//! `skills/dispatch.rs`; исполнение монстра — соседний `execution/monster.rs`,
+//! связь — generic-сварки `MonsterSkillExecutionAccess` и
+//! `MonsterSkillProgressState<M>`.
 //!
-//! Исполнение и принадлежащие навыку ресурсы хранятся в единственной
-//! типизированной ячейке экземпляра вместе с общим reuse timestamp. База
-//! lifecycle хранится в Inactive до concrete Begin, затем перемещается внутрь
-//! kernel игрока, боевого духа либо монстра. Установка concrete-данных
-//! сохраняет эту базу, включая уже записанные общим Begin source/target и
-//! время. Неуспешный Begin сам по себе не удаляет прежние concrete-данные.
-//! Удаление только исполнения возвращает ту же базу в Inactive без Begin, End
-//! и callback; завершение базы вызывается владельцем отдельно до удаления.
-//! При неназначенной execution retained данные также очищаются
-//! (`RegisteredSkillRecord::retained_data` всегда сбрасывается свежей
-//! регистрацией через `SkillRetainedData::for_owner`).
+//! Исполнение и ресурсы навыка — единственная типизированная ячейка
+//! экземпляра вместе с общим reuse timestamp. База lifecycle — Inactive до
+//! concrete Begin; установка concrete-данных сохраняет уже записанные общим
+//! Begin source/target и время; неуспешный Begin сам по себе не удаляет
+//! прежние данные. Свежая регистрация всегда сбрасывает retained данные
+//! (`SkillRetainedData::for_owner`).
+//!
+//! Исходные владельцы PDB: `appserver/moveshape.h/.cpp`,
+//! `appserver/states/skill.cpp/.h`, конкретные `appserver/skills/*.cpp/.h`.
 
 use super::battlefairy::BattleFairyExecution;
 use super::payload::{

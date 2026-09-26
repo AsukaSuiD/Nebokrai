@@ -1,40 +1,19 @@
 //! CFatalBlow (0x21C): Check/AI и Summon снаряда боевого духа.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/fatalblow.cpp` (ctor `0x11E130`, Summon(shape,shape)
-//! `0x51F640`: машинная цепочка summon-хелперов — MasterInfo → cast→CPlayer →
-//! GetWarSoulGoods → пермишены → prop 156 sprite → CCH WORD → EM 20015 → new
-//! → level WORD (+0x114) → 20010/20009/20008/6001/30001 → set center →
-//! initialize → region → `0xBF502` входное сообщение фаланги; порядок
-//! cch/region — машинно новый по CThunder, отличается от godthunder-аудитного).
-//! Тела перенесены буквально.
+//! Quirks: Check читает таблицу до проверки S (отсутствие S даёт
+//! visual10/ZHGS0045); летящее время — поле единственного BF-payload, не
+//! копия в effect; попадание и lifetime принадлежат отдельному снаряду
+//! (`skills/fatalblowphalanx.rs`) — owner не подменяет его фоновой AI
+//! синхронной атакой; Master сохраняется без country; после любой попытки
+//! Summon координатор выполняет End(1), отказ AddShape не подавляет
+//! сериализацию.
 //!
-//! Общий вход сохраняет зарегистрированный экземпляр, исходные аргументы
-//! объектного Begin и visual loop1. Check читает таблицу до проверки S;
-//! отсутствие S даёт 10/ZHGS0045, собственная цель проверяется только в AI.
-//! Первый конфликт состояния выбирается по позиции. MP0 и отсутствие WarSoul
-//! дают тихий отказ; стоимость вычитается как signed wrapping DWORD.
+//! Швы: hub `battlefairyskill::BattleFairyGame`; регистрация снаряда и
+//! входное `0xBF502` — делегатом через callback `complete_summon`
+//! (`FatalBlowSummon`).
 //!
-//! AI сохраняет U/S и таблицу, проверяет смерть S, затем равенство U/S.
-//! Исчезнувший предмет оставляет ожидание; запись MP и BF918 (даже при false
-//! Serialize — точечно, решение C шапки координатора) предшествуют CAN/visual0/condition
-//! и абсолютной задержке. Поздний GetTargetPath разрешает свежую S, но
-//! диагностика и Summon используют прежнюю цель. Flying-time — поле единственного
-//! BF-payload, не копия в effect.
-//!
-//! Summon повторно проверяет регион U и таблицу, очищает S навыка, сохраняет
-//! Master без country и читает параметры конструктора в исходном порядке.
-//! Clock предшествует ID; центр берётся у прежней S после конструктора.
-//! Отказ AddShape не подавляет сериализацию; после любой попытки Summon
-//! координатор выполняет End(1). Попадание и lifetime принадлежат отдельному
-//! снаряду (`skills/fatalblowphalanx.rs`): этот owner не подменяет его фоновой
-//! AI синхронной атакой. End обнуляет flying-time до visual3; его единственный
-//! общий хвост внешний.
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; фактическая регистрация снаряда и входное сообщение
-//! `0xBF502` требуют прежнего main-loop runtime и выполняются делегатом через
-//! callback `complete_summon` (`FatalBlowSummon`).
+//! Исходный владелец PDB: `appserver/skills/fatalblow.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#навыки-семейства-атрибутный-октет-bfbaseattack-transfer-fatalblow-lifeshield
 
 use crate::combat::MasterInfo;
 use crate::content::CSkillBaseProperties;

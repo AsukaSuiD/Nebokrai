@@ -1,31 +1,19 @@
 //! Правила и исполнение CCure (0x131) — очищение состояний, и выбор
-//! снимаемых состояний CastCure. Источник: GameServer/gameserver.exe +
-//! GameServer/GameServer.pdb (точная пара `4F5C98E0…` + RSDS match),
-//! `appserver/skills/cure.cpp/.h`. Машинные якоря семьи: CCure Begin
-//! `0x1AD3A0`, собственное DoesTargetEffective `0x1AD590` (NULL S с
-//! fallback U), CastCure `0x1ADB10` (порядок обхода позиций и расход RNG
-//! на каждую подходящую), AI `0x1AE110`, CCureState 8-байтный codec fold
-//! (Serialize `0x1F51E0`, Unserialize `0x1E9AC0`). Тела Check/AI,
-//! диагностика и обход состояний перенесены буквально.
+//! снимаемых состояний CastCure. Общий stateskill владеет Begin, visual
+//! loop1 и полным End; здесь выбор цели, MP, путь и CastCure.
 //!
-//! Общий stateskill владеет Begin, visual loop1 и полным End игрока и
-//! монстра; здесь выбор цели, MP, путь и CastCure. AI сохраняет участников
-//! и таблицу свойств до callbacks. Потерянная S заменяется U только для
-//! текущего вызова; дикий нетранспортный монстр дополнительно переназначает
-//! сохранённую identity цели. CAN_BE_BREAKED независим от фазы исполнения.
-//! Reuse и delay сравнивают wrapping DWORD. CastCure перечитывает живой
-//! вектор и расходует RNG для каждой подходящей позиции. Новый CureState
-//! начинает действие до End первого прежнего Cure; после замены нет
-//! дополнительного UpdateProperty.
+//! Quirks: CastCure перечитывает живой вектор и расходует RNG для каждой
+//! подходящей позиции в порядке обхода; новый CureState начинает действие до
+//! End первого прежнего Cure; после замены нет дополнительного UpdateProperty;
+//! потерянная S заменяется U только для текущего вызова; дикий
+//! нетранспортный монстр дополнительно переназначает сохранённую identity
+//! цели.
 //!
-//! Объявленные швы переноса (не расхождения): hub `statecast::{StateCastGame,
-//! StateCastPlayer, StateCastMoveShape}` реализован у прежнего владельца;
-//! разрешение `begin_target`, материализация исполнения и общий полный End
-//! остаются в `stateskill.rs` делегата. Безусловный базовый callback visual
-//! остаётся у зарегистрированного ресурса.
+//! Швы: hub `statecast::*` — у владельца старого пакета; разрешение
+//! `begin_target`, материализация и полный End — в `stateskill.rs` делегата.
 //!
-//! `cure_threshold` — `FILD` unsigned-модификатора с поправкой 2^32, затем
-//! `FMUL 0.01`, `FIMUL` свойства игрока и `FISTP DWORD` перед DWORD-арифметикой.
+//! Исходный владелец PDB: `appserver/skills/cure.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#cure--ccure-0x131
 
 use nebokrai_shared::runtime::get_line_direction;
 

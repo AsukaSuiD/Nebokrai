@@ -1,80 +1,23 @@
-//! Экипировка, свойства, улучшение и сброс боевой феи игрока (`CPlayer`-ядро
-//! war-soul goods): property-pass `BFPropertyAdd(±1)` с формулами ±gear и
-//! double-apply quirk, позиционный/безпозиционный Add/Remove/Take экипировки
-//! контейнера боевой феи, полный player-side opcode `0x8FC2A` распределения
-//! потенциала (масштаб ×10000, коэффициент 1.5), полный путь улучшения с
-//! аудитом `0x60202/0x60203`, сброс потенциала предметом `ZHQLS01` и сброс
-//! навыка предметами `ZHJNS01/02` поверх правил `battlefairy.rs`.
+//! Экипировка, свойства, улучшение и сброс боевой феи игрока: property-pass
+//! `BFPropertyAdd(±1)` с формулами ±gear, позиционный/безпозиционный
+//! Add/Remove/Take экипировки контейнера боевой феи, player-side opcode
+//! `0x8FC2A` распределения потенциала (масштаб ×10000, коэффициент 1.5),
+//! путь улучшения с аудитом `0x60202/0x60203`, сброс потенциала предметом
+//! `ZHQLS01` и сброс навыка предметами `ZHJNS01/02` поверх правил
+//! `battlefairy.rs`.
 //!
-//! Источник: точная пара `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2), `appserver/player.cpp/.h`. Тела перенесены буквально.
-//! Сводка установленных фактов: клиентские очки потенциала
-//! масштабируются ×10000 до map-insert (агрегат немасштабирован, signed-гейт);
-//! ATTACK/SPRITE — f64 `1.5`; player-ветви ±0.00001; double-apply quirk
-//! `BFPropertyAdd` подтверждён машинно (второй раунд Set-процедур после
-//! производных коэффициентов); хвост каждого прохода — `PropertiesChanged` +
-//! `0xBF918`; `GetFailResult` ≡ filter(!=0).fold(4,min), `GetProbability` —
-//! порядок 13,14,15,16,12 signed→clamp 0..=100.
+//! Машинные quirks: double-apply `BFPropertyAdd` (второй раунд Set-процедур
+//! после производных коэффициентов) воспроизводится дословно; хвост каждого
+//! property-прохода — `PropertiesChanged` + `0xBF918`.
 //!
-//! Доказательная база на той же паре образов (capstone по `.text`):
+//! Шов: обращения к живым полям прежнего `CPlayer` — hub-трейт
+//! [`BattleFairyGearHost`], реализация — адаптер
+//! `BattleFairyGearPlayerAdapter` в `appserver/player.rs` старого пакета;
+//! валидация и enum `BattleFairyCell` — у владельца контейнера.
+//! PARTIAL: player-tail улучшения сверен только по аудит-кадрам `0x60203`.
 //!
-//! | представитель | RVA | статус |
-//! |---|---|---|
-//! | `AllocatePotential` | `0xFF480` | VERIFIED_DISASSEMBLY: jump-table VA `0x50000C` по ключам `0x9B..0xA1`; ATTACK/SPRITE — f64 `1.5` (`0x653008`); добавки `0xB9`/`0xBA` (MAX_HP/MAX_MP) у ветвей `0xA1`/`0xA0`; четыре player-ветви ×(−1e-5, `0x653C68`)+`sub` ≡ `+0.00001`; per-call `PropertiesChanged` (virtual `+0x9C`) и хвост `0xBF918`; отключённая feature (байт `0xEF46C4`) — текст «8» (`ZHGS0008`) внутри каждой записи |
-//! | обработчик `0x8FC2A` | `0x95F00..0x962C0` | VERIFIED_DISASSEMBLY: `imul eax, eax, 0x2710` — клиентские очки масштабируются ×10000 до map-insert (first-wins), агрегат остаётся немасштабированным (signed `jg` по потенциалу `0xA3`); итерация std::map вызывает `AllocatePotential` по каждой записи; внешний `0xBF918` после цикла, при insufficient — пропуск |
-//! | `BFPropertyAdd` | `0x1020E0` | VERIFIED_DISASSEMBLY: ранний reject только ячейки `0xC`; десять addon-чтений (`0xCA/0xCB/0xCF/0xCC/0xCD/0xCE/0xD0/0xE3/0xC8/0xC9`) × delta; записи головного `0x9B/0x9C/0xA1/0x9E/0x9F/0xA0/0x9D/0xDA`, `0xB9` (+`0xCF`+`0xC8`), `0xBA` (+`0xCE`+`0xC9`); клампы current 0x99/0x9A по maximum 0xB9/0xBA; player-ветви с occupation-таблицами BSS (GlobeSetup); double-apply quirk подтверждён машинно: второй раунд SetMaxHp/SetStrength/SetIntelligence/SetDexterity (`0x42ACF0/0x42AD30/0x42AD90/0x42AD50`) после производных коэффициентов (`0x1029A7–0x102AEA`); хвост `PropertiesChanged`+`0xBF918` |
-//! | reset reconcile tail | `0xFF031` | VERIFIED_DISASSEMBLY: семь пар tracked→0 / property−=tracked в порядке `0xBB..0xC1`; recovered ((sprite+attack)·2/3 + blast+brave+agility+spiritualism+strength) — f64 `2/3` (`0x653C40`); потенциал `0xA3` += trunc; четыре вычитания из свойств игрока ×(+1e-5, `0x653C38`) ≡ `−0.00001` |
-//! | upgrade player-tail (аудит) | `0x100530` | PARTIAL: якоря кадров `0x60203` событий 1/2 (сериализация target+4 gem: name/price/amount, затем money-поля игрока) и их event-гейты подтверждены спотчеком; полный построчный вывер тела улучшения не переоткрывался — опора на разведку BF-семьи |
-//! | container queries | `0xFC9A0/0xFCAB0/0xFCBF0` | MATCH разведки BF-семьи: `GetFailResult` ≡ filter(!=0).fold(4,min), `GetProbability` порядок 13,14,15,16,12 signed→clamp 0..=100, `GetUpgradePrice` запись поля только при наличии предмета ячейки 12 |
-//!
-//! Константная спот-сверка (та же пара образов): `1.5` подтверждена
-//! (f64 `0x653008`, ветви ATTACK/SPRITE `AllocatePotential`); `0.00001`
-//! подтверждена как отрицательная константа `-1e-5` с последующим `sub`
-//! (`0x653C68`, оборот property/addon-путей) и положительная `1e-5` с `sub` у
-//! reset-хвоста (`0x653C38`) — обе ≡ `f64::from(amount) * 0.00001` на
-//! достижимых входах. Масштаб ×10000 подтверждён (`imul 0x2710` обработчика
-//! `0x8FC2A`).
-//!
-//! Оговорки допуска и усечения: (1) машинный guard `BFPropertyAdd` отклоняет
-//! ровно ячейку `12`, zone-предикат сужает допуск до восьми gear-позиций
-//! `0..=7` — тождественно на достижимых caller-ах: container `validate_add_at`
-//! порождает `property_effect` только для gear; (2) машина усекает сумму
-//! `current + amount*1.5` одним FISTP, zone — прибавку до сложения:
-//! тождественно на домене opcode-пути (amount = очки×10000 чётное и
-//! неотрицательное за gate потенциала); отдельные (не opcode) caller-ы native
-//! `AllocatePotential` с иными amount не исследованы; (3) ulp-порядок
-//! FP-множителей `(amount×coeff)×k` против `(amount×k)×coeff` в
-//! player-формулах не переустанавливался — значения сходятся на целых
-//! прибавках домена; (4) вывер upgrade-тела опирается на разведку BF-семьи,
-//! машинные спотчеки покрывают только аудит-кадры `0x60203`.
-//!
-//! Объявленные швы переноса (не расхождения). Все обращения к живым полям
-//! прежнего `CPlayer` (equipment ячейка 10, `battle_fairy_container` + base,
-//! packet-рюкзак, wallet, `CMoveShape` навыков, ID/регион/IP) типизированы
-//! методами hub-трейта [`BattleFairyGearHost`], реализация — адаптер
-//! `BattleFairyGearPlayerAdapter` в прежнем `appserver/player.rs`; имена
-//! членов сохраняют исходную операцию, no-op/`None` при отсутствующем живом
-//! предмете повторяют исходные `Option`-цепи (`expect`-узлы исходного тела
-//! структурно недостижимы за его же гейтами). Ячейка контейнера представлена
-//! позицией `u32`; валидация и enum `BattleFairyCell` остаются у владельца
-//! контейнера. `CGoods`, фабрика, сериализация `0xBF918` и записи
-//! исходов контейнера/wallet — opaque associated-типы шва; zone-перечисления
-//! эффектов параметризованы ими, старый пакет подставляет прежние типы
-//! alias-ами без изменения имён/полей (потребители без правок). RNG
-//! (`&mut dyn FnMut(i32) -> i32`) и setup-коэффициенты
-//! (`GlobePlayerPropertyCoefficients`, Shared) передаются дословно.
-//! Report-структуры с полем `GameEffectJournal`, конверт эффектов в
-//! `GameEffect` и упорядоченная доставка остаются у владельца журнала
-//! эффектов; отправка `0xBF918` — существующий sender-шов, здесь не
-//! дублируется.
-//!
-//! Зеркальные правила-мелочи: скалярный clamp `i32::MAX` боевых полей
-//! дублирован приватной копией (canonical hub-копия — `clamp_combat_scalar`
-//! `CPlayer` старого пакета; goods-touching варианты
-//! `add_battle_fairy_addon`/`clamp_battle_fairy_current` остаются у его
-//! владельца, их разделяет соседний блок refresh-экипировки и адаптер шва).
+//! Исходный владелец PDB: `appserver/player.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#battlefairygear-экипировка-потенциал-и-улучшение-боевой-феи-ядро-cplayer
 
 use std::collections::BTreeMap;
 

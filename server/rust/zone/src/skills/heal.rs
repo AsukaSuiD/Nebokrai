@@ -1,52 +1,21 @@
 //! Правила и исполнение CHeal/CHeal2/CSuperHeal/CSuperHeal2
-//! (0xD3/0xE3/0xD9/0xE4) — периодическое лечение.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/heal{,2}.cpp` и `superheal{,2}.cpp`.
-//! Тела Check/AI перенесены буквально. Машинные якоря: CHeal Check — reuse(0x2715)+tick
-//! visual13/GS0278 → GetTargetPath безусловно → distance-пара → MP
-//! (cost>0 signed-diff, Move0 только при успехе; cost0 → visual7/GS0288);
-//! AI: MP→OnChangeStates→CAN→направление→visual0→delay→visual1→формула
-//! `coeff*weapon_level*0.01+const` (FISTP) → QueryProperty(6001) затем
-//! QueryProperty(10002) → ctor state(J,J) → Begin(U,S).
+//! (0xD3/0xE3/0xD9/0xE4) — периодическое лечение. Тела Check/AI буквальны.
 //!
-//! **Установленный FIX:** `TARGET_AFFECT_FREQUENCY` — машинно `6001`
-//! (во всех четырёх AI, якорь CHeal `0x581861`: прямое `QueryProperty(6001)`
-//! перед `10002`), не `5002`, как держала прежняя реконструкция.
+//! Машинные quirks: `TARGET_AFFECT_FREQUENCY` — ключ 6001 (прямое
+//! `QueryProperty(6001)` перед `QueryProperty(10002)` во всех четырёх AI);
+//! прибавка Player — COEFF·живой уровень оружия (f32) + CONST (отдельный
+//! f32), FISTP после End/dtor первого прежнего состояния; GetTargetPath
+//! читается безусловно даже при самоцели; препятствия не запрещают лечение;
+//! MP0 у player — тихий отказ, источник другого типа — без MP и Move0.
+//! SuperHeal заменяет только Heal; SuperHeal2 хранится у выбранной S, но
+//! primary Begin получает U/U (различия — `super::healstate`).
 //!
-//! Зарегистрированный экземпляр игрока или монстра хранит единственную
-//! базу и фазу; отдельного payload и снимка цели нет. Объектный Begin
-//! проверяет исходные U/S, координатный — свежую S либо U после loop1
-//! visual. Check требует обе фигуры, абсолютный reuse и свежий
-//! GetTargetPath даже при самоцели. Дальность проверяется только для
-//! разных U/S; препятствия не запрещают лечение. Player MP0 — тихий отказ,
-//! положительная цена проверяется по знаку DWORD-разности перед Move0.
-//! Источник другого типа проходит без MP и запрета движения.
+//! Швы: hub `statecast::*` и Check-скелет `rangedweaponcast`
+//! (`check_skill_path`, MP-контракт) — у владельца старого пакета.
 //!
-//! Каждый AI удерживает таблицу свойств и найденные U/S через callbacks.
-//! Отсутствующая S заменяется свежим U; обычный неприручённый монстр без
-//! Carriage AI дополнительно переназначает базовые type/id цели на U.
-//! Только смерть выбранной S отменяет лечение. Первый AI выполняет
-//! MP→OnChangeStates→CAN→S.Y/X→U.Y/X→направление→visual0→condition.
-//! После unsigned start+delay visual1 заново разрешает S либо U, тогда как
-//! состояние устанавливается на захваченную этим AI цель.
-//!
-//! Прибавка Player считается после visual1: COEFF→живой уровень оружия,
-//! unsigned wrapping-произведение с 0.01f сохраняется в f32; CONST
-//! прибавляется с отдельным сохранением f32. У источника другого типа
-//! прибавка равна нулю. После End/destructor первого прежнего состояния
-//! значение усекается FISTP, затем читаются FREQ→PERSIST. Новый primary
-//! Begin предшествует append; отдельного UpdateProperty или пакета
-//! состояния здесь нет. SuperHeal заменяет только Heal; SuperHeal2 хранится
-//! у выбранной S, но primary Begin получает U/U. Эти различия принадлежат
-//! `super::healstate`. Выпуск всегда завершает навык End1, ранние отказы —
-//! End0. Общий End сбрасывает фазу, разрешает свежий U Move1 и сохраняет
-//! исходный аргумент. Vec, общий kernel и каноническое хранилище заменяют
-//! native STL/указатели.
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у владельца старого пакета; Check-скелет `rangedweaponcast`
-//! (`check_skill_path` ветки Ignore и MP-контракт) и материализация
-//! исполнения остаются в старом пакете и объявлены швами.
+//! Исходные владельцы PDB: `appserver/skills/heal{,2}.cpp`,
+//! `superheal{,2}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#heal--квартет-chealcheal2csuperhealcsuperheal2-0xd30xe30xd90xe4
 
 use nebokrai_shared::runtime::get_line_direction;
 

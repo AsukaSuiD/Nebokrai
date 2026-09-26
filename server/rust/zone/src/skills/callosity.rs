@@ -1,33 +1,19 @@
-//! Зарегистрированный вход взаимно исключающих закалок CCallosity/CCallosity2.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/callosity.cpp` и `callosity2.cpp`;
-//! машинно у вариантов собственные Check/AI, различаются только ID, таблица
-//! свойств и восстановление. Методы их состояний почти полностью попарно
-//! folded (9 методов, Restart-fold с CPromotionState `0x1FD450`) — см.
-//! `skills/callositystate.rs`. Тела перенесены буквально
-//! (`callosity.cpp` и `callosity2.cpp` покрыты одним файлом).
+//! Зарегистрированный вход взаимно исключающих закалок CCallosity/CCallosity2
+//! (один файл на оба cpp: различаются ID, таблица свойств и восстановление;
+//! методы состояний попарно folded — см. `skills/callositystate.rs`).
 //!
-//! Attack Begin сохраняет исходного U, ранний отсчёт и loop1 visual. Check
-//! проверяет reuse и ненулевые цены MP/RP до Move0; отказ получает End(0).
-//! Каждый AI сохраняет таблицу свойств и своего U через callbacks. Смерть U
-//! даёт visual2/End(1), нехватка ресурсов — visual7/8 и End(0). Первый AI
-//! всегда выполняет GetMP→query→SetMP, затем GetRP→query→SetRP, включая нулевые
-//! цены. Signed wrapping-проверка RP не откатывает уже списанный MP.
-//! CAN предшествует visual0 и condition; отдельного OnChangeStates здесь нет.
+//! Quirks: первый AI всегда выполняет GetMP→query→SetMP, затем GetRP→query→
+//! SetRP, включая нулевые цены; signed-проверка RP не откатывает уже списанный
+//! MP; первый непустой ID75/7D завершается без RTTI/ended-фильтра; новый
+//! экземпляр получает Begin(U,U) до append, а UpdateProperty выполняется и
+//! при отказе Begin; непроверенный native доступ к ресурсам CPlayer заменён
+//! безопасным отказом для чужого CMoveShape.
 //!
-//! Абсолютный unsigned срок start+delay предшествует visual1. Затем завершается
-//! первый непустой ID75/7D без RTTI/ended-фильтра; только после этого frozen
-//! таблица отдаёт persist и WORD factor. Новый экземпляр получает Begin(U,U)
-//! до append, а UpdateProperty выполняется и при отказе Begin. Общий End
-//! сбрасывает phase/active, возвращает движение свежему U и завершает State
-//! с настоящим аргументом. Исполнение публикуется целиком общим владельцем.
-//! Непроверенный native доступ к ресурсам CPlayer заменён безопасным отказом
-//! для чужого CMoveShape; без чтения ресурсов Check сохраняет общий Move0.
+//! Швы: hub `selfcast::SelfCastGame`; вход и захват исходного U — у
+//! `playercast` делегата; замена состояния — `skills/callositystate.rs`.
 //!
-//! Объявленные швы переноса (не расхождения): hub `selfcast::SelfCastGame`
-//! реализован у владельца старого пакета; общий зарегистрированный вход и
-//! захват исходного U остаются у `playercast` делегата; замена состояния —
-//! `skills/callositystate.rs`.
+//! Исходные владельцы PDB: `appserver/skills/{callosity,callosity2}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#roarcpillarcallosityenergyholding--self-касты
 
 use crate::content::CSkillBaseProperties;
 use crate::regions::ShapeIdentity;

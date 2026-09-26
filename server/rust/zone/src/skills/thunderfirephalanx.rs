@@ -1,65 +1,24 @@
 //! Движущийся громовой огонь `CThunderFirePhalanx` (`0x322`): форма
-//! предметного навыка `CItemSkill_2`. Источник: точная пара `gameserver.exe`
-//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/thunderfirephalanx.cpp/.h`.
+//! предметного навыка `CItemSkill_2` — единственный ctor-вход из его
+//! `Summon`; в `QuerySkill` форма не регистрируется.
 //!
-//! Машинные якоря (VA = RVA + 0x400000): ctor `0x5E11E0` (0xFC байта, 10
-//! аргументов; статические `CScope` 1×1 — `g_dwLength/g_dwHeight` = 1,
-//! `g_bScope` из 9 байт с маской только (0,0) — конструктор области
-//! `0x5E98B0` + маска `0x5E9960`), vtable `0x65EF2C`; AI `0x5E1970`;
-//! обход области `0x5E1670` (scope-ячейки вокруг клетки, список
-//! уже-атакованных, self-пропуск, допуск vcall+0x134 для player-целей);
-//! Attack по цели `0x5E1570` (IsDied → пропуск; Calculate; OnBeenAttacked
-//! vcall+0x15C; без IncreaseRp); Calculate `0x5E1310` (`GetWeaponModifier`
-//! `0x42D980` через vcall+0x184 без blast-клампа; x87 soul-формула
-//! `trunc((soul_variable * soul_count * 0.01 + 1) * damage)`; hit = 0x64;
-//! два вызова MSVCRT RNG `0x41CBA0`: диапазон, затем крит с FISTP);
-//! AddToByteArray `0x5FBD20` / DecordFromByteArray `0x5FBFA0` (префикс 5
-//! dword: id 0x322, уровень [+0xD4], master type/id [+0x84]/[+0x88],
-//! remained `0x5E9870`, затем `CShape`); ReplaceAffectRegion `0x5FECA0`
-//! (`ret 0xC` — собственное пустое тело, ICF с CWeakPhalanx отсутствует);
-//! End `0x5E9DC0`, ForceMove vcall+0xA0 `0x5E9AF0`.
+//! Машинные quirks: исчерпание пути (`idx >= count`) завершает форму только
+//! в due-ветке с разрешённым регионом — верхний гейт формы этого условия не
+//! содержит (срок/пустой scope/данные пути/`count == 0`); по End выполняется
+//! разовый ForceMove в последнюю ячейку (блок уже закрыт первым проходом).
+//! Calculate — `GetWeaponModifier` без blast-клампа и x87 soul-формула
+//! `trunc((soul_variable · soul_count · 0.01 + 1) · damage)`, два RNG.
 //!
-//! Активация только предметная: единственный вызов ctor — из
-//! `CItemSkill_2::Summon` (xref `0x515D6F`); в `QuerySkill` форма не
-//! регистрируется. Item-владелец передаёт путь, `speed` и soul-пару
-//! (снимок SoulCollect); регистрация и доставка снимка остаются
-//! межвладельческой координацией старого пакета.
+//! Швы: hub-трейты `ThunderFirePhalanxGame`/`ThunderFirePhalanxPlayer`
+//! (свойства игрока, weapon-modifier, RNG); применение клетки и End формы —
+//! региональный runtime старого пакета; клиентский снимок — конверт
+//! `summonshape`; регистрация и доставка — координация старого пакета.
 //!
-//! Машинный факт (FIX, якорь AI `0x5E1970`):
+//! UNKNOWN: нормализация blast/knock-back scale в Calculate машинно не
+//! обнаружена; блок не добавляется и не удаляется (вопрос открыт).
 //!
-//! ```text
-//! 005e19e8: cmp  eax, ecx          ; now ? started + idx*speed
-//! 005e19ea: jb   0x5e1a80          ; не due — пропуск без End
-//! 005e1a0e: test ebx, ebx          ; RTTI-регион из [U+0x40]
-//! 005e1a10: je   0x5e19f0.../0x5e1a80 ; region NULL — пропуск без End
-//! 005e1a1d: cmp  edi, eax          ; idx < count ?
-//! 005e1a1f: jb   0x5e1a2d
-//! ...      call [edx + 0xac]        ; End ТОЛЬКО в ветке due+region
-//! ```
-//!
-//! Верхний Expired-гейт машинно: `exp(started+lifetime < now)` /
-//! scope-патч [+0xBC] == 0 / данные пути [+0xE0] == NULL / `count == 0` —
-//! и НЕ `idx >= count`: исчерпание пути завершает форму только в due-ветке
-//! с разрешённым регионом (тот же vcall+0xAC, что и у expired-веток).
-//! Прежняя реконструкция выносила `current_position >= path.len()` в верхний
-//! гейт и завершала форму досрочно даже вне due; условие снято отсюда,
-//! исчерпание проверяется в точке due (см. `tick`). После End
-//! по idx-исчерпанию машинный хвост выполняет разовый ForceMove — блок уже
-//! закрыт первым проходом, различия нет. Разовый ForceMove в последнюю
-//! ячейку с длительностью `count * speed` остаётся разовым (`[+0xF8]`).
-//!
-//! Объявленные швы переноса (не расхождения): hub-трейты
-//! `ThunderFirePhalanxGame`/`ThunderFirePhalanxPlayer` — переходные фасады
-//! прежнего владельца `CGame`/`CPlayer` (реализация у делегата старого
-//! пакета): свойства игрока, weapon-modifier и RNG; применение клетки и
-//! End формы — региональный runtime старого пакета. Клиентский снимок —
-//! общий пятипольный префикс `summonshape`-конверта (`Id`=0x322).
-//!
-//! UNKNOWN/объявленная неполнота: нормализация blast/knock-back scale из
-//! прежней реконструкции в теле Calculate НЕ обнаружена машинным дампом
-//! `0x5E1310`; блок не добавляется и не удаляется, вопрос остаётся открытым
-//! (см. тело `calculate_owned_thunder_fire_attack`).
+//! Исходный владелец PDB: `appserver/skills/thunderfirephalanx.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#thunderfirephalanx--cthunderfirephalanx-0x322-предметный-citemskill_2
 
 use nebokrai_shared::values::CGuid;
 
@@ -177,8 +136,8 @@ impl CThunderFirePhalanx {
     pub fn finish(&mut self) { self.shape.set_change_state(SHAPE_CHANGE_DELETE); }
 
     /// Тик AI `0x5E1970`. Верхний гейт: exp/пустой путь (машинные
-    /// `started+lifetime < now`, данные/count пути — FIX #2: БЕЗ
-    /// исчерпания). Исчерпание пути завершает форму только в due-точке
+    /// `started+lifetime < now`, данные/count пути) — условия исчерпания в нём
+    /// нет. Исчерпание пути завершает форму только в due-точке
     /// (тот же machine-End), до неё — разовый ForceMove в последнюю клетку.
     pub fn tick(&mut self, now: u32) -> ThunderFirePhalanxTick {
         if self.started_at_ms.wrapping_add(self.lifetime_ms) < now || self.path.is_empty() {
@@ -199,8 +158,8 @@ impl CThunderFirePhalanx {
                 ThunderFirePhalanxTick::Pending
             };
         }
-        // FIX #2: idx >= count → End только здесь (due-ветка после гейта
-        // региона у владельца); в верхний гейт условие не поднимается.
+        // idx >= count → End только здесь (due-ветка после гейта региона у
+        // владельца, машинная форма); в верхний гейт условие не поднимается.
         if self.current_position >= self.path.len() {
             self.finish();
             return ThunderFirePhalanxTick::Expired;

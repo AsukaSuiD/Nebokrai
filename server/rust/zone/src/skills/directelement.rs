@@ -1,7 +1,7 @@
 //! Числовой расчёт прямых элементальных ударов и его варианты.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
+//! идентификаторы —
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки.
 //! CalculateAttackPower: Lightning 0x005ACBA0, ChainLightning 0x00576770,
 //! Infernol 0x005A6EC0, Seal 0x005AA480, SoulMirror 0x005A4A30,
 //! EnergyBolt 0x0053C2A0, SnakeBolt 0x00534390, ZombieClaw 0x00537B50.

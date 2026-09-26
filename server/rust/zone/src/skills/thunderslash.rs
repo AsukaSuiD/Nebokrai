@@ -1,63 +1,25 @@
 //! Громовое рассечение `CThunderSlash` (0x72) и слитый сюда visual
-//! `CThunderSlashEffect` — один исходный `appserver/skills/thunderslash.cpp`.
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match); исходные владельцы
-//! `appserver/skills/thunderslash.cpp/.h` (тело и visual — тот же cpp);
-//! visual слит в файл навыка, как и у `skills/thunderblow2.rs`.
+//! `CThunderSlashEffect` — один исходный cpp (как у `thunderblow2`).
 //!
-//! Машинные якоря (VA = RVA + 0x400000): ctor `0x57A240` (0x54 байта,
-//! фабричный индекс `0x42`), vtable `0x65A974`; Begin триада
-//! `0x57A3A0`/`0x57A2D0`/`0x57A490`; CheckCastCondition `0x57AAB0`;
-//! AI `0x57ADD0`; Summon `0x57B2E0`; dtor `0x57A470`; End — общий хвост
-//! `0x5AE7A0` (vcall vtable+0x68; `[+0x4C]/[+0x50]` в 0, свежему U
-//! возвращается движение `0x4CCEE0(1)`, база `CSummonSkill::End` `0x5E0F40`);
-//! `CThunderSlashEffect` vtable `0x65AA0C`, UpdateVisualEffect `0x57A550`
-//! (jump-таблица 0..=15: modes 0/1 — around-пакеты, `[0, mode]` только
-//! игроку для 2/4/7/10/11/13/14/15, mode 8/12 без пакета).
+//! Машинные quirks: фаза 0 AI расходует первый state с `[+4] == 0x6E` БЕЗ
+//! RTTI/ended-проверок (End + deleting dtor + обнуление); мёртвый
+//! GetShapes/RTTI-скан фазы 1 не воспроизводится (найденный объект машинно не
+//! использовался); Summon получает отдельную свежую таблицу и безопасная
+//! замена ограничивает создание формы игроком (у native Summon — возможное
+//! разыменование NULL после необязательного RTTI). Игроку нужен топор
+//! категории 1 слота 2; непользовательский U допускается без Move0/оружия/
+//! ресурсов.
 //!
-//! Check (`0x57AAB0`): RTTI-гейт игрока; reuse `0x2715` (visual13 +
-//! GS0278 при повторе раньше срока); непользовательский U допускается без
-//! Move0/оружия/ресурсов; игроку нужны топор категории 1 слота 2
-//! (`GetGoods(2)` → `GetAddonPropertyValues(5, 1) == 1` `0x4CB1E0`) →
-//! visual14 + GS0287; signed-дефицит MP `query(2)` → visual7 + GS0288 и RP
-//! `query(3)` (WORD-разность) → visual8 + GS0289 с суммами; успех запрещает
-//! движение U (`0x4CCEE0(0)`).
+//! Швы: hub-трейты `ThunderSlashGame`/`ThunderSlashPlayer`/
+//! `ThunderSlashContact` поверх общего `statecast::StateCastGame`; consume
+//! расхода состояния — `skills/ragebreakstate.rs`; фактический End
+//! выполняет общий registered-вход делегата (`finish_outcome`).
 //!
-//! AI (`0x57ADD0`) двухфазный. Фаза `[+0x50] == 0` (без проверки смерти U
-//! и без предварительного отсечения региона): повторная проверка оружия →
-//! расход первого state `[+4] == 0x6E` БЕЗ RTTI/ended-проверок (End
-//! vcall+0x1C + deleting dtor vcall+0x10 + обнуление слота), иначе visual4
-//! + GS0304 + End(0) → расход MP (`0x4300D0`) и RP (`0x4300F0`) с
-//! частичными эффектами при отказе (visual7/8 + GS + End(0)) →
-//! OnChangeStates vcall+0x164 → CAN `0x2716` → `[+0x3C]` → назначение из
-//! живой S (vcall+0x18) либо сохранённой точки `[+0x24]/[+0x28]` →
-//! направление `0x41D080` → SetDirection vcall+0x60 → visual0.
-//! Фаза `[+0x50] != 0`: задержка `0x2711` как unsigned `start + delay <= now`
-//! → visual1 → лицевая клетка (GetTile, GetDirectionPos vcall+0x5C,
-//! `0x45B330`) → RTTI-регион из `[U+0x40]`; без регионального владельца
-//! End(1) без Summon. Мёртвый GetShapes/RTTI-скан не воспроизводится:
-//! найденный объект в `0x57B225`–`0x57B28C` не использовался и игровых
-//! callback-ов там нет. Summon (vcall+0x8C) получает отдельную свежую
-//! таблицу (`0x46C390(0x72, level)`), lifetime `query(0x7531)`, снимок
-//! боевых getter-ов Dex([+0x3B8])→SOUL(vcall+0x11C)→CCH(+0x114)→ELEMENT
-//! (+0x118)→MIN(+0xE4)→MAX(+0xE8), country=0, PK-байты [+0x278..+0x27B]
-//! только при RTTI CPlayer; безопасная замена ограничивает создание формы
-//! игроком (у native Summon после необязательного RTTI есть разыменование
-//! NULL), не меняя общий Check/AI.
+//! UNKNOWN: запись CAN `0x2716` → `[+0x3C]` не материализуется (конвенция
+//! summon-полосы).
 //!
-//! Объявленные швы переноса (не расхождения): hub-трейты
-//! `ThunderSlashGame`/`ThunderSlashPlayer`/`ThunderSlashContact` —
-//! переходные фасады прежнего `CGame`/`CPlayer` поверх общего
-//! `statecast::StateCastGame` (реализация у делегата старого пакета);
-//! consume расхода состояния — `skills/ragebreakstate.rs`. Часы AI —
-//! `now_milliseconds` делегата прежнего main-loop runtime (прецедент
-//! `skills/thunderblow.rs`). Результат AI — локальный исход, End выполняет
-//! общий registered-вход делегата (`finish_outcome`), как раньше.
-//!
-//! UNKNOWN/объявленная неполнота: запись CAN `0x2716` → `[+0x3C]` в
-//! исполнение player-kernel отдельно не материализуется — реконструкция
-//! только читает свойство; потребители поля +0x3C этой стороны не
-//! установлены (конвенция summon-полосы).
+//! Исходные владельцы PDB: `appserver/skills/thunderslash.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#thunderslash--cthunderslash-0x72-и-cthunderslasheffect
 
 use nebokrai_shared::runtime::get_line_direction;
 

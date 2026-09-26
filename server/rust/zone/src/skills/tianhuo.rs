@@ -2,46 +2,23 @@
 //! боевого духа с общим префиксом допуска громовых облаков
 //! (`skills/thunder.rs`).
 //!
-//! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), `appserver/skills/tianhuo.cpp`. Адресная
-//! конвенция: истинный RVA (pub off + 0x1000; VA = RVA + 0x400000).
+//! Машинные quirks: часы читаются до свойства reuse; MP проверяется прямым
+//! vcall по equipment[10] (не GetWarSoulGoods) даже при нулевой цене и
+//! списывается необратимо на первом AI; старая область в клетке сворачивается
+//! до регистрации новой; отказ Summon не меняет завершающий End(1). Gameplay
+//! ID области — 0x21A, legacy ID режима применения эффекта — 0x13A.
 //!
-//! Машинные факты:
-//!
-//! - Check: часы читаются до свойства reuse (`reuse_clock_first`), препятствий
-//!   по клеткам нет, MP проверяется прямым vcall +0x5C по equipment[10]
-//!   (не `GetWarSoulGoods`) даже при нулевой цене. CAN этим навыком не
-//!   изменяется.
-//! - AI `0x122DC0` (VA `0x522DC0`): MP списывается необратимо на первом AI;
-//!   `0xBF918` доставляется точечно `SendToPlayer` (`0x12300B`, VA `0x52300B`)
-//!   — точечная доставка здесь верна и сохраняется; затем поворот U
-//!   (GetLineDir + SetDirection +0x60) и повторная проверка длины пути
-//!   (visual 0xB + ZHGS0049). По абсолютному сроку сохранённая объектная S
-//!   проверяется на смерть и превращается в точку до visual1; visual1 →
-//!   Summon → безусловный внешний End(1).
-//! - Summon `0x123280` (VA `0x523280`): region-RTTI → свежая таблица →
-//!   очистка тройки [+0x18/1C/20] → Master → player-RTTI → мёртвые чтения
-//!   GAP 0xC3 и usage 20015 (здесь `let _ =`) → ctor-стек (lifetime, level,
-//!   min, max, elem) → SetCenter → GetShape(клетка) + RTTI + skill==0x21A →
-//!   vcall [+0xa8] свёртка старой области → Add → `0xBF502`; свёртка старой
-//!   области исполняется регистрационным швом прежнего владельца
-//!   (`replace_tianhuo_phalanxes_in_cell` до add, здесь не переоткрывается).
-//!   Отказ самого Summon не меняет завершающий End(1); область живёт
-//!   независимо от навыка. Gameplay ID области — 0x21A, legacy ID режима
-//!   применения эффекта — 0x13A; wire и lifetime области принадлежат
-//!   CTianhuoPhalanx (zone `skills/tianhuophalanx`).
-//!
-//! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`
-//! (точечный кадр `0xBF918` собирает и доставляет энкодер
+//! Швы: hub `thunder::SummonCloudGame` (точечный кадр `0xBF918` — энкодер
 //! `send_battle_fairy_goods_update`); поворот U — шов
 //! `set_summon_cloud_user_direction`; конструктор `CTianhuoPhalanx` и
-//! регистрация области выполняются прежним владельцем через callback
-//! `complete_summon` (`TianhuoSummon`). Часы `now` — шов делегата (прежний
-//! main-loop runtime). UNKNOWN списком: маппинг аргументов ctor
-//! CTianhuoPhalanx — PARTIAL
-//! (`skills/tianhuophalanx.rs`: ctor `0x1E5890`, 6 аргументов без id/часов);
-//! ветка AI с не-player U читает CPlayer после RTTI без проверки — прежняя
-//! реконструкция возвращает отказ вместо разыменования (сохраняется).
+//! регистрация — прежний владелец через callback `complete_summon`.
+//!
+//! UNKNOWN/PARTIAL: маппинг 6 аргументов ctor области; ветка AI с не-player U
+//! сохраняет форму прежней реконструкции (отказ вместо разыменования после
+//! RTTI без проверки).
+//!
+//! Исходный владелец PDB: `appserver/skills/tianhuo.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#tianhuo--ctianhuo-0x21a
 
 use nebokrai_shared::runtime::get_line_direction;
 

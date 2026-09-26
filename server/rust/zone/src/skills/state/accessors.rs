@@ -1,7 +1,6 @@
 //! Читающие проекции арены применённых состояний `CMoveShape` из
-//! GameServer.exe/GameServer.pdb (пара gameserver.exe SHA-256
-//! 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-//! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
+//! GameServer.exe/GameServer.pdb (точная пара; идентификаторы —
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки).
 //! Это бывшие query-методы hub `appserver/moveshape.rs`: queries семейств
 //! ride/automatic restore, проекции particular/team/swordship/wuxing/taiji/
 //! enlarge/origin, boss blue fury, promotion и защитные щиты, итераторы

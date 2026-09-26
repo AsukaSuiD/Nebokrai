@@ -1,58 +1,25 @@
-//! Стационарная форма громового рассечения `CThunderSlashPhalanx`
-//! (ctor `0x5F75E0`, 0xEC байт, vtable `0x660BDC`). Источник: точная пара
-//! `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match),
-//! исходный владелец `appserver/skills/thunderslashphalanx.cpp/.h`. Живой
-//! тикер и End/публикация удаления — у общего регионального runtime старого
-//! пакета; здесь снимок владельца, часы, цель клетки, формула и применение
-//! попадания.
+//! Стационарная форма громового рассечения `CThunderSlashPhalanx`: снимок
+//! владельца, часы, цель клетки, формула и применение попадания. Живой тикер
+//! и End/публикация удаления — у общего регионального runtime старого пакета.
 //!
-//! Машинные якоря (VA = RVA + 0x400000): ctor `0x5F75E0` (12 аргументов;
-//! поле [+0xCC] и [+0xD0] пишут один и тот же max-аргумент — min-аргумент
-//! конструктор не читает, баг оригинала воспроизводится; [+0xE4] = уровень,
-//! [+0xB8] = [+0xE8] = 0x72, [+0xC8] = 0); AI `0x5F7B40` (три чтения
-//! `timeGetTime`: срок `[+0xB4]+[+0xB0] < now` unsigned, клетка
-//! [+0xBC]/[+0xC0] ненулевая, период `[+0xC8]+[+0xC4] < now` строгий;
-//! штамп [+0xC8] пишется ДО RTTI-разрешения региона и единственного
-//! GetShape собственной клетки; первая немобильная форма не заменяется
-//! следующей целью); Attack `0x5F7A00` (IsDied → пропуск; FindPlayer по
-//! одному ID даже для снимка иного типа; attackable vcall+0x134;
-//! OnBeenAttacked vcall+0x15C; при найденном source — IncreaseRp(1, 0));
-//! Calculate `0x5F77B0`; AddToByteArray `0x5F76A0` / Decord `0x5F7730`
-//! (префикс 5 dword: id 0x72, уровень [+0xE4], master type/id [+0x84]/[+0x88],
-//! remained `0x5E9870`); ReplaceAffectRegion — ICF-хвост `CWeakPhalanx`
-//! `0x5F54A0` (End при совпадении клетки); GetSkillID `0x5E1030`;
-//! End `0x5E9DC0`; ForceMove `0x5E9AF0`.
+//! Машинные quirks: ctor пишет один и тот же max-аргумент в оба поля min/max
+//! (min-аргумент не читается — баг оригинала, воспроизводится); Calculate
+//! пишет в `info[+0]` живой instance-id формы, а не константу 0x72 —
+//! читающими сторонами поля являются только war-soul-предикат и отчётные
+//! wire-хвосты (квази-особенность оригинала при instance-id в окне
+//! 0x212..0x224 сохранена буквально); штамп периода ставится до разрешения
+//! региона; Attack бьёт и по снимку не-player типа через FindPlayer одного ID.
 //!
-//! Машинный факт (FIX, якорь Calculate `0x5F77B0`):
+//! Швы: hub-трейты `ThunderSlashPhalanxGame`/`ThunderSlashPhalanxPlayer`/
+//! `ThunderSlashPhalanxContact` (делегат старого пакета); GetShape клетки и
+//! query по origin-name — шов владельца региона; клиентский снимок — общий
+//! конверт `summonshape`.
 //!
-//! ```text
-//! 005f77ed: mov  edx, dword ptr [ebp + 8]    ; [this+8] — instance-id формы
-//! 005f77f5: mov  dword ptr [esi], edx        ; info[+0] := instance-id
-//! ```
+//! UNKNOWN: blast/knock-back нормализация в Calc не вводится и не удаляется
+//! (вопрос открыт).
 //!
-//! `info[+0]` получает живой instance-id формы (`g_lID` счётчика), а не
-//! константу 0x72 прежней реконструкции. Эквивалентность потребителей
-//! установлена разведкой (`.local/recon-t4`): читающие стороны поля
-//! +0 — war-soul-предикат `is_war_soul_skill` (0x212..0x224, 530..548) и
-//! wire-хвосты 0xBF60A/0xBF60B отчёта попадания; применение урона поле +0
-//! не использует. Квази-особенность: при входе instance-id в окно
-//! 0x212..0x224 (530..548; боевой октет 0x212..0x219 = 530..545) атака
-//! призванной формы с player-мастером проходит war-soul ветки приёмника —
-//! поведение оригинала сохранено буквально. По той же машинной записи
-//! `info[+4]` — младший байт уровня [+0xE4], `info[+0x20]` = 0, фактор
-//! `f32(query(0x4E23) * double(0.01f32))`, hit = `query(0x4E21)`; RNG
-//! диапазона вызывается до RNG крита; критический множитель — FISTP-усечение
-//! к нулю (`truncate_original`).
-//!
-//! Объявленные швы переноса (не расхождения): hub-трейты
-//! `ThunderSlashPhalanxGame`/`ThunderSlashPhalanxPlayer`/
-//! `ThunderSlashPhalanxContact` — переходные фасады прежнего `CGame`/
-//! `CPlayer` (реализация у делегата старого пакета); имена членов сохраняют
-//! исходную операцию. GetShape клетки с dyn_cast CMoveShape и query по
-//! origin-name остаются у владельца региона (шов
-//! `thunder_slash_region_cell_target`); клиентский снимок — общий
-//! wire-конверт `summonshape`. blast/knock-back нормализация в Calc не
-//! вводится и не удаляется — вопрос открыт (UNKNOWN).
+//! Исходный владелец PDB: `appserver/skills/thunderslashphalanx.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#thunderslashphalanx--cthunderslashphalanx
 
 use nebokrai_shared::values::CGuid;
 
@@ -249,8 +216,8 @@ impl CThunderSlashPhalanx {
     }
 }
 
-/// Calculate `0x5F77B0`: `info[+0] := instance-id [this+8]` (FIX #1, см.
-/// шапку), уровень из [+0xE4], три Damage-записи (1/3/4), затем RNG-крит с
+/// Calculate `0x5F77B0`: `info[+0] := instance-id [this+8]` (машинная форма,
+/// см. шапку), уровень из [+0xE4], три Damage-записи (1/3/4), затем RNG-крит с
 /// FISTP-усечением. Отсутствие таблицы оставляет UNKNOWN/1 и пустой урон,
 /// не отменяя OnBeenAttacked и IncreaseRp.
 pub fn calculate_owned_thunder_slash_attack<Game: ThunderSlashPhalanxGame>(

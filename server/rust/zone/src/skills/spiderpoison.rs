@@ -4,66 +4,22 @@
 //! публикация visual) остаётся hub прежнего пакета; состояния принадлежат
 //! аренам получателей, а не исполнению навыка.
 //!
-//! Источник: `gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
-//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
-//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
-//! `appserver/skills/spiderpoison.cpp`. Машинный разбор тела —
-//! `.local/recon-de/notes/D5-spiderpoison.md` и
-//! `.local/recon-de/disasm/CSpiderPoison.txt`.
+//! Машинные quirks: IsDied проверяется только у S; `SetMoveable(1)` стоит
+//! перед повторной дистанционной проверкой; все исходы состояния завершаются
+//! End(1); Calculate — 2 RNG (второй crit-roll обязателен и у монстра);
+//! info ctor-дефолт (id `0x7FFFFFFF`, level 1) не переписывается; мастер
+//! яда — с country = 0; порядок Query ctor-а — const(20010) → freq(6001) →
+//! keep(10002) до замены первого 0x191.
 //!
-//! - vtable эффекта `0x65B188`, класса `0x25B0F4`: Begin-скелет трёх форм
-//!   (`0x5853E0`/`0x5854B0`/`0x5855B0`) = форвард `CAttackSkill::Begin` →
-//!   new effect 0xC → `[+0x34]` → `BeginVisualEffect(1)` → Check слот `+0x60`;
-//!   провал — visual(2) → End(0), успех — `[+0x4C]=1`, `[+0x50]=0` (обвязка
-//!   hub `stateskill`). Check `0x585BB0`: null U/S/props → 0 без кадров;
-//!   reuse (10005, `CSkill::IsRestored`) → visual(13); путь `vcall+0x58` и
-//!   `Query(5003) != 0 && size > max` → visual(11); SetMoveable(0) на U →
-//!   ret 1.
-//! - AI `0x586020`: `[+0x4C]==0` → out; props null → End(0); U/S null →
-//!   End(0); **IsDied только у S** → visual(10) → End(0); Begin-фаза один
-//!   раз: `Query(10006)` → `[+0x3C]`, вычисление `Y(S), X(S), Y(U), X(U)` →
-//!   GetLineDir → SetDir на U → visual(0); задержка `Query(10001)+[+0x2C]`
-//!   unsigned → out; **`SetMoveable(1)` перед повторной дистанционной
-//!   проверкой**, длинный путь → visual(11) → End(0); иначе visual(1) →
-//!   `Attack(U, S)` → `End(1)` — все исходы состояния (как свойства, так и
-//!   бросок яда) завершаются `End(1)`.
-//! - Attack `0x585F10`: `tagAttackInformation` ctor-дефолт (id `0x7FFFFFFF`,
-//!   level 1) не переписывается; U.type==400 → MasterInfo-поля игрока
-//!   (+0x278..+0x27C, +0xB20/+0xB28/+0xB78) → `CalculateAttackPower` →
-//!   общий virtual `+0x15C` приёмника.
-//! - Calculate `0x585CE0`: props null → info остаётся ctor-дефолтом;
-//!   `[+0x18]=0` hit, `[+0x1C]=1.0f` factor, `[+0x20]=0` modifier; physical
-//!   kind 1: `|max − min| + 1` (cdq-abs) → один RNG → min + random →
-//!   jns-clamp; element kind 3: `vcall+0x118` (у монстра 0) clamp; soul
-//!   kind 4: `vcall+0x11C` **movzx WORD** clamp; **2 RNG суммарно**: второй
-//!   `random(100)` обязателен даже при нулевом `vcall+0x114` монстра,
-//!   **movzx WORD cch**, знаковое `<`; x87-крит с глобалкой float
-//!   `0xEF3E5C` (принятая x87/f64-модель combat.md через `truncate_original`).
-//! - Поздний бросок яда: `DoesStateExist(0x131)` на S → пропуск;
-//!   `random(100) > Query(40001)` **signed jg** → пропуск; master живого U
-//!   **с country = 0**; ctor `CSpiderPoisonState` (`0x5E90C0`) с порядком
-//!   вычисления Query const(20010) → freq(6001) → keep(10002) **до** замены;
-//!   скан первого `0x191` в `S+0x11C` → End `vcall+0x1C` → deleting-dtor
-//!   `vcall+0x10(1)` → slot = 0 → `Begin(U, S)` → тот же слот, иначе append.
+//! Payload состояния — данные/кодек в Zone `effects/poison.rs`; живой AI и
+//! фабрика — hub `states/poison.rs` и `statefactory` прежнего пакета.
+//! Швы: `SpiderPoisonGame` расширяет hub `baseattackruntime` чтением
+//! `GetTargetPath`; `SpiderPoisonStateArena` — Cure-факт и замена первого
+//! 0x191; abort последнего варианта замены — защита от несогласованности
+//! арены Rust (машинной ветви не соответствует).
 //!
-//! Payload состояния — `CSpiderPoisonState`: кодек `zone/effects/poison.rs`
-//! (VERIFIED), живой AI/фабрика — hub `states/poison.rs` и
-//! `statefactory` (оба вне этого файла). `spiderpoisonstate.rs` прежнего
-//! пакета остаётся тонким alias.
-//!
-//! Объявленные швы переноса (не расхождения): трейт `SpiderPoisonGame`
-//! расширяет hub `baseattackruntime::BaseAttackGame` единственным чтением
-//! `GetTargetPath`; трейт `SpiderPoisonStateArena` — живой Cure-факт и
-//! семейная замена первого состояния 0x191 (`states/state.rs` прежнего
-//! пакета: find/end/placement + primary Begin); `SpiderPoisonMoveShape`
-//! добавляет `SetMoveable` к фасаду фигуры. Потребление статическое
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
-//! Последний вариант замены — abort при неразрешимой позиции слота
-//! (внутренний отказ арены: запись найдена, а локализация офсета нет) —
-//! для обеих ветвей принята семантика sibling-каста `corpseptomaine` вместо
-//! безусловного append; машинной ветви этому отказу не соответствует, она
-//! возникает только при несогласованности арены Rust.
+//! Исходный владелец PDB: `appserver/skills/spiderpoison.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#spiderpoison--cspiderpoison-0x191
 
 use nebokrai_shared::runtime::get_line_direction;
 

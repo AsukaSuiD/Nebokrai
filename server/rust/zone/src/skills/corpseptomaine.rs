@@ -2,73 +2,19 @@
 //! ветви, после задержки полный квадрат 3×3 вокруг caster-а, живым целям без
 //! `CureState` централизованно заменяется канонический `CSpiderPoisonState`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/corpseptomaine.cpp`; тела execute_owned,
-//! player-путь и `add_corpse_poison_state` перенесены буквально.
+//! Машинные quirks: player-Check при нулевой MP-цене — тихий ret 0 без
+//! visual; Begin-фаза AI только у player (MP со знаковым js); отсутствие
+//! региона U — End(1); scan целей принимает любой живой RTTI-CMoveShape по
+//! виртуальным IsDied/IsAttackAble (+Cure-гейт) без allowlist типов. Country
+//! в MasterInfo яда остаётся 0; порядок Query ctor-а — const(20010) →
+//! freq(6001) → keep(10002) до замены первого 0x191.
 //!
-//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
-//! D3-corpseptomaine.md`, тела `.local/recon-de/disasm/CCorpsePtomaine.txt`)
-//! подтверждает всё, кроме исправленного FIX F2:
+//! Hub-швы: `monsterattack` (кандидаты и контакт), общая арена —
+//! `spiderpoison::SpiderPoisonStateArena`; `finish_summon_skill` — прежний hub
+//! `states/summonskill` старого пакета.
 //!
-//! - vtable `0x257F5C`: End `0x546090` — ICF-фолд общего End
-//!   (`CAgility::End` — нули `[+0x50]/[+0x4C]`, GetUser → SetMoveable(1) →
-//!   `CAttackSkill::End`); Check `0x539A00`: null S/props → 0; reuse 10005 →
-//!   visual(13); только U.type==400: RTTI player, `Query(2) == 0` → **тихий
-//!   ret 0** (jbe), `MP − loss < 0` → visual(7); non-400 → **ret 1 без
-//!   SetMoveable(0)** (0x539A71→0x539AB9). Begin-скелет
-//!   `0x539840`/`0x539910`/`0x539AE0` MATCH.
-//! - AI `0x53A230`: `[+0x4C]==0` → out; props null → End(0); U null →
-//!   End(0); Begin-фаза только player: `MP([U+0x284]) − Query(2)` со
-//!   **знаковым js** → visual(7) → End(0), иначе `SetMP(MP − loss)` и
-//!   `vcall CPlayer+0x164` (имя цели — hub-шов); `Query(10006)` → `[+0x3C]`;
-//!   visual(0); delay `Query(10001)+[+0x2C]` → out; visual(1); регион —
-//!   RTTI `[U+0x40]` → null → **End(1)** (0x53A4E8), нормальное завершение
-//!   также End(1).
-//! - Обход: `g_bScope` — девять «1» (полный 3×3, центр включён), length =
-//!   height = 3, X-внешний/Y-внутренний, `x + 3·y`, центр
-//!   `GetTileX/Y(U) − 1`; клетка → RTTI CShape→CMoveShape → `IsDied` →
-//!   `IsAttackAble(U)` `vcall+0x134` → `DoesStateExist(0x131)` → AddState;
-//!   god-фильтра нет.
-//! - AddState `0x539FF0`: MasterInfo local — type/id U; player: +0xB20 →
-//!   mi+0xC, +0xB28 → mi+0x8, +0xB78 → mi+0x10, байты +0x278..+0x27B →
-//!   mi+0x18..+0x1B, **country остаётся 0**; ctor `CSpiderPoisonState`
-//!   (`0x5E90C0`) с порядком Query **const(20010) → freq(6001) → keep
-//!   (10002) до замены**; скан первого `0x191` в `S+0x11C` → End
-//!   `vcall+0x1C` → deleting-dtor `vcall+0x10(1)` → slot = 0 →
-//!   `Begin(U, S)` `vcall+0x08` → тот же слот, иначе append; провал Begin —
-//!   deleting-dtor нового. Player и monster ветви используют абсолютный
-//!   срок `CSkill::IsRestored`, задержку — отдельной elapsed-проверкой,
-//!   MP-списание — wrapping-sub фазы Begin.
-//!
-//! **FIX F2 (предикат, player-путь; основание — тело AI `0x53A230`):**
-//! прежняя реконструкция ограничивала цели allowlist типов
-//! `{400, 500, 600, 1100, 1200}`; нативный scan принимает любой живой
-//! RTTI-CMoveShape по виртуальному `IsDied`/`IsAttackAble` (+Cure-гейт) без
-//! allowlist. Ограничение снято. Узкая достижимость после правки: домен
-//! скана задают живые разрешители owner-а — `base_magic_target_dead` и
-//! региональный `IsAttackAble` знают ровно 400/600 (и 1100/1200 через
-//! build-гейт); тип 500 (CNpc) машинно мёртв по `CMoveShape::IsDied`
-//! (нулевой combat HP), поэтому его удалённое членство в allowlist было
-//! недостижимым и там, и там; тип 1000 призванных фаланг вне домена
-//! `resolve_state_move_shape` (не CMoveShape по модели арены). Для
-//! гипотетических MoveShape-типов вне пятёрки нативный scan дал бы решение
-//! виртуальным вратам, а разрешители Rust отвечают «мёртв/неатакуем» —
-//! зафиксированы как неснимаемый остаток модели арены, машинная форма
-//! scan-ветки player-пути сохранена. Monster-путь фильтра не имел и не
-//! имеет: кандидаты читаются общим hub-хелпером `monsterattack`.
-//!
-//! Объявленные швы переноса (не расхождения): hub-трейты `monsterattack`
-//! (`published region` публикует настоящий derived region без
-//! копии base/состояния, публикация настоящего `CPlayerAI` — тот же контракт
-//! коллебека удара), арена состояний — общий hub `spiderpoison`
-//! (`SpiderPoisonStateArena`: Cure-факт и замена первого 0x191 с порядком
-//! прежнего `states/state.rs`), региональная форма `IsAttackAble` и
-//! `finish_summon_skill` прежнего hub `states/summonskill` — фасады
-//! `CorpsePtomaineGame`/`CorpsePtomaineContact`. Потребление статическое
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/corpseptomaine.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#corpseptomaine-ccorpseptomaine-0x19f
 
 use nebokrai_shared::values::CGuid;
 
@@ -534,8 +480,8 @@ where
                 center_y.wrapping_add(offset_y),
             ) {
                 let identity = view.identity;
-                // FIX F2: allowlist типов снят — нативный scan принимает любой
-                // живой CMoveShape; предикаты IsDied/IsAttackAble решают ниже.
+                // Нативный scan принимает любой живой CMoveShape без allowlist
+                // типов; предикаты IsDied/IsAttackAble решают ниже.
                 if game.base_magic_target_dead(region_id, identity)
                     || !game.ptomaine_target_attackable(region_id, source, identity)
                 {

@@ -1,31 +1,18 @@
 //! Щит жизни CLifeShield (0x220): Check/AI.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/lifeshield.cpp` (Begin×3 `0x118190…`, Check `0x118850`,
-//! AI `0x118A60`, собственный End(H) `0x11A700`; state ctor `0x1F29C0`,
-//! AddCure `0x1F2FD0` зависит от CureState — уже в Zone). Тела перенесены
-//! буквально. End CLifeShieldState (Cure + обновление живой фигуры) —
-//! hub-lifecycle `lifeshieldstate.rs` старого пакета, сюда не переносится.
+//! Quirks: MP0 не требует предмета в Check, но первый AI при отсутствии
+//! боевого духа остаётся в ожидании; запись MP предшествует сериализации
+//! предмета и BF918 шлётся даже при её отказе без отката частичных изменений
+//! (точечно); первый прежний щит проходит End и dtor свежего остатка позиции,
+//! затем Begin(U,U) нового — без внешнего UpdateProperty.
 //!
-//! Общий координатор боевой феи выполняет base Begin, создаёт visual и
-//! завершает захваченный экземпляр навыка. Здесь находятся Check и AI:
-//! успешный Check допускает первый AI отдельно, не сбрасывая начальные часы.
-//! MP0 не требует предмета в Check, но первый AI при отсутствии боевого
-//! духа остаётся в ожидании. Проверка MP использует знак DWORD-разности.
+//! Швы: hub `battlefairyskill::BattleFairyGame`; списание MP с сериализацией —
+//! шов `spend_battle_fairy_mana`; первичный Begin щита — hub самозащитных
+//! состояний старого пакета (`begin_life_shield_state`); End CLifeShieldState
+//! (Cure + обновление живой фигуры) — `lifeshieldstate.rs` старого пакета.
 //!
-//! Запись MP предшествует сериализации предмета. BF918 отправляется даже
-//! при отказе сериализации, без отката частичных изменений — точечно, решение
-//! C (якоря в шапке `skills/battlefairyskill.rs`); только затем
-//! задаются прерываемость, visual0 и ожидание абсолютного срока.
-//! Первый прежний щит проходит End и destructor свежего остатка позиции.
-//! После этого читаются уровень и параметры нового щита: Begin(U,U) с
-//! собственными часами и пакетом → append. Внешнего UpdateProperty нет.
-//! Полный skill End, включая visual3 и AfterUse, остаётся у координатора.
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; списание MP с сериализацией — шов `spend_battle_fairy_mana`;
-//! первичный Begin щита — hub самозащитных состояний старого пакета за швом
-//! `begin_life_shield_state`.
+//! Исходный владелец PDB: `appserver/skills/lifeshield.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#навыки-семейства-атрибутный-октет-bfbaseattack-transfer-fatalblow-lifeshield
 
 use crate::content::CSkillBaseProperties;
 use crate::content::goods::GAP_BF_MP;

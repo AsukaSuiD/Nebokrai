@@ -1,72 +1,26 @@
 //! Семья призыва `CSummonSkill` — дериваты `CSummonCorpseCandle` (0x19A),
 //! `CSummonSkeleton` (0x19B), `CSummonSpore` (0x19C) и `CBossFiendSummon`
-//! (0x1F9). Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), исходные владельцы
-//! `appserver/skills/{summoncreatureskill,summoncorpsecandle,summonskeleton,
-//! summonspore,bossfiendsummon}.cpp`. Одноимённого класса
-//! `CSummonCreatureSkill` в PDB не существует: Rust-файл — общий путь
-//! дериватов `CSummonSkill`.
+//! (0x1F9). Одноимённого класса `CSummonCreatureSkill` в PDB не существует:
+//! Rust-файл — общий путь дериватов `CSummonSkill`.
 //!
-//! Машинная разведка по этой паре сняла семью целиком:
+//! Машинные quirks: Check — только reuse и `SetMoveable(0)` (без пути и
+//! дальности); `lifetime` = Query(30001) и picture-id читаются ВНУТРИ цикла
+//! создания (у BossFiend `random(3)` до нулевой проверки количества);
+//! reuse-clock читается после создания и публикации всех существ; JJ-вариант
+//! Summon — stub у всей семьи (живой JJ только у `CSpiderMist`); поворота в
+//! пакете визуала нет — внешний поворот монстру задаёт движение подхода,
+//! игрока — клиент.
 //!
-//! - база `CSummonSkill`: ctor `0x1E0EC0` пишет `[+0x48] = 3`; dtor `0x5E0F20`
-//!   пишет sentinel `0x7FFFFFFF`;
-//! - Begin-скелет дериватов байт-эквивалентен трио (отличия только effect
-//!   vtable): форвард в Begin базы (всегда 1) → new effect 0xC → `[+0x34]` →
-//!   effect `VT[0](1)` → CheckCastCondition (слот `+0x64`) → провал: End(0),
-//!   ret 0; успех: `[+0x4C] = 1`, `[+0x50] = 0`, ret 1;
-//! - CheckCastCondition `0x53E8D0`: только reuse (`IsRestored` по абсолютному
-//!   DWORD), затем `SetMoveable(0)`; проверки пути и дальности внутри нет;
-//! - End базы `0x5E0F40`: flag → AfterUseSkill `0x53CF30` (износ оружия
-//!   только у игрока) → `CSkill::End` `0x4D84C0`; reuse-clock читается после
-//!   создания и публикации всех существ;
-//! - Summon: слот vtable `+0x94` K-вариант реален — трио-фолд `0x53E260`,
-//!   у CBossFiendSummon собственное тело `0x52C610`. Summon НЕ 4-классовый
-//!   фолд; истинные VA тела семьи `0x53E260` (Summon трио), `0x53E8D0`
-//!   (CheckCastCondition), `0x53F270` (AI-фолд, читатель `K = Query(20010)`).
-//!   JJ-вариант слота `+0x5C` — stub `xor eax, eax; ret 0xC` у базы и у
-//!   трио/BossFiend:
-//!   семантики 4-му аргументу НЕТ; живой JJ только
-//!   `CSpiderMist::Summon` `0x541140` (J1/J2 = tile X/Y точки через
-//!   SetTileXY слот `+0x88`);
-//! - тело Summon: MasterInfo (player-поля — только у игрока), затем цикл по
-//!   K существ: `lifetime = Query(30001)` ВНУТРИ цикла,
-//!   `picture-id = Query(30003)` (у BossFiend `random(3)` ДО нулевой проверки
-//!   количества → 30003/30004/30005), позиция
-//!   `GetRandomPosInRange(x−4, y−4, 8, 8)`,
-//!   `AddSummonedCreature(info, id, x, y, -1, lifetime)`; reuse-clock после;
-//! - `CSummonSkill::AfterUseSkill` `0x53CF30` изнашивает оружие только при
-//!   источнике-player; пересчёта свойств игрока в семье нет;
-//! - wire: AddToByteArray группы `0x1E47A0` и entry `0xBF502` с
-//!   `include_child = true`, как у zone-конверта `summonshape`;
-//! - пакет визуала `0xBFE01` читает GetDir «как есть»: ни Begins/AI/Summon/
-//!   UpdateVisualEffect, ни `CSkill::Begin` поворота не содержат;
-//!   `set_direction` в реконструкции не вводится: сверка с драйвером каста
-//!   (`appserver/skills/monsterbaseattack.rs`) показала, что generic-хвост
-//!   диспетчера сам ставит поворот, но семья уходит в собственные executors
-//!   раньше него; внешний поворот монстру
-//!   задаёт движение подхода (`CMoveShape::OnMove` выставляет direction на
-//!   каждом шаге — `zone/regions/moveshape.rs::on_move_wire`), поворот
-//!   игрока принадлежит клиенту.
+//! Швы: hub-трейты — фасады прежнего владельца `CGame`/`CPlayer`/
+//! `CServerRegion` (делегат `appserver/skills/summoncreatureskill.rs`);
+//! state Begin — statefactory Zone.
 //!
-//! Нормализация переноса (не расхождение): чтения `Query(30001)` и
-//! `Query(30003/4/5)` унифицированы ВНУТРИ цикла создания для обеих ветвей
-//! (monster-ветвь читала их там и раньше; player-ветвь читала один раз до
-//! цикла) — по машинному порядку тела Summon; запросы детерминированы,
-//! порядок и счёт RNG не меняются. Объявленные швы переноса: hub-трейты
-//! ниже — переходные фасады прежнего владельца `CGame`/`CPlayer`/`CServerRegion`,
-//! реализация остаётся у делегата старого пакета
-//! (`appserver/skills/summoncreatureskill.rs`); потребление швов статическое
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
-//! `QuerySkillBaseProperties` (skillfactory), SetMoveable/SetDir/GetDir
-//! (shape/monster), `GetRandomPosInRange` (`random_region_position_owned`),
-//! `AddSummonedCreature` (`add_summoned_creature_owned`), state Begin
-//! (statefactory) и around-доставка — швы трейта.
+//! UNKNOWN: имя слота `+0x2C` тела Summon; GUID `0xEF3D9C` — INFERRED; ветви
+//! 2..0xF jump-таблицы visual вне режимов 0/1.
 //!
-//! Честные UNKNOWN семьи (не достраиваются догадкой): имя слота `+0x2C`
-//! тела Summon; константа GUID `0xEF3D9C` в окрестности тела — INFERRED
-//! (прямого основания нет); ветви 2..0xF jump-таблицы UpdateVisualEffect вне
-//! режимов 0/1.
+//! Исходные владельцы PDB: `appserver/skills/{summoncreatureskill,
+//! summoncorpsecandle,summonskeleton,summonspore,bossfiendsummon}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#summoncreatureskill--семья-csummonskill-0x19a0x19b0x19c0x1f9
 
 use nebokrai_shared::runtime::get_line_direction;
 

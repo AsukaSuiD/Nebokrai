@@ -1,76 +1,20 @@
 //! Ярость синего босса `CBossBlueFury` (`0x1F7`): Check, AI, порядок
-//! состояний и монстровый owned-вход. Источник: точная пара `gameserver.exe`
-//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/bossbluefury.cpp/.h`; тела перенесены буквально
-//! (сверка — разведка `.local/recon-de/notes/E4-bossbluefury.md`, тела
-//! `.local/recon-de/disasm/CBossBlueFury.txt`).
+//! состояний и монстровый owned-вход; тела перенесены буквально.
 //! Данные и codec состояния — Zone `effects/bossbluefury.rs`, живые callbacks
 //! состояния — соседний `skills/bossbluefurystate.rs`.
 //!
-//! Машинные якоря (VA = RVA + 0x400000): vtable класса `0x6578AC`,
-//! `CBossBlueFuryEffect` vtable `0x657940`, UpdateVisualEffect `0x52E560`
-//! (отдельный адрес — не ICF с `0x59FB90` RageBreak); Begin триадой
-//! `0x52D4A0`/`0x52D2E0`/`0x52D3B0` (базовый Begin, `new` loop=1 visual,
-//! CheckCast `vcall+0x64`, отказ — полный End(0), успех — `[+0x4C]=1`,
-//! `[+0x50]=0`); End — общий ICF-хвост `0x546090` (`[+0x50]/[+0x4C]` в 0,
-//! свежему U возвращается движение `0x4CCEE0(1)`, аргумент пробрасывается
-//! базовому End; тот же хвост у Fury/BossBlueQuake).
+//! Машинный инвариант порядка состояний: полный продув КАЖДОГО живого слота
+//! U с id `0x1F7` (скан до конца вектора, без досрочного выхода) → новый
+//! state → Begin(U,U) → UpdateProperty → End(1). Отказы Check wire-кадром —
+//! BYTE-парой `[0, mode]` только игроку (отдельное тело, не DWORD-префикс
+//! RageBreak). RP-списание первого прохода AI необратимо.
 //!
-//! Check (`0x52E8E0`): `QuerySkillBaseProperties` обязательна (null → ret 0);
-//! абсолютный срок reuse `0x2715` + `[+0x40]` против `timeGetTime` — отказ
-//! visual(13) и GS0278 только игроку; дальше только RTTI-CPlayer: стоимость
-//! RP `Query(3) == 0` — тихий ret 0 без visual; movzx RP `[U+0x288]` −
-//! `Query(3)` signed < 0 → visual(8) + GS0289 с ценой → ret 0; успех —
-//! SetMoveable(0). Монстр проходит без RP-блока и без SetMoveable(0).
+//! Hub-швы: `statecast::StateCastGame` и RP-подготовка `skills/fury.rs`;
+//! монстр-вход — hub `monsterattack` старого пакета. Статическое потребление
+//! (generic), dyn-совместимость не вводится (ADR-0013).
 //!
-//! AI (`0x52EAC0`): `[+0x4C] == 0` — чистый возврат; таблица и U обязаны
-//! (отсутствие → End(0)); `IsDied(U)` → visual(2) → End(1); первый проход
-//! `[+0x50] == 0` списывает RP игрока до дефицита (необратимо; дефицит —
-//! visual(8) + GS0289 + End(0)), затем `vcall+0x164` = OnChangeStates
-//! (`publish_player_states`), CAN `0x2716` → `[+0x3C]`, visual(0), `[+0x50]=1`;
-//! задержка `0x2711` — абсолютная `start + delay` unsigned, затем visual(1).
-//! После неё порядок состояний: **продув каждого слота U с id `0x1F7`**
-//! (`0x52EC10`–`0x52EC72`: End `vcall+0x1C` → deleting-dtor(1) свежего остатка
-//! позиции → слот в 0, скан до конца вектора без досрочного выхода) →
-//! `new(0x44)` `CBossBlueFuryState::ctor` `0x5E8A60`
-//! (factor = `Query(20003)`, keep = `Query(10002)`, weak = `Query(10003)`;
-//! вычисление запросов 10003 → 10002 → 20003 по push-порядку дампа) →
-//! Begin(U,U) `vcall+8` → append в хвост | dtor; затем UpdateProperty
-//! `vcall+0x9C` на U (call site `0x52EDAC`) и End(1). Атрибуция разведки
-//! «`new(0x44)` CRageBreakState, gain = `Query(105)`» относится к соседнему
-//! `CRageBreak::AI` (`0x5A0348`: new(0x44) → ctor `0x5FD1C0`, ключи
-//! `Query(0x69)`/`Query(0x2712)`): у CBossBlueFury свой ctor и свои ключи.
-//!
-//! **FIX F3 (продув; основание — тело AI `0x52EAC0`):** прежняя реконструкция
-//! завершала только первый типизированный ключ `applied_state_key::<
-//! BossBlueFuryState>()`; машина завершает и уничтожает КАЖДЫЙ живой слот id
-//! `0x1F7`, продолжая скан (позиция всегда +1, длина перечитывается, пропуски
-//! не уплотняются). Узкая достижимость: игровой путь держит не более одной
-//! записи `0x1F7` (каждый cast чистит), расхождение видимо при дублированных
-//! записях БД id `0x1F7`, загруженных Restart-ом без продува. Класс:
-//! statement-order/scope удаления; исправлено машинным продувом общим для
-//! обеих ветвей (`sweep_boss_blue_fury_states`), `PublishStateCastGame`-шов
-//! совпадает с конфликт-свипом семьи Fury.
-//!
-//! Wire `0x000BFE01`: кадры mode 0/1 — action 1/2 around с U (target =
-//! сам U, тайлы живого источника); отказы 13/8/2 — только игроку BYTE-парой
-//! `[byte 0][byte mode]` (форма отдельного тела `0x52E560`, не DWORD-префикс
-//! RageBreak). После CheckCast-отказов Begin — терминальный `[0, 2]`; GS0278
-//! и GS0289 — без/с суммой стоимости. Отдельное расхождение прежнего тела:
-//! vcall+0x164 оно отображало на `update_player_current_state(MoveShapeAi)`;
-//! тот же vcall CFury/CDaubPoison/CRageBreak hub-сверен как OnChangeStates —
-//! перенос на общий hub (`prepare_rage_skill_effect`) приводит вызов к
-//! `publish_player_states`.
-//!
-//! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! и RP-подготовка `skills/fury.rs` (check/фаза 0 AI, свип-примитив
-//! `end_and_destroy_state_at`) реализованы у владельца старого пакета; hub
-//! `monsterattack` — подход/регион/cast-машина монстрового входа
-//! (подпись делегата с `properties`/`now_ms` сохранена, часы — `fn()` от
-//! делегата). MasterInfo конца (движение USER) и AfterUse/reuse — реестр
-//! исполнения зарегистрированного навыка (`skillfactory`: State, USER,
-//! Weapon). Потребление статическое (generic), dyn-совместимость не вводится
-//! (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/bossbluefury.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#bossbluefury-cbossbluefury-0x1f7
 
 use nebokrai_shared::values::CGuid;
 
@@ -157,7 +101,7 @@ where
     }
 }
 
-/// FIX F3: машинный продув живого вектора — End + dtor КАЖДОГО слота id
+/// Машинный продув живого вектора — End + dtor КАЖДОГО слота id
 /// `0x1F7` (не только первого). Позиция читается заново после callback,
 /// пропуски не уплотняются, новые хвостовые состояния участвуют в проходе.
 pub fn sweep_boss_blue_fury_states<Game: StateCastGame>(

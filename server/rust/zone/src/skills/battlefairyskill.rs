@@ -1,63 +1,24 @@
-//! Координатор семейства навыков боевого духа: общий зарегистрированный вход,
-//! общий End-контракт и wire visual девятнадцати тел `*Effect::UpdateVisualEffect`.
+//! Координатор семейства навыков боевого духа: общий зарегистрированный
+//! вход, общий End-контракт и wire visual девятнадцати тел
+//! `*Effect::UpdateVisualEffect`.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match;
-//! идентификатор бинарника см. в шапке `skills/baseattackruntime.rs`),
-//! семейство `appserver/skills/*` и базовый `appserver/states/skill.cpp`;
-//! тела перенесены буквально.
+//! End-контракт живёт в hub `states/skill.rs` старого пакета (здесь не
+//! дублируется): AfterUse при arg≠0 → общий `CSkill::End` с занулением
+//! девяти DWORD, reuse-штамп только при arg≠0, прямой delete effect → ended.
+//! Failure-кадр — `[4, mode]` точечно игроку; доставка `0xBF918` расхода MP
+//! — точечная `SendToPlayer` (машинная форма).
 //!
-//! End-контракт координатора (сама цепочка живёт
-//! в hub `states/skill.rs` старого пакета и здесь не дублируется): `End` семейства
-//! `CStateSkill` `0x5DFBD0`: arg≠0 → GetUser → virtual `AfterUseSkill`
-//! `0x53CF30`; всегда `CSkill::End(arg)` `0x4D84C0`: user? → virtual
-//! `OnEndSkill` (+0x158, пустая база) → зануление 9 DWORD +0xC..+0x2C →
-//! reuse-штамп `timeGetTime` только при arg≠0 → прямой delete effect (без
-//! virtual End) → ended=1. Cooldown — после AfterUse, до разрушения эффекта.
+//! Quirk: CFatalBlow и CLeiming2 в visual пишут живой тип юзера `[user+4]`,
+//! CThunder — литерал 700 (`BattleFairySourceType`); Po-семейство идёт в
+//! fire без проверки sufferer (достижимость — UNKNOWN).
 //!
-//! Визуал-таблица: 19 отдельных тел без ICF между ними; две формы
-//! диспетча — JT16 (7 атакующих: BFBaseAttack `0x1170E0`, CFatalBlow
-//! `0x11E480`, CTianhuo `0x1223B0`, CThunder `0x120E30`, CLeiming2 `0x11FA80`,
-//! CBloodLoss `0x11A840`, CPoisonArrow `0x1191A0`) и remap14→JT8 (12 кастеров
-//! со своими байтовыми картами). Failure-кадр `[byte 4][byte mode]`
-//! точечным SendToPlayer под `dynamic_cast CPlayer`; wide-8 кастеры пишут
-//! `add_long(4)+add_byte(8)`; все ветки сходятся в базовый хвост
-//! `CVisualEffect::UpdateVisualEffect` (он остаётся у внешнего dispatcher-а
-//! `states/skill.rs`, сюда не входит).
+//! Швы: трейты `BattleFairyPlayer`/`BattleFairyMoveShape`/`BattleFairyGame` —
+//! фасады старого пакета (файл-делегат `appserver/skills/battlefairyskill.rs`);
+//! hub-lifecycle арены состояний и end-оркестрация — у того же владельца.
 //!
-//! Установленные поправки переноса (решения и машинные якоря):
-//!
-//! (A) Исправлено при переносе: CFatalBlow (`0x51E538`/`0x51FB3B`/`0x51E5C8`)
-//! и CLeiming2 в case0 и fire пишут ЖИВОЙ тип юзера `[user+4]`, CThunder —
-//! литерал 700; прежний Rust писал 700 всем (`source_type_on_fire=false`).
-//! Поведение сохранено по классам через `BattleFairySourceType`. INFERRED:
-//! динамика war-soul не проверялась динамически — значение `[user+4]` при
-//! живом боевом духе как источнике считается машинным чтением поля, без
-//! отдельной ветки типов.
-//!
-//! (B) Сохранено без изменений: Po-семейство идёт в fire без проверки
-//! sufferer (CPojia `0x12A09B`); контракт держит прежнюю Required-форму.
-//! UNKNOWN: достижимость ветки fire при NULL-sufferer — ранние гейты AI могут
-//! делать её недостижимой; подтверждения в разведке нет.
-//!
-//! (C) Исправлено при переносе: wire `0xBF918` — оригинал шлёт
-//! `SendToPlayer(player_id)` точечно (машинные якоря `0x501BDE..0x501C61` и
-//! `0x51F249`); прежний Rust `send_goods_update` использовал
-//! `send_player_shape_around` (рассылка). Общий помощник
-//! `send_battle_fairy_goods_update` ниже доставляет точечно; форма кадра та
-//! же: id, GUID (1+16 или маркер), len, blob `SerializeForOldClient`.
-//!
-//! Объявленные швы переноса (не расхождения): трейты `BattleFairyPlayer`,
-//! `BattleFairyMoveShape` и `BattleFairyGame` — фасады `CPlayer`/`CMoveShape`/
-//! `CGame` старого пакета, реализация остаётся у них в файле-делегате
-//! `appserver/skills/battlefairyskill.rs`; имена членов сохраняют исходную
-//! операцию. Швы потребляются статически (generic), dyn-совместимость и
-//! `Send`-контракт не вводятся (прецедент ADR-0013). Аргумент `runtime` у
-//! зарегистрированного входа непрозрачен: координатор не читает его сам, а
-//! передаёт check/AI ветвям (у делегата это main-loop runtime старого пакета,
-//! у перенесённых тел — часы `now`). Hub-lifecycle арены состояний и
-//! end-оркестрация инстансов остаются тому же владельцу и вызываются по
-//! одноимённым швам. UNKNOWN списком: достижимость fire Po при NULL-sufferer
-//! (пункт B); динамика war-soul типов источника (пункт A).
+//! Исходные владельцы PDB: семейство `appserver/skills/*`, базовый
+//! `appserver/states/skill.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#battlefairyskill--координатор-и-wire-visual
 
 use nebokrai_shared::values::CGuid;
 

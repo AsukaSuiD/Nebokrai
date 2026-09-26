@@ -3,69 +3,22 @@
 //! одной клетке за тик). Поклеточный удар и формула принадлежат семейным
 //! hub `crossbowattack`/`rangedweaponcast` прежнего пакета (объявленные швы,
 //! здесь не дублируются); оркестрация player-cast и общий End — hub
-//! `playercast`/`states/skill.rs`.
+//! `playercast`/`states/skill.rs` старого пакета.
 //!
-//! Источник: `gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
-//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
-//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
-//! `appserver/skills/poisonmoth.cpp`. Машинный разбор тела —
-//! `.local/recon-de/notes/D8-poisonmoth.md` и
-//! `.local/recon-de/disasm/CPoisonMoth.txt`.
+//! Машинные quirks: отказ дальности подготовки — `size > max + 1` (MAX+1
+//! против MAX в Check); текущий регион U проверяется после часов даже на
+//! завершённом пути (нет региона — Pending без End); одна клетка за AI-тик
+//! без дедупликации целей; двойной visual(3) — при остановке и на тике
+//! завершения; visual-target пишется перед ударом; у Calc hit =
+//! −Query(20001) (только у 0xCF).
 //!
-//! - Check `0x58C4C0`: null U → 0; self-target (arg2==U) → visual(10) +
-//!   GS0286 (клей самонаведения здесь); затем семейный скелет
-//!   `check_ranged_weapon_cast` с правилом пути DistanceAndBlocks и
-//!   арбалетом категории 4 — шов `rangedweaponcast`: reuse → visual(13) +
-//!   GS0278; dist 5003 (jbe) → visual(11) + GS0290; клетка third==2
-//!   (BLOCK_UNFLY) → visual(15) + GS0282; арбалет иначе visual(14) + GS0293;
-//!   Query(2)==0 → тихий ret 0; signed MP → visual(7) + GS0288; иначе
-//!   SetMoveable(0), ret 1; non-player — без Move0/MP/арбалета.
-//! - AI `0x58CED0`, фаза 0 (player): списание MP → `vcall+0x164`
-//!   (OnChangeStates) → повторная проверка арбалета (шов
-//!   `prepare_ranged_weapon_player`); CAN(10006) → `[+0x3C]`; GetSufferer:
-//!   свежие X/Y S, иначе сохранённая точка команды; GetLineDir → SetDir на
-//!   U; visual(0); `[+0x50]=1`.
-//! - Подготовка пути ([+0x54]==0): Query(10001)+started unsigned → out;
-//!   **SetMoveable(1)** → GetTargetPath в payload навыка; дальность: отказ
-//!   iff `size > max + 1` (jae проход) — **оригинальная квазнота MAX+1
-//!   против MAX в Check** → visual(11) + GS0290 → End(0); первая клетка
-//!   third==2 задаёт endpoint (заблокированная), иначе последняя;
-//!   flight = Query(10008) × count до неё; visual(1); запуск фазы атаки.
-//! - Полёт ([+0x54]==1): deadline = Query(10008) × position + Query(10001) +
-//!   started (signed/unsigned переполнение — wrapping); текущий регион U
-//!   проверяется **после часов**, даже для завершённого пути (нет региона —
-//!   Pending без End); index ≥ size → visual(3) + End(1); текущая клетка
-//!   сохраняется в payload; block клетки: 3 (BLOCK_SHAPE) → поклеточный
-//!   удар (шов), попадание → visual(3) + position = size + 1; 2
-//!   (BLOCK_UNFLY) → visual(3) + стоп; иначе шаг вперёд; **одна клетка за
-//!   AI-тик**, дедупликации целей нет; **двойной visual(3)** — при
-//!   остановке и повторно на тике завершения перед End(1).
-//! - Attack(JJ) `0x58CD80` — семейный `run_poison_moth_cell` (шов): (0,0)-
-//!   гейт; GetShapes клетки без типового фильтра (RTTI CMoveShape), skip
-//!   null/self/IsDied; IsAttackAble(U) `vcall+0x134`; **visual-target пишется
-//!   перед ударом**; ret — был ли хотя бы один удар. Attack(U,S) `0x58CC70`:
-//!   MasterInfo-канва игрока + Calculate + OnBeenAttacked(&info,0) — семейный
-//!   контакт (шов). Calc `0x58C9E0` — семейный `calculate_crossbow_attack`
-//!   (`kind 5` записей общего хвоста; hit = −Query(20001) только у 0xCF,
-//!   element-добавка 0 вместо Query(20013), jns/jge-clamp, второй RNG крита
-//!   обязателен; f64-модель произведения факторов — принятая модель
-//!   combat.md). Эти семейные тела здесь не переоткрываются.
-//! - End `0x58C3A0`: сброс фазы/счётчиков/цели, освобождение пути до
-//!   свежего U Move1 и общего Attack End с исходным аргументом — payload
-//!   `PoisonMothExecutionState::clear_end_paths` (Zone `skills/execution/
-//!   payload.rs`) + hub-кадр End зарегистрированного экземпляра прежнего
-//!   пакета.
+//! Швы: трейты `PoisonMothGame`/`PoisonMothMoveShape`/`PoisonMothContact` —
+//! фасады прежних `CGame`/`CMoveShape` и вызовы семей `rangedweaponcast` и
+//! `crossbowattack` в прежних точках; `execute_registered_player_cast` —
+//! hub `playercast` старого пакета.
 //!
-//! Объявленные швы переноса (не расхождения): трейты `PoisonMothGame`/
-//! `PoisonMothMoveShape` и `PoisonMothContact<Runtime>` ниже — фасады
-//! прежних `CGame`/`CMoveShape` и вызовы семей `rangedweaponcast`
-//! (`check_ranged_weapon_cast`, `prepare_ranged_weapon_player`,
-//! `ranged_weapon_failure` с арбалетом) и `crossbowattack`
-//! (`run_poison_moth_cell`) в прежних точках; оркестрация
-//! `execute_registered_player_cast` (Begin-запись, visual-ресурс, End по
-//! исходу) остаётся hub `playercast`. Потребление статическое (generic),
-//! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/poisonmoth.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#poisonmoth--cpoisonmoth-0xcf
 
 use nebokrai_shared::runtime::get_line_direction;
 

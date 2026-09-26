@@ -1,31 +1,16 @@
 //! Правила и исполнение CPromotion (0x142) — усиление.
-//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
-//! (RSDS match), `appserver/skills/promotion.cpp/.h`; состояние принадлежит
-//! `promotionstate.cpp/.h`. Машинные якоря семьи: CPromotion Begin
-//! `0x1686A0`, AI `0x169110`; Restart состояния — fold `0x1FD450`.
 //!
-//! Зарегистрированный Begin предшествует visual loop1 и CheckCast. Нулевая
-//! стоимость MP у игрока — тихий отказ CheckCast; положительная
-//! проверяется по знаку DWORD-разности и только при успехе запрещает
-//! движение. Монстр MP не проверяет и движение в Begin не запрещает.
-//! Первый AI повторно расходует MP игрока, публикует OnChangeStates,
-//! задаёт CAN_BE_BREAKED, направление и visual(0). Concrete-флаги
-//! работы/проверки выражены фазой, независимо от базовой прерываемости.
-//! Reuse/delay — wrapping-сроки DWORD.
+//! Quirks: U без region-link завершает навык до проверки смерти S; после
+//! delay повторного пути нет — visual(1) разрешает S заново с fallback на U,
+//! наложение использует прежнюю S; первый прежний CPromotionState получает
+//! только Restart; End возвращает движение фактическому U.
 //!
-//! AI сохраняет U/S и owner свойств до callbacks; U без region-link
-//! завершает навык до проверки смерти S. После delay нет повторного пути:
-//! visual(1) разрешает S заново с fallback на U, наложение использует
-//! прежнюю S. Первый прежний CPromotionState получает только Restart;
-//! иначе новый primary Begin предшествует append, затем UpdateProperty
-//! источника. End очищает concrete фазу, возвращает движение actual U
-//! и завершает тот же зарегистрированный экземпляр через CStateSkill.
-//! Каноническая арена состояния и его codec не дублируются в исполнении.
+//! Швы: hub `statecast::*` — у владельца старого пакета; чтение таблицы
+//! свойств closure-ом по прецеденту `GodBlessGains`/`hearten_state`.
 //!
-//! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у прежнего владельца; разрешение `begin_target`, чтение
-//! таблицы свойств closure-ом по прецеденту `GodBlessGains`/`hearten_state`,
-//! материализация и полный End остаются в `stateskill.rs` делегата.
+//! Исходные владельцы PDB: `appserver/skills/promotion.cpp/.h`,
+//! `promotionstate.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#promotion--cpromotion-0x142
 
 use nebokrai_shared::runtime::get_line_direction;
 

@@ -1,43 +1,21 @@
 //! Живые Begin×3/End/Restart/AI и пересчёт свойств `CRageBreakState` (0x6E),
-//! а также consume-API для `CThunderSlash`. Источник: точная пара
-//! `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match),
-//! исходные владельцы `appserver/skills/ragebreakstate.cpp/.h` и
-//! `appserver/skills/furystate.cpp/.h`. Данные, 12-байтный codec и формулы
-//! усиления — Zone `effects/attackgain.rs` (тип `{RageBreak,Fury}State`,
-//! `ATTACK_GAIN_STATE_BYTES`); ниже — только живые callbacks.
+//! а также consume-API для `CThunderSlash`. Данные, 12-байтный codec и
+//! формулы усиления — Zone `effects/attackgain.rs` (тип `{RageBreak,Fury}State`,
+//! `ATTACK_GAIN_STATE_BYTES`); здесь — только живые callbacks.
 //!
-//! Машинные якоря тела (VA = RVA + 0x400000): ctor `0x5FD1C0`
-//! (два аргумента: gain → [+0x38], keep → [+0x40]; [+0x8] и [+0x3C]
-//! обнуляются) и `0x5FD240` (default); vtable `0x6612B4`; Begin триадой
-//! `0x5FD370` (U, OBJECT_TYPE, j, j) / `0x5FD2C0` (U, j, j) / `0x5FD5C0`
-//! (S, S; часы читаются только при U, loop1 создан без Update);
-//! AI `0x5EA4C0` (строгий unsigned-срок `[+0x2C] + [+0x40] < now` →
-//! vcall End); End `0x5FD420` (ICF `CTeamState::End`: visual End,
-//! повторное разрешение фактического S и удаление именно этого экземпляра
-//! у него через `0x4CDAB0`, держатель не подставляется); dtor `0x5FD460`;
-//! Restart `0x5FD450` (только `[+0x2C] = timeGetTime()`);
-//! OnUpdateProperties `0x5FD480`; OnChangeRegion `0x5D9BA0` (только запись
-//! региона User); GetRemainedTime `0x605E10` (unsigned-граница и повторное
-//! чтение часов); Serialize `0x5E7330` / Unserialize `0x5FD660`;
-//! `CRageBreakStateVisualEffect` `0x661300`, Update `0x5FD690`.
-//!
-//! `CRageBreakState` ICF-разделяет Serialize/OnUpdateProperties/Unserialize/
-//! AI с `CFuryState`; поэтому общие живые callbacks AttackGain-семьи
+//! `CRageBreakState` ICF-разделяет Serialize/OnUpdateProperties/Unserialize/AI
+//! с `CFuryState` — общие callbacks AttackGain-семьи
 //! (`begin_primary_attack_gain_state`, `update_attack_gain_state_properties`)
-//! оформлены здесь один раз и используются обоими владельцами — прежний
-//! `appserver/skills/furystate.rs` делегирует им.
+//! оформлены здесь один раз; прежний `appserver/skills/furystate.rs` делегирует.
+//! Quirks: End удаляет именно этот экземпляр через RemoveState(pointer) без
+//! подстановки держателя; Restart — только перевзвод часов.
 //!
-//! ThunderSlash расходует первый ID-0x6E слот без проверки RTTI/ended:
-//! End и затем destructor свежего остатка той же позиции. Расход не
-//! добавляет чтения часов или UpdateProperty сверх callbacks самого
-//! завершения (якоря в `skills/thunderslash.rs`).
+//! Швы: hub `statecast::StateCastGame`; монстровый пересчёт — фасад
+//! `AttackGainStateGame` (делегат `appserver/skills/ragebreakstate.rs`).
 //!
-//! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! (арена состояний, property-visual, удаление по ключу) реализован у
-//! прежнего владельца; монстровый пересчёт OnUpdateProperties открыт
-//! `AttackGainStateGame` (реализация у делегата
-//! `appserver/skills/ragebreakstate.rs`). Базовый `begin_base_applied_state`
-//! — это `mark_applied_state_begun` шва MoveShape, отдельный метод не нужен.
+//! Исходные владельцы PDB: `appserver/skills/ragebreakstate.cpp/.h`,
+//! `appserver/skills/furystate.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#ragebreak--cragebreak-0x6e-и-cragebreakstate
 
 use crate::effects::{
     ATTACK_GAIN_STATE_BYTES, AttackGainState, RAGE_BREAK_STATE_ID, RageBreakState,

@@ -1,31 +1,19 @@
 //! Восстановление здоровья CWangsheng (0x221): Check/AI и числовое правило,
-//! без создания WangshengState.
+//! без создания WangshengState (подтверждённый State owner 0x221 этим навыком
+//! не создаётся; живые callbacks сохранённого состояния — hub-lifecycle
+//! прежнего `wangshengstate.rs`).
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/wangsheng.cpp/.h` (конструктор ID и vtable VA
-//! 0x0051D4E0–0x0051D514, AI через слот +0x90 VA 0x0051DBD0, участок лечения
-//! VA 0x0051E01D–0x0051E043). Подтверждённый State owner 0x221 этим
-//! навыком не создаётся; живые callbacks сохранённого CWangshengState
-//! остаются hub-lifecycle прежнего `wangshengstate.rs`.
+//! Quirks: MP списывается у equipment[10] общим setter с reload
+//! fairy-проекций, затем повторно проверяется GetWarSoulGoods; отказ
+//! сохраняет списание без отката; BF918 шлётся и при отказе Serialize;
+//! лечение — wrapping-сумма HP через SetHP и OnChangeStates. Собственный
+//! End(bool) — у координатора `battlefairyskill`.
 //!
-//! Общий вход сохраняет зарегистрированный экземпляр и часы base Begin.
-//! Check принимает исходного игрока, требует GetS и проверяет reuse; MP0
-//! допускается без предмета, но ненулевая цена требует GetWarSoulGoods.
-//! Первый AI разрешает свежего U, требует его region-link, но не проверяет S
-//! или смерть.
+//! Швы: hub `battlefairyskill::BattleFairyGame`; доставка BF918 — точечный
+//! `send_battle_fairy_goods_update`.
 //!
-//! AI сначала списывает MP у equipment[10] через общий setter с reload
-//! существующих fairy-проекций, затем повторно проверяет
-//! GetWarSoulGoods. Отказ сохраняет списание и ожидание без отката.
-//! Serialize не подавляет BF918 при false; после отправки CAN/visual0/condition
-//! предшествуют абсолютной задержке. После visual1 читаются HP и величина
-//! лечения: wrapping-сумма проходит SetHP и OnChangeStates. Единственный
-//! собственный End(bool), отличный от внешнего End(int), выполняет координатор
-//! (`skills/battlefairyskill.rs`).
-//!
-//! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
-//! BattleFairyGame`; доставка BF918 — точечный `send_battle_fairy_goods_update`
-//! (якоря в шапке координатора).
+//! Исходный владелец PDB: `appserver/skills/wangsheng.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#wangsheng--cwangsheng-0x221
 
 use crate::content::CSkillBaseProperties;
 use crate::content::goods::GAP_BF_MP;

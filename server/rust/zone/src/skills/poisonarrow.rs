@@ -3,68 +3,20 @@
 //! `execute_periodic_battle_fairy_arrow`, позднее наложение периодического
 //! яда `CPoisonArrowState`.
 //!
-//! Источник: `gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
-//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
-//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
-//! `appserver/skills/poisonarrow.cpp`. Машинный разбор тела —
-//! `.local/recon-de/notes/D6-poisonarrow.md` и
-//! `.local/recon-de/disasm/CPoisonArrow.txt`.
+//! Машинные quirks: конфликт состояний сканируется по позиции исходного
+//! вектора S (первый id из {0x192, 0xD2, 0x67}); при GENESIS MP0 Check — ret 1;
+//! отсутствие WarSoulGoods в фазе 0 AI — тихий Pending без End; мастер яда —
+//! с country = 0; все исходы AI — End(1) без RNG и второго End при отказе
+//! Begin state. Кадр `0xBF918` расхода MP-яд брони — шов `send_goods_update`.
 //!
-//! - Check `0x519750` (U,S): null S/props → 0; null-target/self (U==S) →
-//!   visual(10) + ZHGS0045; конфликт сканируется **по позиции** исходного
-//!   вектора состояний S: первый id из `{0x192 → ZHGS0046, 0xD2 → ZHGS0047,
-//!   0x67 → ZHGS0046}` → системное сообщение игроку, ret 0 (тело hub
-//!   `battlefairyskill::check_battle_fairy_target_states`);
-//!   reuse(10005) → visual(13) + ZHGS0048; путь
-//!   `vcall+0x58`: Query(5003)!=0 и cells > max (jbe проход) → visual(11) +
-//!   ZHGS0049; клетка third==2 → visual(15) + ZHGS0051 (SSO-имя цели);
-//!   Query(2) == 0 (GENESIS MP0) → **ret 1**; GetWarSoulGoods null →
-//!   тихий ret 0; `GetAddonPropertyValues(0x9A,1)` − Query(2) < 0 (js) →
-//!   visual(7) + ZHGS0052 (число, fild/fmul 0.01 → ftrunc → %u); иначе
-//!   ret 1.
-//! - AI `0x519D70`: `[+0x4C]==0` → out; props null → End(0); U/S null →
-//!   End(0); IsDied(S) → visual(10) → End(0). Фаза 0, player only (RTTI):
-//!   GetWarSoulGoods null → **тихий выход без End (Pending)**; нехватка MP
-//!   → visual(7) + ZHGS0052 → End(0); иначе SetAddon(1,0x9A,остаток)
-//!   signed → SerializeForOldClient → кадр `0xBF918` (long player, guid,
-//!   count, payload; доставка — объявленный шов `send_goods_update`, якоря
-//!   в шапке `skills/battlefairyskill.rs`);
-//!   CAN(10006) → visual(0) → `[+0x50]=1`; delay 10001 unsigned → out;
-//!   повторный путь: дальность → visual(11) + ZHGS0049 → End(0), клетка 2 →
-//!   visual(15) + ZHGS0051 → End(0); visual(1); MasterInfo живого U с
-//!   **country = 0**; PK до состояния: player(U) && region([S+0x40]) &&
-//!   player(S) → `CPKSys::OnFirstSkill` с TileX/TileY(U) (объявленный шов
-//!   контакта); ctor `0x5E3140` (Query eval: const 20010 → freq 6001 →
-//!   keep 10002) → первый старый state End `vcall+0x1C` → destructor
-//!   свежего остатка → Begin(U,S) `vcall+0x08` → прежний слот либо append;
-//!   все исходы → **End(1)**. RNG, UpdateProperty и второго End при отказе
-//!   state Begin нет.
-//! - End навыка по vtable — тело второй половины общего End-контракта
-//!   координатора (`0x5DFBD0`, hub прежнего пакета `states/skill.rs`,
-//!   зафиксировано шапкой `skills/battlefairyskill.rs`); собственной
-//!   логики CPoisonArrow не добавляет.
+//! Payload состояния — данные/кодек Zone `effects/poison.rs`
+//! (`PoisonState<0x21E>`); живой AI/Begin и замена первого слота — hub
+//! `states/poison.rs` + `states/periodicattack.rs` прежнего пакета
+//! (шов `PoisonArrowStateArena`). `CBloodLoss` вызывает общую обёртку через
+//! hub-делегат старого пакета (`appserver/skills/poisonarrow.rs`).
 //!
-//! Payload состояния — `CPoisonArrowState` (ctor `0x5E3140`, Calculate `kind 5`
-//! с единственным clamp отрицательного HP-loss → 0, vtable `0x0065F24C`):
-//! данные и кодек — Zone `effects/poison.rs` (`PoisonState<0x21E>`, VERIFIED
-//! четырёхсторонний кодек), живой AI/Begin и семейная замена первого слота —
-//! hub прежнего пакета `states/poison.rs` + `states/periodicattack.rs`
-//! (объявленный шов `PoisonArrowStateArena` ниже, zone-код здесь их не
-//! дублирует).
-//!
-//! Общая обёртка `execute_periodic_battle_fairy_arrow` живёт в Zone
-//! целиком; `CBloodLoss` вызывает её через hub-делегат старого пакета
-//! (`appserver/skills/poisonarrow.rs`) без правок.
-//!
-//! Объявленные швы переноса (не расхождения): hub
-//! `battlefairyskill::BattleFairyGame` (реестр, WarSoul/equipment,
-//! документированный путь S и регион, BF918-доставка, ZHGS-строки);
-//! трейты `PoisonArrowStateArena` (замена первого слота ID и primary Begin
-//! периодического яда прежних hub `states/state.rs`/`states/poison.rs`) и
-//! `PoisonArrowContact` (PK `OnFirstSkill` живого main loop) реализуются
-//! в файле-делегате старого пакета. Потребление статическое (generic),
-//! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
+//! Исходный владелец PDB: `appserver/skills/poisonarrow.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#poisonarrow--cpoisonarrow-0x21e
 
 use crate::combat::MasterInfo;
 use crate::content::CSkillBaseProperties;

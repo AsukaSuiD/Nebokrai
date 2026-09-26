@@ -1,51 +1,24 @@
 //! Паучий туман `CSpiderMist` (`0x198`) и его живая область
-//! `CSpiderMistPhalanx`. Источник: точная пара `gameserver.exe`
-//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходные владельцы
-//! `appserver/skills/spidermist.cpp` и `appserver/skills/spidermistphalanx.cpp/.h`.
+//! `CSpiderMistPhalanx`.
 //!
-//! Машинная разведка по этой паре:
+//! Машинные quirks: поворот `SetDir` исполняется в выпуске AI, а не в
+//! Begin-стадии (общая особенность семьи `summoncreatureskill`);
+//! `SetMoveable(1)` стоит перед выпуском; `Summon` — единственный живой
+//! JJ-вариант мира (tile X/Y точки через SetTileXY области); wire — кадры
+//! `0x000BFE01` и входной снимок `0x000BF502` конверта `summonshape`.
 //!
-//! - CheckCastCondition `0x540F40`: целевая клетка читается в `[+0x24]/[+0x28]` и
-//!   хранится записью навыка, reuse-пакет, `GetTargetPath`, лимит
-//!   `Query(5003)` → отказ 0x0B, `BLOCK_UNFLY` → отказ 0x0F, `SetMoveable(0)`;
-//! - AI `0x5409B0`: `SetDir` направлением к клетке, `SetMoveable(1)` ПЕРЕД
-//!   выпуском, `Summon(user, x, y)`, End(1); End `0x540890` ≡ CPoisonFog
-//!   (ICF). Машинно поворота в Begin нет: он исполняется в выпуске AI, а не
-//!   в Begin-стадии реконструкции (см. путь ниже и примечание о семье в
-//!   `skills/summoncreatureskill.rs`);
-//! - `CSpiderMistPhalanx` ctor `0x5EAEB0`; AI `0x5EB110`: deadline
-//!   `started + lifetime` строго ja → Expired; per-cell пропуски мастера,
-//!   мёртвых, обладателей состояния 0x131/0x191, неатакуемых; новый state с
-//!   аргументами из `(info&, +0xC0/+0xC4/+0xC8)`;
-//! - ReplaceAffectRegion: пустое тело `ret 0xC` `0x1FECA0` — ICF-склейка 15
-//!   имён пустых реализаций семьи CSummonShape; у CSpiderMistPhalanx
-//!   реальное тело `0x5EAC30` (есть в Zone) — для этой группы не критично,
-//!   поведение не меняется;
-//! - `CSpiderMist::Summon` `0x541140` — единственный живой JJ-вариант мира
-//!   (J1/J2 = tile X/Y точки через SetTileXY слот `+0x88`);
-//! - RTTI `0x0066F16C` задаёт CSpiderMist→CSummonSkill→CSkill→CState, а не
-//!   CStateSkill; wire-кадр `0xBFE02`-потока не используется, визуал
-//!   `0x000BFE01` исходного формата (действия 1/2) и входной снимок области
-//!   `0x000BF502` (`include_child = true`, как у zone-конверта
-//!   `skills/summonshape.rs`, группа AddToByteArray `0x1E47A0`).
+//! PARTIAL/UNKNOWN: состав аргументов ctor области сверен только формально;
+//! конфиг-зависимость 5×5 таблиц области в этой сборке константна; имя слота
+//! и owned-visual — INFERRED и не достраиваются догадкой; см. раздел по
+//! ссылке ниже.
 //!
-//! PARTIAL/UNKNOWN (честно, без достройки): формальный состав аргументов
-//! ctor `0x5EAEB0` записан как `(master, started=lifetime, level,
-//! state_lifetime, frequency, hp_loss)` — совпадение с текущим двухчасовым
-//! конструктором (started, lifetime — отдельные поля) отдельно не досверено,
-//! UNKNOWN; конфиг-зависимость 5×5 таблиц области — в этой сборке константны
-//! (свойство сборки), PARTIAL. Имя слота `+0x2C`, GUID `0xEF3D9C` (INFERRED)
-//! и ветви 2..0xF jump-таблицы UpdateVisualEffect вне режимов 0/1 не
-//! достраиваются догадкой.
+//! Швы: hub-трейты семьи `summoncreatureskill`; адаптер области к `CShape`,
+//! регистрация, публикация входного снимка и снятие `CSpiderPoisonState` —
+//! швы прежнего владельца (statefactory Zone).
 //!
-//! Объявленные швы переноса (не расхождения): hub-трейты семьи описаны в
-//! `skills/summoncreatureskill.rs` (`SummonSkillGame`/`SummonSkillContact`/
-//! `SummonSkillPlayer`); адаптер области к `CShape`, регистрация в регионе,
-//! публикация входного снимка и снятие `CSpiderPoisonState` (statefactory
-//! Zone) выполняют швы прежнего владельца. Потребление швов статическое
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
-//! Запретная склейка осознана: исходное перекрытие в текущем caller-е
-//! направлено на PoisonFog (`0xC9`) и не принадлежит этому файлу.
+//! Исходные владельцы PDB: `appserver/skills/spidermist.cpp`,
+//! `appserver/skills/spidermistphalanx.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#spidermist--cspidermist-0x198-и-cspidermistphalanx
 
 use nebokrai_shared::values::CGuid;
 

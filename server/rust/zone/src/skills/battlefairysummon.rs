@@ -2,60 +2,24 @@
 //! (`CPlayer`-часть war-soul): `SetWarSoulStaus`, player-хвост
 //! `CBattleFairyContainer::SummonBF` (mode ±1), `ComputeWarSoulXY` и его
 //! мёртвая половина, player-tail spatial-входа в регион, periodic HP-death
-//! префикс `CPlayer::AI`, `ReviveBattleFairy`, сброс после смерти хозяина
-//! и флаг контейнера боевых фей.
+//! префикс `CPlayer::AI`, `ReviveBattleFairy`, сброс после смерти хозяина.
 //!
-//! Источник: точная пара `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2), `appserver/player.cpp/.h` (тела перенесены буквально).
+//! Quirk следования: dead-zone dist < 0.5, коэффициенты 0.265/0.065/0.045 по
+//! порогам дистанции, оба fistp под fnstcw (x87 RC=truncate) — формула
+//! воспроизведена дословно.
 //!
-//! | представитель | RVA | статус |
-//! |---|---|---|
-//! | `CPlayer::SetWarSoulStaus` | `0x2E190` | MATCH (разведка): исходное `state==1` публикует around `0xBF930 {400,id}`; нормализация `value==1?{1,1}:{0,0}`; прямая пара raw-записей summoned+state сохранена |
-//! | `CPlayer::ComputeWarSoulXY` | `0x30930` | MATCH (разведка + спотчек дизассембла) |
-//! | `CPlayer::SetWarSoulXY` | `0x2DF50` | VERIFIED_DISASSEMBLY; спотчек: 3×`call GetArea` `0x7BB60` |
-//! | `CPlayer::TellClientMove` | `0x2D4D0` | PARTIAL: xrefs из summon-flow `0x2E3E0/0x2E418` (+`0x52E73/0x918AD/0xB7DA7`); из тел `0x30930`/`0x2DF50` прямого вызова нет |
-//! | wires `0xBF930`/`0xBF92E` | — | MATCH по разведке cbattlefairycontainer pubs/effector: refusal `0xBF930` around, summon `0xBF92E` |
+//! Швы: живые поля прежнего `CPlayer` — view `BattleFairyWarSoul` либо
+//! scalar-параметры; equipment/headgear — closure-швы прежнего владельца;
+//! отложенные эффекты — упорядоченный `Vec` zone-типов (конверт/план — hub
+//! `appserver/player.rs`, `gameeffectjournal.rs` старого пакета); spatial map
+//! mutation — Zone `regions/serverregion/areagrid.rs`.
 //!
-//! Сверенное у `ComputeWarSoulXY` `0x30930`: pre-gate `GetSkill(current)`+
-//! виртуальный +0x28 (на Rust-шве — входной `current_war_soul_skill_restored`),
-//! `dist=|√(dx²+dy²)|`, dead-zone `<0.5`, step-ветка до `5.0`, коэффициенты
-//! `0.265 (>3.75)` / `0.065 (>0.75)` / `0.045`, `step=dist·(k+k)`, per-axis
-//! epsilon `0.1`, оба `fistp` под временным `fnstcw` (x87 RC=truncate).
-//! Спотчек образа: два прямых `call 0x2DF50` в теле `0x30930` (`0x30A81` живая
-//! / `0x30BA6` мёртвая ветви), таблица констант `.rdata 0x24DC00..0x24DC20` —
-//! f32 `0.265/0.065/0.045/0.75` по `0x24DC00/04/10/14` и f64 `3.75/5.0/0.5`
-//! по `0x24DC08/18/20`; единственный caller xref `0x5A107`. Сводка разведки
-//! указывала цель `0x2CF50` — по образу прямая цель `0x2DF50` (исправлено
-//! при переносе).
+//! UNKNOWN/PARTIAL: pub-имя `ReviveBattleFairy` не резолвится (inline);
+//! порядок тела refresh в periodic `CPlayer::AI` — PARTIAL; tail `SummonBF`
+//! — у владельца контейнера.
 //!
-//! Честные UNKNOWN: pub-имя `ReviveBattleFairy` не
-//! резолвится (inline в CGame-handler; однозначное xref-основание по
-//! `GAP_BF_HP`/153 и `GAP_BF_MAX_HP`/185 недостижимо — машинное вхождение
-//! UNKNOWN, поведение остаётся снятой моделью); порядок тела refresh внутри
-//! periodic `CPlayer::AI` — pub префикса не резолвится, зафиксирован PARTIAL;
-//! полный tail `SummonBF` за player-частью остаётся у владельца контейнера
-//! (map/vector/статика `CBattleFairyContainer`).
-//!
-//! Объявленные швы переноса (не расхождения). Живые поля прежнего `CPlayer`
-//! приходят view `BattleFairyWarSoul` (summoned/state/recall/died/visual
-//! bits/point) либо scalar-параметрами у const-правил; ID игрока, регион и
-//! readiness навыка — параметры-значения. Presence и `addon_property_value`
-//! головного предмета — closure `FnMut(i32) -> Option<i32>` у прежнего
-//! владельца equipment; пара чтение/запись `ReviveBattleFairy` — closure над
-//! `BattleFairyHeadgearOperation` (`set_addon_property_value_core` там же).
-//! Координаты shape — `FnOnce` closure: обе оси eager в summon/compute по
-//! исходному match-scrutinee, y lazy в prepare по исходной `?`-цепи.
-//! Отложенные эффекты возвращаются упорядоченным `Vec` zone-типов; конверт
-//! в `GameEffect` и упорядочивающий `GameEffectJournal` вместе с
-//! report/plan-структурами остаются у прежнего владельца
-//! (`appserver/player.rs`, `appserver/gameeffectjournal.rs`), concrete wire
-//! сериализация — транспортный владелец. Spatial map mutation
-//! (`set/delete/has war-soul area`) уже живёт в Zone
-//! `regions/serverregion/areagrid.rs`; player-side spatial tails
-//! держатся здесь, потому что action/effect/outcome типы общие и владелец
-//! полей один (`CPlayer`) — граница зафиксирована этим файлом.
+//! Исходный владелец PDB: `appserver/player.cpp/.h`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#battlefairysummon--призывследованиегибель-боевого-духа-cplayer
 
 use crate::content::goods::{GAP_BF_BATTLE_FAIRY, GAP_BF_HP, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP};
 use crate::regions::area::WarSoulPoint;

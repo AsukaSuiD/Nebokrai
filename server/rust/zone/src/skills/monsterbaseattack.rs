@@ -1,73 +1,22 @@
 //! Базовая атака боевых монстров `CMonsterBaseAttack` (ID `0x2bd`):
 //! player-путь (reuse/гейты/дистанция/failure 2) и машинная база общих
 //! AI/Calculate/Attack/End семьи. Монстр-вход исполнения остаётся hub у
-//! `execute_owned_monster_base_attack` прежнего пакета через трейты
-//! прецедента `MonsterBaseDispatch` (hub остаётся у старого пакета).
+//! `execute_owned_monster_base_attack` прежнего пакета (hub диспетчера
+//! расписания, реестр исполнителей и общий монстр-драйвер кадров —
+//! `appserver/skills/monsterbaseattack.rs` старого пакета).
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterbaseattack.cpp`. Hub диспетчера расписания,
-//! реестр исполнителей и общий монстр-драйвер кадров остаются у старого
-//! пакета (`appserver/skills/monsterbaseattack.rs`).
+//! Машинные quirks: мёртвая цель mid-cast завершается End(1) со штампом
+//! reuse; type S == 500 пропускается Attack; разброс `max(max−min, 0) + 1`;
+//! End без movement-restore и без пересчёта свойств; crit-roll — только у
+//! dyn-CPlayer (`fmul` по `[player+0x414]` из `fild`). Coordinator игрока и
+//! queue-финализация остаются у планировщика старого пакета; формула
+//! player-удара — шов `monster_combat_calculate_attack` владельца lord.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`):
+//! Швы: hub-трейты `skills/monsterattack.rs`; часы — fn-параметр
+//! `now_milliseconds` делегата старого main loop.
 //!
-//! - ctor (RVA `0x113AF0`): `[+4] = 0x2bd`; фабричный QuerySkill 0x2BD →
-//!   этот класс; default → NULL без fallback в фабрике (default-атака 1/2/3 —
-//!   `CMoveShape::GetDefaultAttackSkillID` 0xCE240, вне фабрики).
-//! - Begin три формы (`0x113B80`/`0x113C50`/`0x113D40`): форвард
-//!   `CAttackSkill::Begin` → new effect (vtable `0x656600`) → `VT[0](1)` →
-//!   слот `+0x60` CheckCastCondition; провал — `End(0)` и ret 0 БЕЗ
-//!   терминального кадра, успех — `[+0x4C] = 1`, `[+0x50] = 0`.
-//! - CheckCastCondition (RVA `0x114340`): S null → ret 0 без кадра; props
-//!   null → ret 0; только reuse (`QueryProperty(10005) + [+0x40]` vs
-//!   timeGetTime, unsigned); отказ — `{0xBFE01, 0, 13}` + GS1143 только при
-//!   dyn-cast источника в CPlayer.
-//! - AI (RVA `0x114820`): `[+0x4C] == 0` → выход; props null → `End(0)`;
-//!   U null → `End(0)`; **мёртвая S → кадр failure 2 (mode 2, только player
-//!   источнику) + `End(1)` со штампом reuse** — DIFF-B1 исправлен:
-//! мёртвая цель mid-cast завершается машинным `End(1)` со штампом reuse
-//! вместо прежнего снятия cast без reuse;
-//!   первая фаза: `RealDistance` беззнаково против `QueryProperty(5003)`,
-//!   превышение — `{0, 0xb}` + `End(0)`; SetDir(GetLineDir(U→S)) и старт-кадр
-//!   (mode 0, `[+0x3C] = QueryProperty(10006)`); delay — абсолютный
-//!   wrapping-срок `timeGetTime >= [+0x2C] + QueryProperty(10001)` (unsigned
-//!   jae по 0x51497E); fire-кадр (mode 1), затем `Attack(U, GetS)` и
-//!   `End(1)`.
-//! - Attack (RVA `0x1146D0`): null U/S → exit; U==S → exit; **type S ==
-//!   500 → exit (500-skip)**; `S->vt+0x134(U)` — **IsAttackAble(S)**
-//!   (0x0E7230: player/monster до PK/tame); отказ → exit; info ctor
-//!   конструкторских UNKNOWN/уровня 1 не замещается; при player-источнике
-//!   копия pk-полей (`[+0x278..+0x27C]`, `[+0xB20]`, `[+0xB28]`, `[+0xB78]`);
-//!   Calculate → `S->vt+0x15C(&info, 0)` (OnBeenAttacked) → безусловный
-//!   **U->IncreaseRp(true, 0)** (vt+0x12C) после возврата приёмника.
-//! - CalculateAttackPower (RVA `0x114460`): damage_factor =
-//!   `U->vt+0x184(S->vt+0x110())` float (weapon-фактор от уровня S),
-//!   `[info+0x20] = 0`, hit = `QueryProperty(20001)`; физический разброс
-//!   **`max(max-min, 0) + 1`**, clamp `max(0)` по min+roll; записи вида
-//!   **1/3/4** в исходном порядке с clamp ≥ 0; критический roll только после
-//!   успешного cast в CPlayer: `random(100) < GetCCH` (vt+0x114), `[info+0x10]
-//!   = 1`, каждая запись kinds {1,3,4} — **`fmul` по `[player+0x414]` от
-//!   `fild` без промежуточной записи float, `fistp` откормленным x87-
-//!   усечением**; монстр этот RNG не выполняет.
-//! - End (RVA `0x1B3010`): нули `[+0x50]/[+0x4C]`, хвост в
-//!   `CAttackSkill::End(H)` — **без movement-restore и без пересчёта
-//!   свойств**; только успех изнашивает оружие (AfterUseSkill 0x13CF30:
-//!   OnWeaponDamaged только у dyn-CPlayer) и фиксирует reuse.
-//! - OnChangeRegion (RVA `0x16A370`): принудительный `End(0)` (аргумент
-//!   замещается нулём до virtual-диспетчеризации).
-//!
-//! Player-путь ниже соответствует тем же телам (для player-источника;
-//! монстр-кейсы отмечены у hub). Coordinator игрока и queue-финализация
-//! остаются у планировщика старого пакета; формула расчёта player-удара —
-//! шов `monster_combat_calculate_attack` владельца lord (общее тело
-//! `lordfastattack::calculate_attack` старого пакета используется также
-//! `0x2bd`-ветвью, включая личный критический множитель).
-//!
-//! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; часы —
-//! fn-параметр `now_milliseconds` делегата старого main loop.
+//! Исходный владелец PDB: `appserver/skills/monsterbaseattack.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#monsterbaseattack--cmonsterbaseattack-0x2bd
 
 use nebokrai_shared::runtime::get_line_direction;
 

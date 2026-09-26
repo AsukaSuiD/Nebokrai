@@ -2,98 +2,20 @@
 //! областных призывов: Weak (0x12E), PoisonFog (0xC9), SnowStorm (0x193),
 //! YinYang/YinYang2 (0x139/0x146), GodThunder/GodThunder2 (0x140/0x143),
 //! FireWall (0x134), ChaosSphere (0x137) и SoulMirror (0x13C).
-//! Источник: gameserver.exe + GameServer.pdb (точная пара, ниже; RSDS match),
-//! `appserver/skills/weak.cpp`, `poisonfog.cpp`, `snowstorm.cpp`,
-//! `yinyang.cpp/yinyang2.cpp`, `godthunder.cpp/godthunder2.cpp`,
-//! `firewall.cpp`, `chaossphere.cpp` и `soulmirror.cpp`. Реализация фасадов
-//! швов остаётся у прежнего владельца в файле-делегате
-//! `appserver/skills/zonalcast.rs`.
 //!
-//! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
-//! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
-//! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2; совпадение подтверждено `.local/evidence/symbols.py identity`).
-//! Конвенция адресов: пабы PDB записаны как `seg:off` сегмента `.text`;
-//! истинный RVA = off + 0x1000, VA = RVA + ImageBase 0x400000.
+//! Швы — переходные фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`,
+//! реализация в делегате `appserver/skills/zonalcast.rs` старого пакета;
+//! потребляются статически (generic), без dyn-совместимости и Send-контракта
+//! (ADR-0013). `CFireWall::Summon` остаётся у прежнего владельца
+//! (`appserver/skills/firewall.rs` старого пакета, шов `summon_fire_wall`).
+//! Часы main loop приходят указателем `now_milliseconds`.
 //!
-//! Машинная проверка дизассемблером точной пары (статусы ниже относятся
-//! только к перечисленным ветвям):
+//! PARTIAL: тела Check/AI YinYang/YinYang2, GodThunder/GodThunder2 и
+//! SoulMirror индивидуально не досматривались и следуют прежней реконструкции;
+//! клиентское чтение кадров — UNKNOWN.
 //!
-//! - `VERIFIED` скелет `CWeak::CheckCastCondition` (RVA `0x1AF050`): свежая
-//!   таблица `QuerySkillBaseProperties` → reuse `10005` + `timeGetTime` →
-//!   visual13 + `GS0278` → длина пути `5003` (`jbe` при нуле) → visual11 +
-//!   `GS0290` → MP-контракт (MP0 — тихий отказ, иначе signed-разность) →
-//!   visual7 + `GS0288` с ценой → `SetMoveable(0)`. Блок-проверки пути у
-//!   Weak нет — это `CastPathBlock::Ignore` прежнего хаба.
-//! - `VERIFIED` скелет `CWeak::AI` (RVA `0x1AED40`): активный гейт фазы,
-//!   одна таблица на всё тело, GetUser/GetSufferer, смерть S → visual10 +
-//!   `GS0285` + `End(0)`; иначе два чтения X/Y S — в локальные регистры и в
-//!   сохранённые поля — с очисткой identity S; NULL U → `End(0)`; Begin-доля:
-//!   MP → `OnChangeStates` → CAN `10006` → `GetLineDir` → `SetDir` →
-//!   visual0 → фаза=1 → проход в тот же тик без второго активного гейта;
-//!   unsigned `start + delay(10001)` → visual1 → `Summon` (вирт. +0x8C) →
-//!   `End(1)` независимо от результата.
-//! - `VERIFIED` дистинктивные ветви Check: `CPoisonFog::CheckCastCondition`
-//!   (RVA `0x193D50`) превращает S в точку и чистит её identity ещё до
-//!   таблицы и reuse; требует арбалет — `GetAddonProperty` категории 4,
-//!   отказ даёт visual14 + `GS0293`; `CFireWall::CheckCastCondition`
-//!   (RVA `0x1AB8B0`) сканирует путь и запрещает blocker-клетки 1 и 2
-//!   (ветка `GroundAndFly`) с visual15 + `GS0282`; у `CChaosSphere`
-//!   (RVA `0x1A6DC0`) чтения пути нет вовсе; у `CSnowStorm` (RVA `0x183E20`
-//!   и AI RVA `0x183C40`) ошибки reuse/пути/MP — только visual-режимы,
-//!   без GS-форматирования, а недостаток MP и в Check, и в AI даёт
-//!   visual7 без `GS0288`; `CChaosSphere::AI` (RVA `0x1A7FA0`) после
-//!   проверки смерти читает X/Y S один раз (без повторного чтения Weak)
-//!   и очищает identity S.
-//! - `VERIFIED` wire-кадры visual `0x000BFE01` всех десяти тел
-//!   `*Effect::UpdateVisualEffect`: switch по 16 режимам с таблицей переходов;
-//!   личная ветка отказов кадром `[u8=0, u8=mode]` только игроку; mode 0 →
-//!   кадр `action=1` (навык, уровень, источник, direction); mode 1 → кадр
-//!   `action=2` с нулевой парой цели и X/Y. Наборы режимов: у девяти владельцев
-//!   `0/1/2/7/10/11/13/15`, у PoisonFog добавлен `14` (таблицы RVA CWeak
-//!   `0x1AE8C0`, CPoisonFog `0x1935E0`, CSnowStorm `0x1837C0`, CYinYang
-//!   `0x1A5730`, CYinYang2 `0x1677A0`, CGodThunder `0x172D00`, CGodThunder2
-//!   `0x152F40`, CFireWall `0x1AB140`, CChaosSphere `0x1A7940`, CSoulMirror
-//!   `0x1A4400`). Источники X/Y mode 1: живой S с откатом к сохранённой точке
-//!   (проверено для CWeak/CFireWall/CSnowStorm/CGodThunder/CYinYang/CYinYang2/
-//!   CChaosSphere; у CGodThunder2 тот же шаблон компилятора, без отдельного
-//!   досмотра); PoisonFog всегда пишет сохранённую точку;
-//!   SoulMirror — текущий центр U.
-//! - Входной кадр области `0x000BF502` (5-полевый префикс + снимок): таблица
-//!   RVA уникальных тел AddToByteArray — в шапке `skills/summonshape.rs`;
-//!   per-phalanx encoder-ы — в шапках
-//!   `skills/{weak,poisonfog,snowstorm,godthunder,masked_area,chaossphere}.rs`
-//!   и в `docs/gameplay/skills.md`.
-//!
-//! Честные неизвестные: тела `CheckCastCondition`/`AI` YinYang/YinYang2,
-//! GodThunder/GodThunder2 и SoulMirror (у последнего иная арность Check —
-//! `UAEHPAVCMoveShape@@0@Z`) индивидуально не досматривались; их ветви
-//! следуют прежней реконструкции (статус `PARTIAL` без постатейной
-//! машинной выписки). Клиентское чтение кадров — вне серверной базы
-//! (`UNKNOWN`).
-//!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`, реализация
-//! остаётся у него в файле-делегате `appserver/skills/zonalcast.rs`; имена
-//! членов сохраняют исходную операцию. Швы потребляются статически
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
-//! Общие хелперы старого пакета
-//! переносятся не как тела, а объявляются швами: MP/путь/оружие
-//! `rangedweaponcast` (`check_cast_mana*`, `spend_cast_mana*`,
-//! `check_skill_path`, арбалетные проверки), мастер и живые CCH/элемент
-//! `weaponattack::source_*`, обвязка арены `states/state.rs`, регистрация
-//! областей и рассылка BF502 (`CGame::add_*_phalanx`/`send_*_entry`),
-//! оружейный множитель/критическая ставка `globe_setup` + goods factory.
-//! Тело `CFireWall::Summon` остаётся у прежнего владельца `appserver/
-//! skills/firewall.rs` и вызывается швом `summon_fire_wall`.
-//! `CSoulMirror` граница: его обход области и призыв клеток живут в
-//! `skills/soulmirror.rs` (швы `SelfCastGame`), отсюда вызов идёт швом
-//! `apply_soul_mirror_area`; маска клетки (`soul_mirror_scope_*`) тоже
-//! принадлежит ему; входной снимок порождённых зеркалом существ —
-//! wire-конверт `skills/summonshape.rs` (hub visual публикует только кадр
-//! `0xBFE01`, BF502 — дело summonshape).
-//! Часы прежнего main loop приходят указателем `now_milliseconds`
-//! (делегат передаёт перечитывание через `runtime.now_milliseconds()`).
+//! Исходные владельцы PDB: `appserver/skills/{weak,poisonfog,snowstorm,yinyang,yinyang2,godthunder,godthunder2,firewall,chaossphere,soulmirror}.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов
 
 use nebokrai_shared::runtime::get_line_direction;
 

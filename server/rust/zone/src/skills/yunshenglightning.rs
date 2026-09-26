@@ -1,28 +1,20 @@
-//! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`). Источник:
-//! точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
-//! (RSDS match), исходный владелец `appserver/skills/yunshenglightning.cpp`.
-//! Payload исполнений — `skills/execution/payload.rs`
-//! (`PlayerYunShengLightningExecutionState`/`YunShengLightningProgress`);
-//! общий End `0x0057B810` (ICF со SpiderWeb).
+//! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`): числовые
+//! правила, формулы и wire-кадры visual `0x000BFE01` обеих ветвей. Payload
+//! исполнений — `skills/execution/payload.rs`.
 //!
-//! Числовые правила, формулы и wire-кадры visual
-//! `0x000BFE01` обеих ветвей (player/monster): постоянное время полёта, один
-//! RNG-вызов elemental-формулы, x87-прибавка игрока с f32-константой и
-//! усечением к нулю, нулевой `base_element` монстра (Windows
-//! `CMonster::GetAddElementAtk` возвращает ноль даже для приручённого;
-//! поэтому остаётся ровно один RNG-вызов). Нулевой `SKILL_USAGE_USER_MP_LOSE`
-//! отклоняет player-cast, как исходный `CheckCastCondition`, а не превращает
-//! его в бесплатный навык. Player-выпуск устанавливает prepared после
-//! эффекта 1 (`0x0053B373`).
+//! Quirks: нулевой `SKILL_USAGE_USER_MP_LOSE` отклоняет player-cast (как
+//! исходный CheckCastCondition), а не делает навык бесплатным; `base_element`
+//! монстра нулевой (Windows `CMonster::GetAddElementAtk` возвращает ноль даже
+//! для приручённого) — ровно один RNG-вызов; x87-прибавка игрока с
+//! f32-константой и усечением к нулю; AI монстра читает reuse после очистки
+//! полёта (`CSkill::End`).
 //!
-//! Hub-утяжеление остаётся у делегата старого пакета и здесь не переносится:
-//! зарегистрированный цикл монстра (`begin/advance/finish_base_attack_cast`,
-//! `ServerRegionOwner` и его публикация), подход к дистанции и attack
-//! interval (`approach_attack_range`/`schedule_attack_interval`), публикация
-//! настоящего `CPlayerAI`, `finish_summon_skill` и доставка кадров
-//! (`send_game_shape_around`/`send_player_shape_around`). AI монстра читает
-//! reuse после очистки полёта (`CSkill::End`, `0x004D84C0`); время нанесения
-//! удара не подменяет эти часы завершения.
+//! Швы: зарегистрированный цикл монстра, подход/attack-interval, публикация
+//! `CPlayerAI`, `finish_summon_skill` и доставка кадров — делегат старого
+//! пакета.
+//!
+//! Исходный владелец PDB: `appserver/skills/yunshenglightning.cpp`.
+//! Доказательства: docs/reconstruction/gameserver-skills.md#снаряды-монстров-direct-path-littlestar-yunshenglightning
 
 use crate::app::game_message::CMessage;
 use crate::combat::truncate_original;
