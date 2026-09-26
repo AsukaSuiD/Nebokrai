@@ -1,10 +1,10 @@
 # Обзор архитектуры / Architecture tour
 
-**English summary.** Six Rust/Linux executables preserve the legacy service boundaries. Login coordinates entry, Auth handles the corresponding authentication route, World loads and persists characters, and Game owns live regional simulation. Billing handles account operations; Misc handles auctions. The diagram is a responsibility map, not a claim that every route has passed a client scenario.
+**English summary.** The current ownership map is the Realm/Zone/Shared libraries: Realm owns entry, world state, persistence, billing, and auctions; Zone owns live regional simulation; Shared is the neutral technical layer. A transitional package still builds the six original service binaries and preserves their wiring. Login coordinates entry, Auth handles one authentication route, World loads and persists characters, and Game owns live regional simulation. Billing handles account operations; Misc handles auctions. The diagram is a responsibility map, not a claim that every route has passed a client scenario.
 
-## Шесть служб, разные жизненные циклы
+## Связи служб в переходном запуске
 
-Здесь описана текущая шестипроцессная реализация. Для её рефакторинга принята [компонентная структура Realm, Zone и Shared](../architecture/realm-and-zone.md); она определяет новые границы и не требует сохранять историческое число процессов. Следующая диаграмма показывает существующие связи.
+Действующая карта владения — [компонентная структура Realm, Zone и Shared](../architecture/realm-and-zone.md): Realm объединил вход, мировые данные, сохранение, счёт и аукцион, Zone владеет живой симуляцией, Shared — нейтральными механизмами. Переходный запуск при этом по-прежнему собирает шесть бинарников исходной модели; историческое число процессов сохраняется только как способ запуска и как baseline оригинала, а не как текущая карта ownership. Следующая диаграмма показывает существующие связи этого запуска.
 
 ```mermaid
 flowchart TB
@@ -29,13 +29,15 @@ flowchart TB
 | Billing | Ведёт баланс и связанные операции. | [Аукцион и платежи](../gameplay/auction-and-payments.md) |
 | Misc | Обслуживает аукцион через обмен с World. | [Службы](../server/auth-login-and-services.md) |
 
+Обязанности этих исходных служб в действующем коде распределены между владельцами Realm и Zone; соответствие процессов текущим компонентам показано во [владении состоянием](../architecture/state-ownership.md#обязанности-исходных-процессов-историческая-основа).
+
 ## Где живёт состояние
 
-Game владеет региональным состоянием во время игры. World загружает и сохраняет мировую проекцию персонажа. Передача между ними — явная граница: снимок, очередь, обработчик и результат записи могут относиться к разным моментам времени. Поэтому успешная отправка сообщения не доказывает сохранение, а поздняя ошибка не отменяет уже выполненные эффекты.
+В действующей карте живое региональное состояние принадлежит Zone, загрузка и сохранение мировой проекции персонажа — Realm; в переходном запуске эту пару исполняют бинарники Game и World. Передача между ними — явная граница: снимок, очередь, обработчик и результат записи могут относиться к разным моментам времени. Поэтому успешная отправка сообщения не доказывает сохранение, а поздняя ошибка не отменяет уже выполненные эффекты.
 
 ```mermaid
 flowchart LR
-    Live[Game: живое состояние] <-->|межсерверные сообщения| Persistent[World: загрузка и сохранение]
+    Live["Zone (Game): живое состояние"] <-->|межсерверные сообщения| Persistent["Realm (World): загрузка и сохранение"]
     Persistent <-->|параметры и результаты SQL| DB[(Данные персонажа)]
 ```
 
@@ -43,6 +45,6 @@ flowchart LR
 
 ## Современная инфраструктура и старые контракты
 
-Существующий серверный пакет предоставляет шесть бинарников и использует библиотеки Shared, Realm и Zone; состав выделенных компонентов указан в [карте кода](../architecture/workspace.md). Каждый процесс создаёт своё состояние. Tokio обслуживает сеть и задачи; очереди сохраняют точки исполнения доменных операций. Tiberius заменяет ADO для SQL Server. Совместимость требует учитывать направление кадра, порядок полей, знаковость, переполнение, кодировки, таймеры и частичные эффекты — не только имена функций.
+Переходный серверный пакет предоставляет шесть бинарников и делегирует домен библиотекам Shared, Realm и Zone; состав выделенных компонентов указан в [карте кода](../architecture/workspace.md). Целевой состав запуска — входы ролей Realm и Zone; переходные бинарники исчезают вместе с заменяемыми hub-ами. Каждый процесс создаёт своё состояние. Tokio обслуживает сеть и задачи; очереди сохраняют точки исполнения доменных операций. Tiberius заменяет ADO для SQL Server. Совместимость требует учитывать направление кадра, порядок полей, знаковость, переполнение, кодировки, таймеры и частичные эффекты — не только имена функций.
 
 Продолжение знакомства: [путь игрока](player-journey.md) → [текущий статус](status.md). Для работы с реализацией: [карта кода](../architecture/workspace.md) и [общие механизмы](../architecture/shared-mechanisms.md).
