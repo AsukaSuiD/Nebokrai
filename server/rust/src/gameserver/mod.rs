@@ -481,13 +481,9 @@ pub(crate) mod appserver {
         pub(crate) mod cequipmentcompose;
         pub(crate) mod cequipmentdakong;
         pub(crate) mod cequipmentupgrade;
-        pub(crate) mod cpersonalshopbuyer;
-        pub(crate) mod cpersonalshopseller;
         pub(crate) mod cplug;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;
-        pub(crate) mod cteam;
-        pub(crate) mod cteamate;
         pub(crate) mod ctrader;
     }
     pub(crate) mod script {
