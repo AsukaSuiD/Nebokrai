@@ -63,9 +63,9 @@ use super::function::{
     SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
     SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
     SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
-    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
-    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
-    dispatch_script_function, dispatch_script_string_function,
+    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, SCRIPT_INT_PARAMETER_ERROR,
+    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
+    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
     gods_battle_region_script_caller_is_live, owned_region_script_caller_is_live,
     run_add_time_goods_script_function, script_function_parameter_kind,
     script_player_npc_caller_exists, village_war_script_caller_is_live,
@@ -108,7 +108,6 @@ pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
     signed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
-const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_FUNCTION_WAIT: i32 = 6;
 const SCRIPT_FUNCTION_RUN_TIME: i32 = 22;
 
