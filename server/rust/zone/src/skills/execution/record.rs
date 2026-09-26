@@ -7,10 +7,10 @@
 //!
 //! Исполнение игрока и боевого духа — конкретные Zone-каталоги
 //! (`execution/player.rs`, `execution/battlefairy.rs`); их dispatch-типы уже
-//! Zone (`skills/dispatch.rs`). Исполнение монстра остаётся данными
-//! hub-владельца `CMonster` (`MonsterSkillExecution` вместе с его
-//! progress-каталогом), потому что его тип пока живёт в старом пакете; запись
-//! связана с ним только generic-сварками `MonsterSkillExecutionAccess`
+//! Zone (`skills/dispatch.rs`). Исполнение монстра — соседний
+//! `execution/monster.rs` волны Z-M4 (Zone-владение `MonsterSkillExecution`
+//! вместе с его progress-каталогом); запись связана с ним generic-сварками
+//! `MonsterSkillExecutionAccess`
 //! (kernel/стадии/End-hooks/три общих progress-типа) и
 //! `MonsterSkillProgressState<M>` (typed извлечение и установка progress),
 //! по прецеденту трейтов `StateRecordTarget` и `SkillIdentityAccess`.

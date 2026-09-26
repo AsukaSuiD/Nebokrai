@@ -8,8 +8,9 @@
 //! owner, item position, reuse timestamp +0x40 и owned visual) живёт здесь
 //! типом `SkillIdentity`, а execution kernel (Player/BattleFairy/Monster) и
 //! retained данные полёта — типом `skills/execution::RegisteredSkillRecord`
-//! (порция 5 волны moveshape; hub-monster payload подключён к ней только
-//! generic-сваркой). Реестр связан с записью только швом `SkillIdentityAccess`
+//! (порция 5 волны moveshape; payload исполнения монстра и alias
+//! `MoveShapeSkill` живут там же в `skills/execution` после волны Z-M4).
+//! Реестр связан с записью только швом `SkillIdentityAccess`
 //! (generic-trait сварка по прецеденту `StateRecordTarget`).
 //! Конструирование полной записи при AddSkill/CFightDefense также задаёт
 //! владелец записи своим handler: категория и concrete owner выбираются здесь

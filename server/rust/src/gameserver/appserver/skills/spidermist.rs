@@ -21,7 +21,6 @@ use crate::gameserver::gameserver::game::{
 use nebokrai_zone::skills::{SummonSkillOutcome, spidermist as zone};
 
 pub(crate) use nebokrai_zone::skills::SPIDER_MIST_SKILL_ID;
-pub(crate) use nebokrai_zone::skills::execution::SpiderMistProgress;
 
 /// Входной снимок области `0x000BF502`: payload wire-конверта `summonshape`
 /// (`include_child = true`), around-доставка от формы фаланги.

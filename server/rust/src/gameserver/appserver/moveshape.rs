@@ -184,8 +184,10 @@
 //! moveshape): переходный агрегат ниже хранит `SkillRegistry<MoveShapeSkill>`
 //! и делегирует ему поведение без изменения сигнатур своих методов; execution
 //! kernel и retained данные полёта вместе с полной записью перенесены в Zone
-//! `skills/execution::RegisteredSkillRecord` (порция 5), `MoveShapeSkill`
-//! остаётся её специализацией с hub-monster payload на generic-сварке. Exact
+//! `skills/execution::RegisteredSkillRecord` (порция 5), `MoveShapeSkill` —
+//! её специализация монстровым payload; вместе с ним alias перенесён туда же
+//! волной Z-M4 (`skills/execution/monster.rs` + alias в `mod.rs`) и здесь лишь
+//! реэкспортирован прежним именем. Exact
 //! `Stiffen` (RVA 0x000CD2F0) идёт общей операцией Zone `regions/moveshape.rs`
 //! над скалярами этого владельца с setup value-формой.
 //! AutoStartPassiveSkill (0x004CDBB0) обходит state-категорию в порядке
@@ -324,10 +326,6 @@ use nebokrai_zone::regions::moveshape::{
     on_set_position_wire, set_pos_xy_core,
 };
 use nebokrai_zone::regions::skillregistry::SkillRegistry;
-use nebokrai_zone::skills::execution::{
-    ChainLightningProgress, LightningProgress, MonsterSkillExecutionAccess,
-    RegisteredSkillRecord, TargetedProjectileProgress,
-};
 pub(crate) use nebokrai_zone::regions::moveshape::{
     KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePet, MoveShapePositionBlock,
     MoveShapePositionFacts, MoveShapePropertyModifiers,
@@ -340,112 +338,15 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 
 /// Полная запись зарегистрированного навыка: скалярная база `SkillIdentity`
-/// (Zone `regions/skillregistry`), execution kernel и retained данные полёта
-/// перенесены в Zone `skills/execution::RegisteredSkillRecord` (порция 5 волны
-/// moveshape, тела фасадов — буквально). Hub-владением записи остаётся только
-/// payload исполнения монстра (`super::monster::MonsterSkillExecution` с его
-/// progress-каталогом): его тип живёт у `CMonster`, поэтому запись связана с
-/// ним двумя generic-сварками (ниже с обоснованием).
-pub(crate) type MoveShapeSkill = RegisteredSkillRecord<super::monster::MonsterSkillExecution>;
-
-/// Сварка записи Zone с hub-monster payload: kernel, End-hooks и три общих
-/// progress-типа извлекаются из живой записи `CMonster` ровно теми ветвями,
-/// которые раньше проходил enum каталог hub `MonsterSkillProgress`; игровые
-/// ветви не дублируются (прецедент — `SkillIdentityAccess`).
-impl MonsterSkillExecutionAccess for super::monster::MonsterSkillExecution {
-    type Dispatch = super::monster::MonsterBaseAttackDispatch;
-
-    fn kernel(&self) -> &super::monster::MonsterBaseAttackCast {
-        &self.kernel
-    }
-
-    fn kernel_mut(&mut self) -> &mut super::monster::MonsterBaseAttackCast {
-        &mut self.kernel
-    }
-
-    fn prepare_derived_end(&mut self) {
-        super::monster::MonsterSkillExecution::prepare_derived_end(self);
-    }
-
-    fn clear_end_paths(&mut self) {
-        super::monster::MonsterSkillExecution::clear_end_paths(self);
-    }
-
-    fn targeted_projectile_progress(&self) -> Option<&TargetedProjectileProgress> {
-        match self.progress.as_ref()? {
-            super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn targeted_projectile_progress_mut(&mut self) -> Option<&mut TargetedProjectileProgress> {
-        match self.progress.as_mut()? {
-            super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn lightning_progress(&self) -> Option<&LightningProgress> {
-        match self.progress.as_ref()? {
-            super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn lightning_progress_mut(&mut self) -> Option<&mut LightningProgress> {
-        match self.progress.as_mut()? {
-            super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn chain_lightning_progress(&self) -> Option<&ChainLightningProgress> {
-        match self.progress.as_ref()? {
-            super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn chain_lightning_progress_mut(&mut self) -> Option<&mut ChainLightningProgress> {
-        match self.progress.as_mut()? {
-            super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
-            _ => None,
-        }
-    }
-}
-
-/// Typed извлечение и установка конкретного progress-состояния внутри hub
-/// `MonsterSkillExecution`: перечислены все девять hub-вариантов каталога,
-/// чтобы обобщённые фасады записи (`monster_progress`/`set_monster_progress`)
-/// покрывали его полностью, не теряя ни одного владельца.
-macro_rules! monster_skill_progress_states {
-    ($($variant:ident($state:ty)),+ $(,)?) => {$ (
-        impl nebokrai_zone::skills::execution::MonsterSkillProgressState<super::monster::MonsterSkillExecution> for $state {
-            fn from_execution(execution: &super::monster::MonsterSkillExecution) -> Option<&Self> {
-                match execution.progress.as_ref()? {
-                    super::monster::MonsterSkillProgress::$variant(state) => Some(state),
-                    _ => None,
-                }
-            }
-
-            fn install(execution: &mut super::monster::MonsterSkillExecution, progress: Self) {
-                execution.progress = Some(super::monster::MonsterSkillProgress::$variant(progress));
-            }
-        }
-    )+};
-}
-
-monster_skill_progress_states! {
-    FastAttack(super::skills::monsterfastattack::MonsterFastAttackProgress),
-    TargetedProjectile(TargetedProjectileProgress),
-    Lightning(LightningProgress),
-    ChainLightning(ChainLightningProgress),
-    BossFiendPenetrate(super::skills::bossfiendpenetrate::BossFiendPenetrateProgress),
-    LittleStar(super::skills::littlestar::LittleStarProgress),
-    SpiderWeb(super::skills::spiderweb::SpiderWebProgress),
-    SpiderMist(super::skills::spidermist::SpiderMistProgress),
-    YunShengLightning(super::skills::yunshenglightning::YunShengLightningProgress),
-}
+/// (Zone `regions/skillregistry`), execution kernel и retained данные полёта.
+/// Запись перенесена в Zone `skills/execution::RegisteredSkillRecord` (порция 5
+/// волны moveshape, тела фасадов — буквально); payload исполнения монстра,
+/// его сварка `MonsterSkillExecutionAccess` и каталог impl-ов
+/// `MonsterSkillProgressState<M>` растворены там же волной Z-M4
+/// (`skills/execution/monster.rs`), а alias `MoveShapeSkill` живёт в
+/// `skills/execution/mod.rs` рядом с обоими операндами специализации.
+/// Ниже сохранён re-export прежнего имени.
+pub(crate) use nebokrai_zone::skills::execution::MoveShapeSkill;
 
 
 pub(crate) use nebokrai_zone::effects::UndeadState;

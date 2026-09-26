@@ -306,16 +306,8 @@ use nebokrai_shared::protocol::LegacyWriter;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, KillingAttackIdentity, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
-use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
-use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
-use super::skills::littlestar::LittleStarProgress;
-use super::skills::monsterfastattack::MonsterFastAttackProgress;
-use super::skills::targetedprojectile::TargetedProjectileProgress;
-use super::skills::lightning::LightningProgress;
-use super::skills::chainlightning::ChainLightningProgress;
-use super::skills::spiderweb::SpiderWebProgress;
-use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
-use super::skills::yunshenglightning::YunShengLightningProgress;
+use super::skills::kernel::{SkillStage, SkillTermination};
+use super::skills::spidermist::SPIDER_MIST_SKILL_ID;
 use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
 use crate::setup::monsterlist::MonsterProperties;
@@ -326,97 +318,6 @@ pub(crate) use nebokrai_zone::combat::monsterformula::{
 };
 
 const MONSTER_TYPE: i32 = 600;
-
-macro_rules! monster_skill_progress {
-    ($($variant:ident($state:ty) $(prepare($prepare:expr))? $(paths($paths:ident))?),+ $(,)?) => {
-        #[derive(Clone, Debug, Eq, PartialEq)]
-        pub(crate) enum MonsterSkillProgress {
-            $($variant($state)),+
-        }
-
-        pub(crate) trait MonsterSkillProgressState: Sized {
-            fn from_progress(progress: &MonsterSkillProgress) -> Option<&Self>;
-            fn from_progress_mut(progress: &mut MonsterSkillProgress) -> Option<&mut Self>;
-        }
-
-        impl MonsterSkillExecution {
-            pub(crate) fn prepare_derived_end(&mut self) {
-                self.kernel.clear_phase_for_end();
-                if let Some(progress) = self.progress.as_mut() {
-                    match progress {
-                        $(MonsterSkillProgress::$variant(_state) =>
-                            monster_skill_progress!(@prepare _state $(, $prepare)?),)+
-                    }
-                }
-            }
-
-            pub(crate) fn clear_end_paths(&mut self) {
-                if let Some(progress) = self.progress.as_mut() {
-                    match progress {
-                        $(MonsterSkillProgress::$variant(_state) =>
-                            monster_skill_progress!(@paths _state $(, $paths)?),)+
-                    }
-                }
-            }
-        }
-
-        $(
-            impl From<$state> for MonsterSkillProgress {
-                fn from(state: $state) -> Self {
-                    Self::$variant(state)
-                }
-            }
-
-            impl MonsterSkillProgressState for $state {
-                fn from_progress(progress: &MonsterSkillProgress) -> Option<&Self> {
-                    if let MonsterSkillProgress::$variant(state) = progress {
-                        Some(state)
-                    } else {
-                        None
-                    }
-                }
-
-                fn from_progress_mut(progress: &mut MonsterSkillProgress) -> Option<&mut Self> {
-                    if let MonsterSkillProgress::$variant(state) = progress {
-                        Some(state)
-                    } else {
-                        None
-                    }
-                }
-            }
-        )+
-    };
-    (@prepare $state:ident) => { {} };
-    (@prepare $state:ident, $prepare:expr) => { ($prepare)($state) };
-    (@paths $state:ident) => { {} };
-    (@paths $state:ident, $method:ident) => { $state.$method() };
-}
-
-monster_skill_progress! {
-    FastAttack(MonsterFastAttackProgress)
-        prepare(|state: &mut MonsterFastAttackProgress| *state = MonsterFastAttackProgress::default()),
-    TargetedProjectile(TargetedProjectileProgress)
-        prepare(|state: &mut TargetedProjectileProgress| *state = TargetedProjectileProgress::default()),
-    Lightning(LightningProgress)
-        prepare(|state: &mut LightningProgress| *state = LightningProgress::default()),
-    ChainLightning(ChainLightningProgress) paths(clear_end_paths),
-    BossFiendPenetrate(BossFiendPenetrateProgress) paths(clear_end_paths),
-    LittleStar(LittleStarProgress) paths(clear_end_paths),
-    SpiderWeb(SpiderWebProgress)
-        prepare(|state: &mut SpiderWebProgress| *state = SpiderWebProgress::new(0)),
-    SpiderMist(SpiderMistProgress),
-    YunShengLightning(YunShengLightningProgress)
-        prepare(|state: &mut YunShengLightningProgress| {
-            let (x, y) = state.destination();
-            *state = YunShengLightningProgress::new(x, y);
-        }),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterSkillExecution {
-    pub(crate) kernel: MonsterBaseAttackCast,
-    pub(crate) progress: Option<MonsterSkillProgress>,
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMonster {
@@ -460,9 +361,14 @@ pub(crate) struct CMonster {
 // Тип dispatch активного cast-а монстра перенесён в Zone
 // `ai/monsterai.rs` (кластер A1 Monster 0x19x); alias ядра исполнения и все
 // hub-методы lifecycle сохраняют прежний контракт.
+// Enum-каталог прогресса, обёртка kernel+progress и их End-hooks перенесены
+// в Zone `skills/execution/monster.rs` (волна Z-M4); re-export ниже сохраняет
+// прежние имена, потребители типов здесь и в `moveshape.rs` не правятся.
 pub(crate) use nebokrai_zone::ai::monsterai::MonsterBaseAttackDispatch;
-
-pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
+pub(crate) use nebokrai_zone::skills::execution::{
+    MonsterBaseAttackCast, MonsterSkillExecution, MonsterSkillProgress,
+};
+pub(crate) use nebokrai_zone::skills::execution::MonsterSkillProgressAccess as MonsterSkillProgressState;
 
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
