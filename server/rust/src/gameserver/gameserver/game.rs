@@ -41778,8 +41778,13 @@ impl CGame {
             if canonical_identity != identity {
                 return None;
             }
+            // Машина шлёт old-client снимок goods (SerializeForOldClient,
+            // вызовы 0x4804D8/0x480672: baseidx, amount, price, modifier-addons,
+            // DaKong-хвост), не persisted Serialize — досверка OnShapeChangeArea.
             let mut payload = Vec::new();
-            goods.serialize(&mut payload, true).then_some(())?;
+            goods
+                .serialize_for_old_client(&mut payload, self.goods_factory(), false)
+                .then_some(())?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type == BUILD_OBJECT_TYPE as i32 {
@@ -41878,9 +41883,9 @@ impl CGame {
                         &mut now_milliseconds,
                     )
                 };
-                let Some((identity, payload)) = snapshot else {
-                    continue;
-                };
+                // Машина игнорирует отказ сериализатора кандидата и шлёт кадр
+                // с len=0 (вектор очищен до вызова) — досверка OnShapeChangeArea.
+                let (identity, payload) = snapshot.unwrap_or((shape.identity, Vec::new()));
                 let Some(message) = Self::shape_enter_message(identity, &payload) else {
                     continue;
                 };
