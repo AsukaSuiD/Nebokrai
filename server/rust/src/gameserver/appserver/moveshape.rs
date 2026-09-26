@@ -262,9 +262,9 @@
 //! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
-// Арена состояний, её enum-каталог, codec/интервалы и DB Save/Load-кодек
-// перенесены в Zone `skills::state` (`serialization` принимает codec и арену
-// заимствованными ссылками); путь `super::moveshape` сохраняет прежние имена.
+// Арена состояний, её enum-каталог, codec/интервалы, читающие проекции
+// семейств (`accessors`) и DB Save/Load-кодек (`serialization`) перенесены
+// в Zone `skills::state`; путь `super::moveshape` сохраняет прежние имена.
 pub(crate) use nebokrai_zone::skills::state::{
     AppliedState, StateBatch, StateData, StateKey,
 };
@@ -280,8 +280,6 @@ use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::RideState;
 use super::restorestate::ConsumableRestoreState;
-use super::restorehpstate::RestoreHpState;
-use super::restorempstate::RestoreMpState;
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::CServerRegion;
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
@@ -810,7 +808,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn ride_state(&self) -> Option<&RideState> {
-        self.state_entries.first::<RideState>()
+        nebokrai_zone::skills::state::ride_state(&self.state_storage)
     }
 
     /// Scalar-prefix сброса при входе в регион идёт общей операцией Zone
@@ -826,7 +824,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn has_ride_state(&self) -> bool {
-        self.state_entries.first::<RideState>().is_some()
+        nebokrai_zone::skills::state::has_ride_state(&self.state_storage)
     }
 
     /// Хвост RestoreHpMp (0x00445643..0x00445901): четыре новых экземпляра
@@ -865,31 +863,28 @@ impl CMoveShape {
         interval_ms: u32,
         now: &mut dyn FnMut() -> u32,
     ) -> Option<ConsumableRestoreState> {
-        if !self.consumable_restore_intervals.try_begin(health, interval_ms, &mut *now) {
-            return None;
-        }
-        Some(if health {
-            ConsumableRestoreState::Health(RestoreHpState::new(
-                time_to_keep_ms, frequency_ms, amount,
-            ))
-        } else {
-            ConsumableRestoreState::Mana(RestoreMpState::new(
-                time_to_keep_ms, frequency_ms, amount,
-            ))
-        })
+        nebokrai_zone::skills::state::prepare_consumable_restore(
+            &mut self.state_storage,
+            health,
+            amount,
+            time_to_keep_ms,
+            frequency_ms,
+            interval_ms,
+            now,
+        )
     }
 
     pub(crate) fn particular_states(&self) -> impl Iterator<Item = &ParticularState> {
-        self.state_entries.iter::<ParticularState>()
+        nebokrai_zone::skills::state::particular_states(&self.state_storage)
     }
 
     pub(crate) fn team_recruitment_states(&self) -> impl Iterator<Item = &CTeamState> {
-        self.state_entries.iter::<CTeamState>()
+        nebokrai_zone::skills::state::team_recruitment_states(&self.state_storage)
     }
 
 
     pub(crate) fn automatic_restore_state(&self, key: StateKey) -> Option<AutomaticRestoreState> {
-        self.applied_state::<AutomaticRestoreState>(key).copied()
+        nebokrai_zone::skills::state::automatic_restore_state(&self.state_storage, key)
     }
 
     pub(crate) fn automatic_restore_state_mut(
@@ -902,44 +897,42 @@ impl CMoveShape {
     /// Точный `GetStateNumByStateID`: считает все живые экземпляры с данным
     /// базовым `CState::m_lID`, независимо от concrete owner-а состояния.
     pub(crate) fn state_count_by_state_id(&self, state_id: i32) -> u32 {
-        (0..self.state_entries.len())
-            .filter(|index| self.state_id_at(*index) == Some(state_id as u32))
-            .count().min(u32::MAX as usize) as u32
+        nebokrai_zone::skills::state::state_count_by_state_id(&self.state_storage, state_id)
     }
 
     /// `GetStateBySkillID` просматривает канонические типизированные состояния
     /// по фактическому идентификатору навыка, а не по классу сетевой записи.
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
-        (0..self.state_entries.len()).any(|index| self.state_id_at(index) == Some(state_id))
+        nebokrai_zone::skills::state::has_state_by_skill_id(&self.state_storage, state_id)
     }
 
 
     pub(crate) fn swordship_states(&self) -> impl Iterator<Item = &SwordshipState> {
-        self.state_entries.iter::<SwordshipState>()
+        nebokrai_zone::skills::state::swordship_states(&self.state_storage)
     }
 
     pub(crate) fn wuxing_states(&self) -> impl Iterator<Item = &WuXingState> {
-        self.state_entries.iter::<WuXingState>()
+        nebokrai_zone::skills::state::wuxing_states(&self.state_storage)
     }
 
     pub(crate) fn taiji_state(&self) -> Option<TaiJiState> {
-        self.state_entries.first::<TaiJiState>().copied()
+        nebokrai_zone::skills::state::taiji_state(&self.state_storage)
     }
 
     pub(crate) fn enlarge_full_miss_state(&self) -> Option<EnlargeFullMissState> {
-        self.state_entries.first::<EnlargeFullMissState>().copied()
+        nebokrai_zone::skills::state::enlarge_full_miss_state(&self.state_storage)
     }
 
     pub(crate) fn enlarge_max_hp_state(&self) -> Option<EnlargeMaxHpState> {
-        self.state_entries.first::<EnlargeMaxHpState>().copied()
+        nebokrai_zone::skills::state::enlarge_max_hp_state(&self.state_storage)
     }
 
     pub(crate) fn enlarge_max_mp_state(&self) -> Option<EnlargeMaxMpState> {
-        self.state_entries.first::<EnlargeMaxMpState>().copied()
+        nebokrai_zone::skills::state::enlarge_max_mp_state(&self.state_storage)
     }
 
     pub(crate) fn origin_state(&self) -> Option<OriginState> {
-        self.state_entries.first::<OriginState>().copied()
+        nebokrai_zone::skills::state::origin_state(&self.state_storage)
     }
 
 
@@ -961,7 +954,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn boss_blue_fury_state(&self) -> Option<BossBlueFuryState> {
-        self.state_entries.first::<BossBlueFuryState>().copied()
+        nebokrai_zone::skills::state::boss_blue_fury_state(&self.state_storage)
     }
 
 
@@ -992,32 +985,24 @@ impl CMoveShape {
     }
 
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
-        self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
-            DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
-            _ => None,
-        })
+        nebokrai_zone::skills::state::promotion_magic_attack_factor(&self.state_storage)
     }
 
 
     pub(crate) fn defense_shields(&self) -> impl Iterator<Item = &DefenseShieldState> {
-        self.state_entries.iter::<DefenseShieldState>()
+        nebokrai_zone::skills::state::defense_shields(&self.state_storage)
     }
 
     pub(crate) fn defense_shield_keys(&self) -> Vec<StateKey> {
-        self.state_entries.keys::<DefenseShieldState>()
+        nebokrai_zone::skills::state::defense_shield_keys(&self.state_storage)
     }
 
     pub(crate) fn defense_shield_key(&self, skill_id: u32) -> Option<StateKey> {
-        self.defense_shield_keys().into_iter().find(|key| {
-            self.defense_shield(*key).is_some_and(|state| state.skill_id() == skill_id)
-        })
+        nebokrai_zone::skills::state::defense_shield_key(&self.state_storage, skill_id)
     }
 
     pub(crate) fn defense_shield(&self, key: StateKey) -> Option<&DefenseShieldState> {
-        match self.state_entries.get(key)? {
-            StateData::DefenseShield(state) => Some(state),
-            _ => None,
-        }
+        nebokrai_zone::skills::state::defense_shield(&self.state_storage, key)
     }
 
     pub(crate) fn remove_defense_shield(&mut self, skill_id: u32) -> Option<DefenseShieldState> {
@@ -1219,10 +1204,6 @@ impl CMoveShape {
         self.state_entries.update_visual_base(key)
     }
 
-    fn state_id_at(&self, index: usize) -> Option<u32> {
-        Some(self.state_entries.get(self.state_entries.address(index)?)?.state_id())
-    }
-
     pub(crate) fn applied_state_key<T: AppliedState>(&self) -> Option<StateKey> {
         self.state_entries.first_key::<T>()
     }
@@ -1393,7 +1374,7 @@ impl CMoveShape {
 
 
     pub(crate) fn energy_holding_states(&self) -> impl Iterator<Item = &EnergyHoldingState> {
-        self.state_entries.iter::<EnergyHoldingState>()
+        nebokrai_zone::skills::state::energy_holding_states(&self.state_storage)
     }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
@@ -1412,28 +1393,27 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.state_entries.first::<PillarState>().copied() }
+    pub(crate) fn pillar_state(&self) -> Option<PillarState> {
+        nebokrai_zone::skills::state::pillar_state(&self.state_storage)
+    }
 
 
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
-        self.state_entries.iter_data().filter(|state| state.is_curable())
-            .map(StateData::state_id).collect()
+        nebokrai_zone::skills::state::curable_state_ids(&self.state_storage)
     }
 
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
-        self.state_entries.iter_data().filter(|state| state.is_blind())
-            .map(StateData::state_id).collect()
+        nebokrai_zone::skills::state::blind_state_order(&self.state_storage)
     }
 
     pub(crate) fn blind_state_instances(&self) -> Vec<(StateKey, u32)> {
-        self.state_entries.entries().filter(|(_, state)| state.is_blind())
-            .map(|(key, state)| (key, state.state_id())).collect()
+        nebokrai_zone::skills::state::blind_state_instances(&self.state_storage)
     }
 
 
     pub(crate) fn battle_fairy_attribute_states(&self) -> impl Iterator<Item = &BattleFairyAttributeState> {
-        self.state_entries.iter::<BattleFairyAttributeState>()
+        nebokrai_zone::skills::state::battle_fairy_attribute_states(&self.state_storage)
     }
 
 
@@ -1460,7 +1440,7 @@ impl CMoveShape {
 
 
     pub(crate) fn script_states(&self) -> impl Iterator<Item = &ScriptMoveState> {
-        self.state_entries.iter::<ScriptMoveState>()
+        nebokrai_zone::skills::state::script_states(&self.state_storage)
     }
 
 
@@ -1468,7 +1448,7 @@ impl CMoveShape {
 
 
     pub(crate) fn tian_shen_xia_fan_state(&self) -> Option<TianShenXiaFanState> {
-        self.state_entries.first::<TianShenXiaFanState>().copied()
+        nebokrai_zone::skills::state::tian_shen_xia_fan_state(&self.state_storage)
     }
 
 
@@ -1476,7 +1456,7 @@ impl CMoveShape {
 
 
     pub(crate) fn wangsheng_state(&self) -> Option<WangshengState> {
-        self.state_entries.first::<WangshengState>().copied()
+        nebokrai_zone::skills::state::wangsheng_state(&self.state_storage)
     }
 
 
@@ -1487,10 +1467,7 @@ impl CMoveShape {
 
 
     pub(crate) fn get_undead_state(&self, state_id: u32) -> u32 {
-        self.state_entries.iter::<UndeadState>()
-            .any(|state| state.state_id() == state_id)
-            .then_some(state_id)
-            .unwrap_or(0)
+        nebokrai_zone::skills::state::get_undead_state(&self.state_storage, state_id)
     }
 
 
@@ -1519,14 +1496,11 @@ impl CMoveShape {
 
 
     pub(crate) fn get_extended_state(&self, kind: ExtendedStateKind, state_id: u32) -> u32 {
-        self.state_entries.iter::<ExtendedState>()
-            .any(|state| state.kind == kind && state.level == state_id)
-            .then_some(state_id)
-            .unwrap_or(0)
+        nebokrai_zone::skills::state::get_extended_state(&self.state_storage, kind, state_id)
     }
 
     pub(crate) fn extended_states(&self) -> impl Iterator<Item = &ExtendedState> {
-        self.state_entries.iter::<ExtendedState>()
+        nebokrai_zone::skills::state::extended_states(&self.state_storage)
     }
 
 
@@ -1558,19 +1532,16 @@ impl CMoveShape {
 
 
     pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
-        self.state_entries.iter::<ChangeBodyState>()
-            .any(|state| state.level == state_id)
-            .then_some(state_id)
-            .unwrap_or_default()
+        nebokrai_zone::skills::state::get_change_body_state(&self.state_storage, state_id)
     }
 
 
     pub(crate) fn active_change_body_state(&self) -> Option<&ChangeBodyState> {
-        self.state_entries.iter::<ChangeBodyState>().last()
+        nebokrai_zone::skills::state::active_change_body_state(&self.state_storage)
     }
 
     pub(crate) fn first_change_body_state_id(&self) -> Option<u32> {
-        self.state_entries.first::<ChangeBodyState>().map(|state| state.level)
+        nebokrai_zone::skills::state::first_change_body_state_id(&self.state_storage)
     }
 
 
