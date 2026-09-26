@@ -1,120 +1,64 @@
-//! Взрыв трупной свечи `CCorpseCandleBlasting` (`0x194`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/corpsecandleblasting.cpp`. Навык взрывает самого монстра
-//! после задержки, обходит восемь клеток подтверждённой маски 3×3 без центра,
-//! сохраняет порядок X→Y и отдельный бросок урона для каждой цели. Формула,
-//! визуальные пакеты и самоубийственный жизненный цикл находятся здесь; `CGame`
-//! остаётся владельцем защиты, применения смерти и сценарной очереди.
-//! Scan допускает RTTI CMoveShape, а Attack отдельно отвергает 600 → 600.
-//! Полный производный регион сохраняет этот RTTI-допуск и порядок клеток.
-//! End (0x00582810, общий со SporeBlasting) сбрасывает флаги, снимает один
-//! запрет движения и вызывает CAttackSkill::End. Общая очистка CMonster
-//! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
-//! скрипт, урон и пометка удаления не являются побочными эффектами End.
+//! Тонкий путь к взрыву трупной свечи `CCorpseCandleBlasting` (`0x194`) в
+//! Zone. Источник: gameserver.exe/GameServer.pdb, исходный владелец
+//! `appserver/skills/corpsecandleblasting.cpp`. Тело execute_owned, wire-
+//! кадры и формула перенесены буквально в
+//! `nebokrai_zone::skills::corpsecandleblasting` (основание и статусы MATCH
+//! см. там; кластер D полосы Monster 0x19x); **FIX F1** — MIN/MAX урона и
+//! hit-модификатор приведены к машинным ключам 20008/20009/20001 Calculate
+//! `0x582EA0` (push 0x4E28/0x4E29/0x4E21), прежние 20001/20002/3 были
+//! ошибкой реконструкции.
+//! Здесь — объявленные швы переноса: hub-фасады `CorpseCandleGame`
+//! (`script_file` живого монстра и stage-for-delete `[U+0x80]=1`) и
+//! `CorpseCandleContact` (`RunScript` прежнего скриптового owner-а) над
+//! прежними `CGame`/`CServerRegion`; остальное обслуживает hub
+//! `monsterattack` кластера A2. Делегация сохраняет прежнюю сигнатуру —
+//! единственный потребитель (`monsterbaseattack.rs`) не меняется.
 
-//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
-//! Заимствование базы не переживает эту границу; продолжение заново получает
-//! оставшегося владельца, не создавая замену исчезнувшему региону.
-
-use crate::gameserver::gameserver::game::ServerRegionOwner;
-
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
-use super::monsterattack::{
-    apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates,
-    resolve_owned_monster_attack_target,
-};
-use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
-};
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::appserver::states::attackpower::{
-    AttackInformation, AttackPower, AttackPowerType,
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
+use nebokrai_zone::skills::corpsecandleblasting::{
+    self as zone, CorpseCandleContact, CorpseCandleGame,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::nets::netserver::message::CMessage;
 
-pub(crate) const CORPSE_CANDLE_BLASTING_SKILL_ID: u32 = 0x194;
-const MONSTER_TYPE: i32 = 600;
-const PLAYER_TYPE: i32 = 400;
-const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
-const SKILL_USAGE_USER_HIT_MODIFIER: u32 = 3;
-const SKILL_USAGE_MIN_ATTACK: u32 = 20_001;
-const SKILL_USAGE_MAX_ATTACK: u32 = 20_002;
-const SCOPE: [u8; 9] = [1, 1, 1, 1, 0, 1, 1, 1, 1];
+pub(crate) use nebokrai_zone::skills::corpsecandleblasting::CORPSE_CANDLE_BLASTING_SKILL_ID;
 
-fn send_start(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(1);
-    message.add_long(CORPSE_CANDLE_BLASTING_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
+impl CorpseCandleGame for CGame {
+    fn monster_script_file(&self, region: &CServerRegion, monster_id: i32) -> Option<Vec<u8>> {
+        region.find_monster_by_id(monster_id).map(|monster| monster.script_file().to_vec())
+    }
 
-fn send_fire(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(2);
-    message.add_long(CORPSE_CANDLE_BLASTING_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(source.get_tile_x().unwrap_or_default());
-    message.add_long(source.get_tile_y().unwrap_or_default());
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn calculate_attack(
-    game: &mut CGame,
-    source_id: i32,
-    skill_level: u16,
-    properties: &CSkillBaseProperties,
-) -> AttackInformation {
-    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
-    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
-    let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
-    // Виртуальный `CMonster::GetAddElementAtk` возвращает ноль; здесь остаётся
-    // ровно один вызов генератора случайных чисел на допустимую цель.
-    let damage = minimum
-        .wrapping_add(game.skill_random_below(width))
-        .max(0);
-    AttackInformation {
-        skill_id: CORPSE_CANDLE_BLASTING_SKILL_ID,
-        skill_level: skill_level as u8,
-        attacker_type: MONSTER_TYPE,
-        attacker_id: source_id,
-        attacker_team_id: 0,
-        attacker_faction_id: 0,
-        attacker_union_id: 0,
-        hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: 1.0,
-        damage_modifier: 0,
-        critical: false,
-        blast_attack: false,
-        full_miss: 0,
-        damages: vec![AttackPower {
-            kind: AttackPowerType::Element,
-            hp_damage: damage,
-            mp_damage: 0,
-        }],
+    fn monster_stage_for_delete(&mut self, region: &mut CServerRegion, monster_id: i32) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.stage_for_delete();
+        }
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "граница сохраняет владельца, исходную цель и очередь смертей"
-)]
+impl<Runtime: GameMainLoopRuntime> CorpseCandleContact<Runtime> for CGame {
+    fn run_corpse_candle_script(
+        &mut self,
+        script_file: &[u8],
+        player_id: Option<i32>,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        self.run_script_file(
+            script_file,
+            ScriptExecutionContext {
+                player_id,
+                region_id: Some(region_id),
+                ..ScriptExecutionContext::default()
+            },
+            runtime,
+        )
+        .is_some()
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
@@ -125,158 +69,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((
-        source,
-        property,
-        attack_interval_ms,
-        script_file,
-        cast,
-        last_used_ms,
-    )) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                .clone();
-            let attack_interval_ms = monster
-                .is_tamed()
-                .then(|| monster.pet_attack_properties(&property))
-                .map_or(property.attack_speed, |pet| pet.attack_interval);
-            Some((
-                monster.move_shape().shape().clone(),
-                property,
-                attack_interval_ms,
-                monster.script_file().to_vec(),
-                monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(CORPSE_CANDLE_BLASTING_SKILL_ID, game.skill_factory()),
-            ))
-        })
-    else {
-        return false;
-    };
-
-    let initial_target = if cast.is_none() {
-        owner.as_ref().and_then(|region_owner| resolve_owned_monster_attack_target(game, region_owner, target_identity))
-    } else { None };
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    if cast.is_none() {
-        let Some(target) = initial_target
-        else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target(game.skill_factory());
-            }
-            return true;
-        };
-        if !approach_attack_range(
-            game,
-            region,
-            monster_id,
-            MonsterTraceTarget::Shape(target.view),
-            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            runtime,
-        ) {
-            return true;
-        }
-        if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
-        {
-            let attack_started = region
-                .find_monster_by_id_mut(monster_id)
-                .is_some_and(|monster| {
-                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
-                });
-            if !attack_started {
-                return true;
-            }
-        }
-        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-                last_used_ms,
-                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                now_ms,
-            )
-        {
-            return true;
-        }
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(
-                target_identity,
-                CORPSE_CANDLE_BLASTING_SKILL_ID,
-                skill_level,
-                now_ms,
-                target_object,
-                game.skill_factory(),
-            );
-        }
-        send_start(game, region, &source, skill_level);
-        return true;
-    }
-    let cast = cast.expect("выполнение взрыва трупной свечи проверено выше");
-    if cast.dispatch().skill_id != CORPSE_CANDLE_BLASTING_SKILL_ID {
-        return false;
-    }
-    if !time_reached(
-        now_ms,
-        cast.started_at_ms(),
-        properties.query_property(SKILL_USAGE_DELAY_TIME),
-    ) {
-        return true;
-    }
-    let (Ok(center_x), Ok(center_y)) = (source.get_tile_x(), source.get_tile_y()) else {
-        return true;
-    };
-    send_fire(game, region, &source, skill_level);
-    for x in 0_i32..3 {
-        for y in 0_i32..3 {
-            if SCOPE[(x + 3 * y) as usize] == 0 {
-                continue;
-            }
-            let cell_x = center_x.wrapping_sub(1).wrapping_add(x);
-            let cell_y = center_y.wrapping_sub(1).wrapping_add(y);
-            let Some(region_owner) = owner.as_ref() else { return true; };
-            let candidates = monster_attack_cell_candidates(game, region_owner, monster_id, cell_x, cell_y);
-            for identity in candidates {
-                let Some(region_owner) = owner.as_ref() else { return true; };
-                if !game.live_skill_target_attackable_in(region_owner, source.identity(), identity) { continue; }
-                // В scan вызывается IsAttackAble; отдельный Attack отвергает 600 → 600.
-                if identity.object_type == MONSTER_TYPE { continue; }
-                let attack = calculate_attack(game, monster_id, skill_level, properties);
-                apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
-            }
-        }
-    }
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.stage_for_delete();
-    }
-    if target_identity.object_type == PLAYER_TYPE
-        && !script_file.is_empty()
-        && script_file[0] != b'0'
-    {
-        let _ = game.run_script_file(
-            &script_file,
-            ScriptExecutionContext {
-                player_id: Some(target_identity.id),
-                region_id: Some(region.id),
-                ..ScriptExecutionContext::default()
-            },
-            runtime,
-        );
-    }
-    let mut died = CMessage::new(0x000b_f60b);
-    died.add_long(0);
-    died.add_long(0);
-    died.add_long(MONSTER_TYPE);
-    died.add_long(monster_id);
-    died.add_ulong(0);
-    died.add_byte(2);
-    let _ = game.send_game_shape_around(region, &source, None, &died);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(CORPSE_CANDLE_BLASTING_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(CORPSE_CANDLE_BLASTING_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(CORPSE_CANDLE_BLASTING_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-        let _ = monster.finish_base_attack_cast_with_clock(CORPSE_CANDLE_BLASTING_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
-    }
-    true
+    zone::execute_owned_corpse_candle_blasting(
+        game, owner, monster_id, target_identity, skill_level, properties, now_ms, runtime,
+    )
 }

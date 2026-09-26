@@ -14,6 +14,8 @@ pub mod blindstate; // общий lifecycle 8-байт lock-состояний B
 pub mod callosity; // Check/AI взаимно исключающих CCallosity/CCallosity2 (порция №6c; hub-швы `selfcast`).
 pub mod callositystate; // живые replace/restart/AI/End CCallosityState/CCallosityState2 (порция №6c).
 mod chaossphere; // движущаяся область CChaosSpherePhalanx, её живая форма и тело Summon (порция T5).
+pub mod corpsecandleblasting; // CCorpseCandleBlasting (0x194): execute_owned буквально (маска x+3y с дырой в центре, X→Y, 600→600 внутри Attack, BF60B-кадр, stage-for-delete, death-скрипт); FIX F1 — MIN/MAX 20008/20009 и hit 20001 из Calc 0x582EA0 (кластер D Monster 0x19x; hub `monsterattack` для A2 + фасады скрипта/удаления).
+pub mod corpseptomaine; // CCorpsePtomaine (0x19F): обе ветви буквально, полный 3×3, MP-fаза player, AddState-замена первого 0x191; FIX F2 — player-scan без allowlist типов (AI 0x53A230) (кластер D; hub `monsterattack` + общая арена `spiderpoison`).
 pub mod cure; // Check/AI CCure, числовое правило и выбор снимаемых состояний CastCure (порция №6a; hub-швы `statecast`).
 pub mod curestate; // живые Begin/restart/AI/End CCureState над hub-швами `statecast` (порция №6a).
 mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
@@ -73,6 +75,7 @@ mod selfstate; // правила self-state семьи: ветка состоя�
 pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
 mod snowstorm; // данные и живая форма области CSnowStormPhalanx; тело Summon и применение окна (порция T5).
 pub mod soulmirror; // маска, параметры клетки и живой обход области CSoulMirror (порция №6c; hub-швы `selfcast`).
+pub mod spiderpoison; // CSpiderPoison (0x191): Check/AI/Attack/Calc и позднее наложение яда буквально поверх hub `baseattackruntime`; общая арена ядовой линии `SpiderPoisonStateArena` (Cure-факт, замена первого 0x191) для кластера D; обвязка stateskill остаётся hub прежнего пакета (кластер D Monster 0x19x).
 pub mod spidermist; // CSpiderMist (0x198): Check/AI/Summon буквально, область CSpiderMistPhalanx (маска, AI обхода, entry 0xBF502), hub-швы семьи summoncreatureskill (кластер C Monster 0x19x).
 pub mod statecast; // общие hub-швы и wire-кадр visual state-кастов пятёрки и heal-квартета (порция №6a; реализация фасадов у прежнего владельца).
 pub mod state; // клиентские контракты состояний: проекция живых записей и runtime-план visual.
@@ -235,3 +238,18 @@ pub use monsterthorn::{MONSTER_THORN_SKILL_ID, cancel_player_monster_thorn,
     is_player_monster_thorn_dispatch};
 pub use monstertaming::{MONSTER_TAMING_SKILL_ID, cancel_player_monster_taming,
     complete_player_monster_taming, execute_player_monster_taming};
+
+// Кластер D «трупная/ядовая state-линия»: hub-фасады и перенесённые тела
+// навыков 0x191 (stateskill-обвязка у прежнего hub), 0x194 и 0x19F; FIX
+// F1 (MIN/MAX/hit ключи Calc 0x582EA0) и FIX F2 (player-scan без allowlist)
+// зафиксированы в шапках владельцев.
+pub use spiderpoison::{SPIDER_POISON_SKILL_ID, SpiderPoisonBeginTarget, SpiderPoisonGame,
+    SpiderPoisonMoveShape, SpiderPoisonStateArena, check_spider_poison_cast,
+    execute_spider_poison_ai, is_player_spider_poison_dispatch};
+pub use corpsecandleblasting::{CORPSE_CANDLE_BLASTING_SKILL_ID, CorpseCandleContact,
+    CorpseCandleGame, corpse_candle_death_message, corpse_candle_fire_message,
+    corpse_candle_start_message, execute_owned_corpse_candle_blasting};
+pub use corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, CorpsePtomaineContact, CorpsePtomaineGame,
+    CorpsePtomaineOutcome, cancel_player_corpse_ptomaine, corpse_ptomaine_fire_message,
+    corpse_ptomaine_start_message, execute_owned_corpse_ptomaine, execute_player_corpse_ptomaine,
+    is_player_corpse_ptomaine_dispatch};
