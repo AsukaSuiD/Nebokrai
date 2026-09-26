@@ -302,7 +302,6 @@ use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
-use nebokrai_shared::protocol::LegacyWriter;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, KillingAttackIdentity, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
@@ -433,18 +432,15 @@ impl CMonster {
     }
 
     /// Точный fresh-monster `AddToByteArray` tail поверх client-prefix
-    /// `CMoveShape`. `master_name` уже разрешён владельцем `CGame`: обычный
-    /// spawn передаёт локализованный `GS0119`, pet/carriage — имя игрока.
+    /// `CMoveShape` — Zone `regions::monster`; `master_name` уже разрешён
+    /// владельцем `CGame`: обычный spawn передаёт локализованный `GS0119`,
+    /// pet/carriage — имя игрока.
     pub(crate) fn encode_fresh_client_snapshot(
         &self,
         property: &MonsterProperties,
         master_name: &[u8],
     ) -> Option<Vec<u8>> {
-        let mut payload = self
-            .move_shape
-            .encode_fresh_client_snapshot(true, self.hit_points == 0)?;
-        self.append_client_snapshot_tail(&mut payload, property, master_name);
-        Some(payload)
+        monster::encode_fresh_monster_client_snapshot(&self.client_snapshot_parts(property, master_name))
     }
 
     pub(crate) fn encode_client_snapshot(
@@ -453,45 +449,27 @@ impl CMonster {
         master_name: &[u8],
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        let mut payload = self.move_shape.encode_client_snapshot(
-            true,
-            self.hit_points == 0,
+        monster::encode_monster_client_snapshot(
+            &self.client_snapshot_parts(property, master_name),
             timed_state_now_milliseconds,
-        )?;
-        self.append_client_snapshot_tail(&mut payload, property, master_name);
-        Some(payload)
+        )
     }
 
-    fn append_client_snapshot_tail(
-        &self,
-        payload: &mut Vec<u8>,
-        property: &MonsterProperties,
-        master_name: &[u8],
-    ) {
-        let mut writer = LegacyWriter::new(payload);
-        writer.write_u32(self.maximum_hp(property));
-        writer.write_u32(self.hit_points);
-        writer.write_u8(property.kind as u8);
-        writer.write_u8(property.figure as u8);
-        writer.write_u16(property.sound_id as u16);
-        writer.write_u8(property.picture_level as u8);
-        writer.write_u8(property.name_color as u8);
-        writer.write_u8(property.hp_bar_color as u8);
-
-        if self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0 {
-            writer.write_u8(1);
-            writer.write_i32(self.master_info.master_type);
-            writer.write_i32(self.master_info.master_id);
-            writer.write_c_string(master_name);
-            writer.write_u32(self.pet_level);
-            writer.write_u32(self.pet_experience);
-        } else if property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
-            writer.write_u8(2);
-            writer.write_i32(self.master_info.master_type);
-            writer.write_i32(self.master_info.master_id);
-            writer.write_c_string(master_name);
-        } else {
-            writer.write_u8(0);
+    fn client_snapshot_parts<'a>(
+        &'a self,
+        property: &'a MonsterProperties,
+        master_name: &'a [u8],
+    ) -> monster::MonsterClientSnapshotParts<'a> {
+        monster::MonsterClientSnapshotParts {
+            move_shape: &self.move_shape,
+            hit_points: self.hit_points,
+            maximum_hp: self.maximum_hp(property),
+            tamed: self.tamed,
+            master_info: self.master_info,
+            pet_level: self.pet_level,
+            pet_experience: self.pet_experience,
+            property,
+            master_name,
         }
     }
 
@@ -503,16 +481,7 @@ impl CMonster {
         property: &MonsterProperties,
         master_name: &[u8],
     ) -> Option<CMessage> {
-        let payload = self.encode_fresh_client_snapshot(property, master_name)?;
-        let identity = self.move_shape.shape().identity();
-        let mut message = CMessage::new(0x000b_f502);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.base_mut().add_guid(identity.ex_id);
-        message.add_long(i32::try_from(payload.len()).ok()?);
-        message.base_mut().add(&payload);
-        message.add_byte(0);
-        Some(message)
+        monster::build_fresh_monster_enter_message(&self.client_snapshot_parts(property, master_name))
     }
 
     pub(crate) fn build_enter_message(
@@ -521,20 +490,10 @@ impl CMonster {
         master_name: &[u8],
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<CMessage> {
-        let payload = self.encode_client_snapshot(
-            property,
-            master_name,
+        monster::build_monster_enter_message(
+            &self.client_snapshot_parts(property, master_name),
             timed_state_now_milliseconds,
-        )?;
-        let identity = self.move_shape.shape().identity();
-        let mut message = CMessage::new(0x000b_f502);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.base_mut().add_guid(identity.ex_id);
-        message.add_long(i32::try_from(payload.len()).ok()?);
-        message.base_mut().add(&payload);
-        message.add_byte(0);
-        Some(message)
+        )
     }
 
     pub(crate) const fn set_summoned_creature_lifecycle(

@@ -71,8 +71,6 @@
 
 use crate::gameserver::appserver::area::CArea;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionRecipientsSnapshot};
-use crate::gameserver::appserver::session::cplug::CPlug;
-use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
 use crate::gameserver::gameserver::game::CGame;
@@ -169,13 +167,12 @@ pub(crate) enum GameMessageRoute {
 }
 
 pub(crate) use nebokrai_zone::app::game_message::{CMessage, SendMessageError};
-pub(crate) use nebokrai_zone::replication::around::{
-    AroundPlayerLookup, AroundPlayerView, AroundSessionLookup,
-};
+pub(crate) use nebokrai_zone::replication::around::{AroundPlayerLookup, AroundPlayerView};
 
 /// Конкретная around-runtime привязка старого пакета к `CGame` и
-/// `CSessionFactory`: generic-владелец живёт в Zone `replication/`, а
-/// downstream-подписи старого пакета сохраняют прежнюю одну lifetime-позицию.
+/// `CSessionFactory`: generic-владелец и coherent-impl шва `AroundSessionLookup`
+/// для session-реестра живут в Zone `replication/`, а downstream-подписи
+/// старого пакета сохраняют прежнюю одну lifetime-позицию.
 pub(crate) type GameServerAroundRuntime<'a, P = CGame, S = CSessionFactory> =
     nebokrai_zone::replication::around::GameServerAroundRuntime<'a, P, S>;
 
@@ -190,16 +187,6 @@ impl AroundPlayerLookup for CGame {
 
     fn team_session_id(&self, team_id: u32) -> i32 {
         self.get_team_session_id(team_id)
-    }
-}
-
-impl AroundSessionLookup for CSessionFactory {
-    fn query_session(&self, session_id: i32) -> Option<&CSession> {
-        CSessionFactory::query_session(self, session_id)
-    }
-
-    fn query_plug(&self, plug_id: i32) -> Option<&CPlug> {
-        CSessionFactory::query_plug(self, plug_id)
     }
 }
 

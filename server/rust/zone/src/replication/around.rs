@@ -143,3 +143,16 @@ impl<'a, P: AroundPlayerLookup + ?Sized, S: AroundSessionLookup + ?Sized>
         self.sessions.query_plug(plug_id)
     }
 }
+
+/// Coherent-impl шва для реестра `interactions::CSessionFactory`: и трейт,
+/// и тип локальные для Zone, impl живёт рядом с трейтом. Тела поиска —
+/// inherent-методы реестра.
+impl AroundSessionLookup for crate::interactions::csessionfactory::CSessionFactory {
+    fn query_session(&self, session_id: i32) -> Option<&CSession> {
+        crate::interactions::csessionfactory::CSessionFactory::query_session(self, session_id)
+    }
+
+    fn query_plug(&self, plug_id: i32) -> Option<&CPlug> {
+        crate::interactions::csessionfactory::CSessionFactory::query_plug(self, plug_id)
+    }
+}

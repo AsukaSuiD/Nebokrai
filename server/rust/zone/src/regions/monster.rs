@@ -14,9 +14,11 @@
 //! setter без отсечения — вопрос отложен для pet-поведения.
 //! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
+use nebokrai_shared::protocol::LegacyWriter;
 use nebokrai_shared::resources::MonsterProperties;
 
-use super::moveshape::is_died;
+use super::moveshape::{is_died, MoveShapeState};
+use crate::app::game_message::CMessage;
 use crate::combat::MasterInfo;
 
 /// Exact `CMonster::DoesCreatureBeenTamed` (RVA `0x000E6460`): одного
@@ -148,4 +150,107 @@ pub fn register_attacking_player(
 /// действие `ACT_DIED` и смерть по здоровью отсекаются независимо.
 pub const fn can_trigger_nation_damage(action: u16, hit_points: u32) -> bool {
     action != 6 && !is_died(hit_points)
+}
+
+/// Заёмная проекция `CMonster` для клиентского снимка монстра: hub старого
+/// пакета передаёт свои колонки и вычисленное `maximum_hp` (та формула —
+/// `combat/monsterformula`), разрешение имени хозяина остаётся владельцу игре.
+pub struct MonsterClientSnapshotParts<'a> {
+    pub move_shape: &'a MoveShapeState,
+    pub hit_points: u32,
+    pub maximum_hp: u32,
+    pub tamed: bool,
+    pub master_info: MasterInfo,
+    pub pet_level: u32,
+    pub pet_experience: u32,
+    pub property: &'a MonsterProperties,
+    pub master_name: &'a [u8],
+}
+
+/// Точный fresh-monster `AddToByteArray` tail поверх client-prefix
+/// `CMoveShape`: max_hp/hp/kind/figure/sound/picture/name_color/hp_bar и
+/// tamed-ветвления 1/2/0. Статусы ветвлений перенесены без повышения.
+fn append_monster_client_snapshot_tail(parts: &MonsterClientSnapshotParts, payload: &mut Vec<u8>) {
+    let property = parts.property;
+    let mut writer = LegacyWriter::new(payload);
+    writer.write_u32(parts.maximum_hp);
+    writer.write_u32(parts.hit_points);
+    writer.write_u8(property.kind as u8);
+    writer.write_u8(property.figure as u8);
+    writer.write_u16(property.sound_id as u16);
+    writer.write_u8(property.picture_level as u8);
+    writer.write_u8(property.name_color as u8);
+    writer.write_u8(property.hp_bar_color as u8);
+
+    if parts.tamed && parts.master_info.master_type == 400 && parts.master_info.master_id != 0 {
+        writer.write_u8(1);
+        writer.write_i32(parts.master_info.master_type);
+        writer.write_i32(parts.master_info.master_id);
+        writer.write_c_string(parts.master_name);
+        writer.write_u32(parts.pet_level);
+        writer.write_u32(parts.pet_experience);
+    } else if property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
+        writer.write_u8(2);
+        writer.write_i32(parts.master_info.master_type);
+        writer.write_i32(parts.master_info.master_id);
+        writer.write_c_string(parts.master_name);
+    } else {
+        writer.write_u8(0);
+    }
+}
+
+/// Полный fresh-снимок: client-prefix `CMoveShape` плюс хвост монстра.
+pub fn encode_fresh_monster_client_snapshot(parts: &MonsterClientSnapshotParts) -> Option<Vec<u8>> {
+    let mut payload = crate::skills::state::encode_fresh_client_snapshot(
+        parts.move_shape.shape(),
+        true,
+        parts.hit_points == 0,
+    )?;
+    append_monster_client_snapshot_tail(parts, &mut payload);
+    Some(payload)
+}
+
+/// Вариант с timed-state блоком (те же часы, что двигает caller).
+pub fn encode_monster_client_snapshot(
+    parts: &MonsterClientSnapshotParts,
+    timed_state_now_milliseconds: impl FnMut() -> u32,
+) -> Option<Vec<u8>> {
+    let mut payload = crate::skills::state::encode_client_snapshot(
+        parts.move_shape.shape(),
+        &parts.move_shape.state_storage,
+        true,
+        parts.hit_points == 0,
+        timed_state_now_milliseconds,
+    )?;
+    append_monster_client_snapshot_tail(parts, &mut payload);
+    Some(payload)
+}
+
+fn build_monster_enter_envelope(move_shape: &MoveShapeState, payload: Vec<u8>) -> Option<CMessage> {
+    let identity = move_shape.shape().identity();
+    let mut message = CMessage::new(0x000b_f502);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.base_mut().add_guid(identity.ex_id);
+    message.add_long(i32::try_from(payload.len()).ok()?);
+    message.base_mut().add(&payload);
+    message.add_byte(0);
+    Some(message)
+}
+
+/// Exact `CServerRegion::AddMonster` envelope `0xBF502`: идентичность фигуры,
+/// длина payload, байт 0. Выбор around-получателей остаётся у owning
+/// region/CGame и не дублируется здесь.
+pub fn build_fresh_monster_enter_message(parts: &MonsterClientSnapshotParts) -> Option<CMessage> {
+    let payload = encode_fresh_monster_client_snapshot(parts)?;
+    build_monster_enter_envelope(parts.move_shape, payload)
+}
+
+/// Вариант `0xBF502` с timed-state снимком.
+pub fn build_monster_enter_message(
+    parts: &MonsterClientSnapshotParts,
+    timed_state_now_milliseconds: impl FnMut() -> u32,
+) -> Option<CMessage> {
+    let payload = encode_monster_client_snapshot(parts, timed_state_now_milliseconds)?;
+    build_monster_enter_envelope(parts.move_shape, payload)
 }
