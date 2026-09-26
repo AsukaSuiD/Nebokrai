@@ -524,14 +524,11 @@ fn log_state_array_change(
     crate::public::tools::put_debug_string(&text);
 }
 
-// Заимствованная клиентская проекция одного живого экземпляра, без DB Serialize.
-// Перенесена в Zone `skills::state`; реэкспорт сохраняет прежний путь.
-pub(crate) use nebokrai_zone::skills::state::StateClientRecord;
-
 // Один список задаёт AI/End/Begin/destructor/OnUpdateProperties/SetRegion.
 // Клиентская проекция и остаточное состояние visual после runtime Begin
-// перенесены в Zone `skills::state`: генерируемые обёртки делегируют её
-// каталогу, а client=/visual= clauses здесь больше не задаются — единый
+// перенесены в Zone `skills::state`: обёртка клиентской записи снята вместе
+// с переносом самого писателя в zone (волна Z-M3), runtime visual делегирует
+// zone-каталогу; client=/visual= clauses здесь больше не задаются — единый
 // источник этих контрактов теперь в Zone.
 macro_rules! state_callbacks {
     (@destructor) => { None };
@@ -559,14 +556,6 @@ macro_rules! state_callbacks {
 
         fn state_property(state: &StateData) -> StateProperty {
             match state { $($(StateData::$variant(_))|+ => $property),+ }
-        }
-
-        pub(crate) fn state_client_record<'a>(
-            state: &'a StateData,
-            team_member_count: usize,
-            now: &mut dyn FnMut() -> u32,
-        ) -> StateClientRecord<'a> {
-            nebokrai_zone::skills::state::state_client_record(state, team_member_count, now)
         }
 
         pub(crate) fn registered_runtime_state_visual(state: &StateData) -> Option<super::visualeffect::CVisualEffect> {

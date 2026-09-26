@@ -41,7 +41,8 @@
 //! успешный Begin → общая регистрация/span → virtual UpdateProperty.
 //! Список и копия результата для сценарных состояний отдельно не создаются.
 //! Клиентский AddToByteArray_ForClient (0x004CDD30, moveshape.cpp:1779)
-//! считает непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
+//! перенесён в Zone `skills::state::snapshot` (волна Z-M3): он считает
+//! непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
 //! в том же порядке. DB Serialize и его offsets здесь не используются;
 //! клиентские getters заданы в едином каталоге states/state.rs. IsEnded
 //! не фильтрует запись; повторные ID и пустые позиции не меняют идентичность.
@@ -263,8 +264,9 @@
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
 // Арена состояний, её enum-каталог, codec/интервалы, читающие проекции
-// семейств (`accessors`), мутирующие операции и RAW-записи (`mutations`)
-// и DB Save/Load-кодек (`serialization`) перенесены
+// семейств (`accessors`), мутирующие операции и RAW-записи (`mutations`),
+// DB Save/Load-кодек (`serialization`) и клиентский писатель снимка
+// (`snapshot`) перенесены
 // в Zone `skills::state`; путь `super::moveshape` сохраняет прежние имена.
 pub(crate) use nebokrai_zone::skills::state::{
     AppliedState, StateBatch, StateData, StateKey,
@@ -276,7 +278,6 @@ use std::ops::{Deref, DerefMut};
 use super::ai::baseai::CBaseAI;
 use super::chbystate::ChangeBodyState;
 use super::exstate::{ExtendedState, ExtendedStateKind};
-use nebokrai_shared::protocol::LegacyWriter;
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::RideState;
@@ -619,84 +620,57 @@ impl CMoveShape {
         &mut self.shape
     }
 
-    /// Материализует точный fresh-object prefix
-    /// `CMoveShape::AddToByteArray_ForClient`: после `CShape` идут died-byte и
-    /// нулевой count состояний. Метод намеренно не изображает общий state
-    /// serializer и применяется до установки первого состояния.
+    /// Точный fresh-object prefix `CMoveShape::AddToByteArray_ForClient`
+    /// (died-byte и нулевой count состояний) формирует общий писатель Zone
+    /// `skills::state::snapshot` (волна Z-M3) над этими же `CShape`.
     pub(crate) fn encode_fresh_client_snapshot(
         &self,
         include_child: bool,
         is_dead: bool,
     ) -> Option<Vec<u8>> {
-        let mut payload = Vec::new();
-        self.shape
-            .add_to_byte_array(&mut payload, include_child)
-            .then_some(())?;
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u8(u8::from(is_dead));
-        writer.write_i32(0);
-        Some(payload)
+        nebokrai_zone::skills::state::encode_fresh_client_snapshot(
+            &self.shape,
+            include_child,
+            is_dead,
+        )
     }
 
-    /// Материализует общий CMoveShape::AddToByteArray_ForClient из живых
-    /// экземпляров, а не их DB-записей. Незагруженный opaque owner блокирует
-    /// snapshot: его клиентский контракт пока не подтверждён.
+    /// Общий CMoveShape::AddToByteArray_ForClient идёт тем же писателем Zone
+    /// `skills::state::snapshot` из живых экземпляров общей арены. Незагруженный
+    /// opaque owner по-прежнему блокирует snapshot.
     pub(crate) fn encode_client_snapshot(
         &self,
         include_child: bool,
         is_dead: bool,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        self.encode_client_snapshot_with_team_count(
+        nebokrai_zone::skills::state::encode_client_snapshot(
+            &self.shape,
+            &self.state_storage,
             include_child,
             is_dead,
-            1,
             timed_state_now_milliseconds,
         )
     }
 
     /// CMoveShape::AddToByteArray_ForClient (0x004CDD30): два прохода
-    /// живого m_vStates, без DB Serialize и без уплотнения пустых позиций.
-    /// Player-owner передаёт канонический размер CTeam для GetAdditionalData.
+    /// живого m_vStates — писатель Zone `skills::state::snapshot`.
+    /// Player-owner по-прежнему передаёт канонический размер CTeam.
     pub(crate) fn encode_client_snapshot_with_team_count(
         &self,
         include_child: bool,
         is_dead: bool,
         team_member_count: usize,
-        mut timed_state_now_milliseconds: impl FnMut() -> u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        // Непрозрачный незагруженный owner не выдаётся за пустое состояние.
-        if self.ex_states.opaque_count != 0
-            || (!self.ex_states.header_was_present && !self.ex_states.opaque_tail.is_empty())
-        {
-            return None;
-        }
-        let mut total_count = 0i32;
-        for index in 0..self.state_entries.len() {
-            if let Some(key) = self.state_entries.address(index) {
-                self.state_entries.get(key)?;
-                total_count = total_count.checked_add(1)?;
-            }
-        }
-        let mut payload = Vec::new();
-        self.shape.add_to_byte_array(&mut payload, include_child).then_some(())?;
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u8(u8::from(is_dead));
-        writer.write_i32(total_count);
-        for index in 0..self.state_entries.len() {
-            let Some(key) = self.state_entries.address(index) else { continue };
-            let state = self.state_entries.get(key)?;
-            writer.write_u32(state.state_id());
-            let record = crate::gameserver::appserver::states::state::state_client_record(
-                state, team_member_count, &mut timed_state_now_milliseconds,
-            );
-            writer.write_i32(record.time);
-            writer.write_u32(record.additional);
-            if let Some(name) = record.team_name {
-                writer.write_c_string(name);
-            }
-        }
-        Some(payload)
+        nebokrai_zone::skills::state::encode_client_snapshot_with_team_count(
+            &self.shape,
+            &self.state_storage,
+            include_child,
+            is_dead,
+            team_member_count,
+            timed_state_now_milliseconds,
+        )
     }
 
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не

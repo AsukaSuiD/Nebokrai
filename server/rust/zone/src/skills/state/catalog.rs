@@ -9,9 +9,10 @@
 //!
 //! Порядок полей записи (ID, time, additional, имя Team) принадлежит проходу
 //! `CMoveShape::AddToByteArray_ForClient` (паблик off 0xCCD30 → RVA 0xCDD30 →
-//! VA 0x004CDD30; запись остаётся у владельца hub moveshape); здесь только
-//! значения time/additional/team_name каждого из 56 вариантов enum-каталога и
-//! план loop/updated `CVisualEffect` после runtime Begin.
+//! VA 0x004CDD30; сам двухпроходный писатель — соседний `snapshot`, волна
+//! Z-M3); здесь только значения time/additional/team_name каждого из 56
+//! вариантов enum-каталога и план loop/updated `CVisualEffect` после runtime
+//! Begin.
 //!
 //! Писатель сверен машинным обходом полного тела (VERIFIED_DISASSEMBLY):
 //! байт-флаг из virtual [this+0xD0] (!= 0 даёт 0), DWORD числа непустых
