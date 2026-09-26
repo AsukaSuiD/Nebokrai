@@ -1,4 +1,10 @@
-//! Visitor списка GUID товаров GameServer.
+//! Visitor списка GUID товаров GameServer, перенесённый в Zone `items/` —
+//! владельца типов контейнеров и операций над ними.
+//!
+//! Тело перенесено буквально из прежнего
+//! `src/gameserver/appserver/listener/cgoodslistlistener.rs` (волна Z-C2c);
+//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
+//! (не расхождения): `CGoods` — Zone `items/cgoods.rs`, `CGuid` — Shared.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/listener/cgoodslistlistener.cpp`. Новый listener имеет пустой
@@ -6,11 +12,11 @@
 //! добавляет свой GUID и всегда продолжает traversal. MSVC vector/vtable и
 //! явный destructor заменены `Vec`/`Drop`.
 
-use crate::gameserver::appserver::goods::cgoods::CGoods;
+use super::cgoods::CGoods;
 use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsListListener {
+pub struct GoodsListListener {
     goods_ids: Vec<CGuid>,
     is_all_goods_exist: bool,
 }
@@ -25,19 +31,19 @@ impl Default for GoodsListListener {
 }
 
 impl GoodsListListener {
-    pub(crate) fn goods_ids(&self) -> &[CGuid] {
+    pub fn goods_ids(&self) -> &[CGuid] {
         &self.goods_ids
     }
 
-    pub(crate) const fn is_all_goods_exist(&self) -> bool {
+    pub const fn is_all_goods_exist(&self) -> bool {
         self.is_all_goods_exist
     }
 
-    pub(crate) const fn set_all_goods_exist(&mut self, value: bool) {
+    pub const fn set_all_goods_exist(&mut self, value: bool) {
         self.is_all_goods_exist = value;
     }
 
-    pub(crate) fn visit(&mut self, goods: &CGoods) -> bool {
+    pub fn visit(&mut self, goods: &CGoods) -> bool {
         self.goods_ids.push(goods.identity().ex_id);
         true
     }

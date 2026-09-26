@@ -452,11 +452,9 @@ pub(crate) mod appserver {
     }
     pub(crate) mod listener {
         pub(crate) mod ccontainerlistener;
-        pub(crate) mod cgoodslistlistener;
         pub(crate) mod cgoodsparticularpropertylistener;
         pub(crate) mod cgoodsrepairlistener;
         pub(crate) mod cgoodsrepairpricelistener;
-        pub(crate) mod cseekgoodslistener;
         pub(crate) mod cupgradepricelistener;
     }
     #[path = "message packaging/cs2ccontainerobjectamountchange.rs"]
