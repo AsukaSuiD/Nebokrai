@@ -6,6 +6,5 @@
 
 pub(crate) use nebokrai_zone::skills::execution::*;
 pub(crate) use nebokrai_zone::skills::{
-    SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination,
-    battle_fairy_mana_text_cost, skill_is_restored,
+    SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination, skill_is_restored,
 };

@@ -1,23 +1,19 @@
-//! Смазка оружия ядом CDaubPoison (0xDF).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/daubpoison.cpp.
-//! Общий selfstatecast сохраняет Begin с исходной целью, Check исходного U,
-//! MP, OnChangeStates, visual и End. Применение и visual используют только U:
-//! запрошенная S не становится получателем смазки.
-//!
-//! После visual1 завершается первый непустой слот ID0xDF без фильтра RTTI
-//! или ended; свежий остаток той же позиции уничтожается. Только затем
-//! прежняя таблица AI отдаёт persist. Primary Begin(U,U) получает свои часы,
-//! публикует состояние до append; отдельного UpdateProperty после него нет.
-//! Существующий state owner хранит единственный payload и обслуживает wire,
-//! DB и снятие. Результат установки не отменяет завершение навыка End(1).
+//! Тонкий путь к смазке оружия ядом CDaubPoison (0xDF) в Zone.
+//! Источник: gameserver.exe/GameServer.pdb, исходный владелец
+//! `appserver/skills/daubpoison.cpp`. Тело применения (завершение первого
+//! непустого слота ID 0xDF с destructor-ом свежего остатка позиции, ctor
+//! keep только из Query(10002), primary Begin(U,U) с append; результат
+//! установки не отменяет завершение навыка End(1)) перенесено буквально в
+//! `nebokrai_zone::skills::daubpoison` (основание и статусы MATCH — в шапке
+//! Zone-файла; кластер D, порция D4). Скелет Begin/Check/AI остаётся общим
+//! hub `selfstatecast.rs` (граница D): применение и visual используют только
+//! исходного U, запрошенная S не становится получателем смазки. Здесь —
+//! делегации с прежними сигнатурами: драйвер `selfstatecast.rs` и
+//! потребители ID (`game.rs`, `playercast.rs`) не меняются.
 
-use super::daubpoisonstate::begin_primary_daub_poison_state;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{end_and_destroy_state_at, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use nebokrai_zone::effects::DAUB_POISON_STATE_ID;
-use nebokrai_zone::skills::daub_poison_keep_time_ms;
 
 pub(crate) use nebokrai_zone::skills::DAUB_POISON_SKILL_ID;
 
@@ -25,11 +21,7 @@ pub(super) fn apply_daub_poison<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, source: (i32, ShapeIdentity),
     properties: &CSkillBaseProperties, runtime: &mut Runtime,
 ) {
-    if let Some((position, _)) = resolve_state_move_shape(game, source.0, source.1)
-        .and_then(|shape| shape.find_state_position(|state| state.state_id() == DAUB_POISON_STATE_ID))
-    {
-        let _ = end_and_destroy_state_at(game, source.0, source.1, position);
-    }
-    let keep = daub_poison_keep_time_ms(|key| properties.query_property(key));
-    let _ = begin_primary_daub_poison_state(game, source, keep, &mut || runtime.now_milliseconds());
+    nebokrai_zone::skills::apply_daub_poison(
+        game, source, properties, &mut || runtime.now_milliseconds(),
+    );
 }

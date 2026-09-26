@@ -18,7 +18,8 @@ pub mod corpsecandleblasting; // CCorpseCandleBlasting (0x194): execute_owned б
 pub mod corpseptomaine; // CCorpsePtomaine (0x19F): обе ветви буквально, полный 3×3, MP-fаза player, AddState-замена первого 0x191; FIX F2 — player-scan без allowlist типов (AI 0x53A230) (кластер D; hub `monsterattack` + общая арена `spiderpoison`).
 pub mod cure; // Check/AI CCure, числовое правило и выбор снимаемых состояний CastCure (порция №6a; hub-швы `statecast`).
 pub mod curestate; // живые Begin/restart/AI/End CCureState над hub-швами `statecast` (порция №6a).
-mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
+pub mod daubpoison; // CDaubPoison (0xDF): правило срока и apply с заменой первого непустого 0xDF-слота (ctor keep только из Query(10002), Begin(U,U)); скелет Check/AI — hub `selfstatecast` (граница D), отклонение не-player в AI — подтверждённое сознательное (кластер D, порция D4).
+pub mod daubpoisonstate; // живые Begin/restart/update/End CDaubPoisonState над hub `statecast`; данные/кодек — `effects/daubpoison` (кластер D, порция D4).
 pub mod dash; // рывки: общая геометрия пути, единый visual и контакт Flash/LittleFlash + hub-швы DashSkillGame семейства.
 mod directelement; // числовой расчёт прямых элементальных ударов.
 pub mod directprojectile; // CChuckStone/CSkeletonArchery (0x19D/0x1A1): Check/AI прямого снаряда буквально + hub-швы делегата.
@@ -59,8 +60,10 @@ pub mod monstertaming; // CMonsterTaming (0xd4): player-путь прируче�
 pub mod pathprojectile; // CEnergyBolt/CSnakeBolt/CZombieClaw (0x1A0/0x1A5/0x1A2): Check/AI путевого снаряда буквально + hub-швы делегата.
 pub mod pillar; // Check/AI и параметры стойки CPillar (порция №6c; hub-швы `selfcast`).
 pub mod pillarstate; // живые toggle/restart/AI/End CPillarState (порция №6c).
+pub mod poisonarrow; // CPoisonArrow (0x21E): Check/AI и позднее наложение яда буквально; общая для стрел 0x21D/0x21E обёртка `execute_periodic_battle_fairy_arrow` (кластер D, порция D5; hub `battlefairyskill` + швы арены ядов/PK).
 mod poisonfog; // данные и живая форма области CPoisonFogPhalanx; тело Summon (порция T5).
 pub mod poisonfogstate; // живые Begin/update/restart/AI/End CPoisonFogState (порция T5).
+pub mod poisonmoth; // CPoisonMoth (0xCF): Check/AI поклеточного выстрела буквально (квазнота MAX+1 против MAX в Check, двойной visual(3), одна клетка за тик, visual-target перед ударом, (0,0)-гейт); швы семей `rangedweaponcast`/`crossbowattack` (кластер D, порция D6).
 pub mod promotion; // Check/AI CPromotion (порция №6a; hub-швы `statecast`).
 pub mod promotionstate; // живой Begin/restart CPromotionState и wire-тип его пакета (порция №6a).
 mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall, общий серверный decoder и живые композиты FireBall и GodPunishment.
@@ -240,8 +243,11 @@ pub use monstertaming::{MONSTER_TAMING_SKILL_ID, cancel_player_monster_taming,
     complete_player_monster_taming, execute_player_monster_taming};
 
 // Кластер D «трупная/ядовая state-линия»: hub-фасады и перенесённые тела
-// навыков 0x191 (stateskill-обвязка у прежнего hub), 0x194 и 0x19F; FIX
-// F1 (MIN/MAX/hit ключи Calc 0x582EA0) и FIX F2 (player-scan без allowlist)
+// навыков 0x191 (stateskill-обвязка у прежнего hub), 0x194 и 0x19F (порции
+// D1–D3) и продолжение 0xDF (+state), 0x21E, 0xCF (порции D4–D6; скелет
+// 0xDF — hub `selfstatecast`, BF-координатор 0x21E — hub `battlefairyskill`,
+// удар/формула 0xCF — швы `rangedweaponcast`/`crossbowattack`); FIX F1
+// (MIN/MAX/hit ключи Calc 0x582EA0) и FIX F2 (player-scan без allowlist)
 // зафиксированы в шапках владельцев.
 pub use spiderpoison::{SPIDER_POISON_SKILL_ID, SpiderPoisonBeginTarget, SpiderPoisonGame,
     SpiderPoisonMoveShape, SpiderPoisonStateArena, check_spider_poison_cast,
@@ -253,3 +259,10 @@ pub use corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, CorpsePtomaineContact, Corpse
     CorpsePtomaineOutcome, cancel_player_corpse_ptomaine, corpse_ptomaine_fire_message,
     corpse_ptomaine_start_message, execute_owned_corpse_ptomaine, execute_player_corpse_ptomaine,
     is_player_corpse_ptomaine_dispatch};
+pub use daubpoison::apply_daub_poison;
+pub use daubpoisonstate::{begin_primary_daub_poison_state, end_daub_poison_state,
+    restart_daub_poison_state, update_daub_poison_state};
+pub use poisonarrow::{ArrowEffect, POISON_ARROW_SKILL_ID, PoisonArrowContact, PoisonArrowState,
+    PoisonArrowStateArena, execute_battle_fairy_poison_arrow, execute_periodic_battle_fairy_arrow};
+pub use poisonmoth::{POISON_MOTH_SKILL_ID, PoisonMothAiOutcome, PoisonMothContact, PoisonMothGame,
+    PoisonMothMoveShape, check_poison_moth_cast, execute_poison_moth_ai};

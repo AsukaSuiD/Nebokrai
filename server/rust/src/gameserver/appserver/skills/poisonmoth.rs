@@ -1,38 +1,27 @@
-//! Поклеточный арбалетный выстрел PoisonMoth (0xCF).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/poisonmoth.cpp.
-//!
-//! Общий Begin удерживает исходного U; Check получает исходного S для
-//! объектной команды и свежего S для координатной. После запрета самонаведения
-//! следуют reuse, свежий путь, дальность, BLOCK_UNFLY, арбалет категории 4 и
-//! signed MP. MP0 тихо отклоняется; источник не типа Player проходит без Move0.
-//! Отказ Check добавляет visual2 перед общим End(0).
-//!
-//! AI удерживает таблицу свойств и U без ранних проверок смерти или региона.
-//! MP списывается до OnChangeStates и повторной проверки арбалета, затем идут
-//! CAN, свежий S, направление и visual0. После абсолютного unsigned срока
-//! Move1 предшествует новому пути без заданной длины и проверке MAX+1.
-//! Первая непролётная клетка либо конец пути задаёт endpoint и полное время
-//! полёта; S очищается до visual1, attacking включается после него. Prepared
-//! здесь не записывается. Один AI обрабатывает не более одной клетки.
-//!
-//! Клеточный срок заново читает step/delay; текущий регион U проверяется после
-//! часов, даже для завершённого пути. BLOCK_SHAPE останавливает выстрел после
-//! всех допустимых живых Move-целей; последняя identity пишется перед ударом.
-//! Дедупликации нет. Visual3 после попадания или стены повторяется в конечном
-//! проходе перед End(1). End сбрасывает фазу, счётчики и цель, освобождает путь
-//! до свежего U Move1 и общего Attack End с исходным аргументом.
-//! Безопасный Vec и зарегистрированный kernel заменяют контейнеры/указатели;
-//! состояние остаётся опубликованным на протяжении всех боевых callbacks.
+//! Тонкий путь к поклеточному арбалетному выстрелу CPoisonMoth (0xCF) в Zone.
+//! Источник: gameserver.exe/GameServer.pdb, исходный владелец
+//! `appserver/skills/poisonmoth.cpp`. Собственные Check (клей самонаведения)
+//! и AI (фаза направления, подготовка пути с квазнотой MAX+1, полёт по одной
+//! клетке за тик, двойной visual(3)) перенесены буквально в
+//! `nebokrai_zone::skills::poisonmoth` (основание и статусы MATCH — в шапке
+//! Zone-файла; кластер D, порция D6). Здесь — объявленные швы переноса:
+//! hub-реализации `PoisonMothGame`/`PoisonMothMoveShape` и
+//! `PoisonMothContact` над прежними `CGame`/`CMoveShape` с вызовами семей
+//! `rangedweaponcast` (оружейный Check, MP-контракт, failure-строки) и
+//! `crossbowattack` (поклеточный удар) в прежних точках; оркестрация
+//! зарегистрированного входа остаётся общим hub `playercast` (Begin-запись,
+//! visual-ресурс CF, второй visual(2) при отказе Check, End по исходу).
+//! Делегации сохраняют прежние сигнатуры — потребители (`playercast.rs`,
+//! `crossbowattack.rs`, `crossbowcastvisual.rs`, `bossfiendpenetrate.rs`)
+//! не меняются; семейные helpers ниже остаются общими швами старого пакета.
 
-use super::baseattack::SKILL_USAGE_DELAY_TIME;
-use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::crossbowattack::run_poison_moth_cell;
-use super::kernel::{SkillStage};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{
     ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast,
     prepare_ranged_weapon_player, ranged_weapon_failure, terminal,
 };
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -45,168 +34,127 @@ use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::public::tools::get_line_direction;
-pub(crate) use nebokrai_zone::skills::execution::{PoisonMothExecutionState};
+use nebokrai_zone::skills::poisonmoth::{
+    self as zone, PoisonMothAiOutcome, PoisonMothContact, PoisonMothGame, PoisonMothMoveShape,
+};
+pub(crate) use nebokrai_zone::skills::execution::PoisonMothExecutionState;
 
-pub(crate) const POISON_MOTH_SKILL_ID: u32 = 0xCF;
+pub(crate) const POISON_MOTH_SKILL_ID: u32 = zone::POISON_MOTH_SKILL_ID;
 pub(super) const PLAYER_TYPE: i32 = 400;
 pub(super) const MONSTER_TYPE: i32 = 600;
-const TARGET_MAX_DISTANCE: u32 = 5_003;
-const MISSILE_FLYING_TIME: u32 = 10_008;
 
-fn check_cast<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
-    target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
-) -> bool {
-    let Some(user) = original_user else { return false; };
-    let Some(source) = resolve_state_move_shape(game, user.0, user.1) else { return false; };
-    let targets_self = target.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
-        .is_some_and(|target| std::ptr::eq(source, target));
-    if targets_self {
-        ranged_weapon_failure(game, instance, (user.1.object_type == PLAYER_TYPE).then_some(user.1.id),
-            10, RangedWeaponKind::Crossbow);
-        return false;
-    }
-    check_ranged_weapon_cast(game, instance, user, ArrowCastPathRule::DistanceAndBlocks,
-        RangedWeaponKind::Crossbow, runtime)
+impl PoisonMothMoveShape for crate::gameserver::appserver::moveshape::CMoveShape {
+    fn shape(&self) -> &crate::gameserver::appserver::shape::CShape { self.shape() }
+    fn shape_mut(&mut self) -> &mut crate::gameserver::appserver::shape::CShape { self.shape_mut() }
+    fn set_moveable(&mut self, moveable: bool) { self.set_moveable(moveable) }
 }
 
-fn run_ai<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
-        return terminal(QueuedSkillExecutionState::Pending);
-    };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let (region, identity) = skill.lifecycle().user();
-    let Some(user) = resolve_state_move_shape(game, region, identity)
-        .map(|source| (source.shape().get_region_id(), source.shape().identity()))
-    else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let player = (user.1.object_type == PLAYER_TYPE).then_some(user.1.id);
-    if stage == SkillStage::Begin {
-        if !prepare_ranged_weapon_player(game, instance, player, &properties, RangedWeaponKind::Crossbow) {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        skill.lifecycle_mut().set_available(can_break != 0);
-        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        let destination = match resolve_skill_sufferer(game, skill.lifecycle()) {
-            Some((region, identity)) => {
-                let Some(target) = resolve_state_move_shape(game, region, identity) else {
-                    return terminal(QueuedSkillExecutionState::Rejected);
-                };
-                (target.shape().get_tile_x().unwrap_or(i32::MIN), target.shape().get_tile_y().unwrap_or(i32::MIN))
-            }
-            None => skill.lifecycle().destination(),
-        };
-        let Some(source) = resolve_state_move_shape(game, user.0, user.1) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let y = source.shape().get_tile_y().unwrap_or(i32::MIN);
-        let x = source.shape().get_tile_x().unwrap_or(i32::MIN);
-        let direction = get_line_direction(x, y, destination.0, destination.1);
-        if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) {
-            source.shape_mut().set_direction(direction);
-        }
-        game.update_registered_skill_visual(instance, 0);
-        if let Some(skill) = game.registered_skill_mut(instance) {
-            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
-        }
+impl PoisonMothGame for CGame {
+    type MonsterExecution = crate::gameserver::appserver::monster::MonsterSkillExecution;
+    type SkillAddress = RegisteredSkill;
+    type MoveShape = crate::gameserver::appserver::moveshape::CMoveShape;
+
+    fn registered_skill(
+        &self,
+        address: RegisteredSkill,
+    ) -> Option<&crate::gameserver::appserver::moveshape::MoveShapeSkill> {
+        self.registered_skill(address)
     }
-    let Some(attacking) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<PoisonMothExecutionState>())
-        .map(|state| state.attacking_started)
-    else { return terminal(QueuedSkillExecutionState::Rejected); };
-    if !attacking {
-        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        if runtime.now_milliseconds() < started.wrapping_add(delay) {
-            return terminal(QueuedSkillExecutionState::Pending);
-        }
-        if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) { source.set_moveable(true); }
-        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        let path = game.skill_target_path(skill.lifecycle());
-        let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
-        else { return terminal(QueuedSkillExecutionState::Rejected); };
-        state.path = path;
-        if properties.query_property(TARGET_MAX_DISTANCE) != 0 {
-            let maximum = properties.query_property(TARGET_MAX_DISTANCE);
-            if maximum.wrapping_add(1) < state.path.len() as u32 {
-                ranged_weapon_failure(game, instance, player, 11, RangedWeaponKind::Crossbow);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-        }
-        let stop = state.path.iter().position(|cell| cell.2 == 2).unwrap_or(state.path.len());
-        let blocked_endpoint = state.path.get(stop).map(|cell| (cell.0, cell.1));
-        let last_endpoint = state.path.last().map(|cell| (cell.0, cell.1));
-        if let Some(endpoint) = blocked_endpoint {
-            if let Some(skill) = game.registered_skill_mut(instance) { skill.lifecycle_mut().set_destination(endpoint); }
-        }
-        let flight = properties.query_property(MISSILE_FLYING_TIME).wrapping_mul(stop as u32);
-        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        if let Some(state) = skill.player_state_mut::<PoisonMothExecutionState>() { state.missile_flying_time = flight; }
-        if blocked_endpoint.is_none() {
-            if let Some(endpoint) = last_endpoint { skill.lifecycle_mut().set_destination(endpoint); }
-        }
-        let destination = skill.lifecycle().destination();
-        skill.lifecycle_mut().set_point_target(destination);
-        game.update_registered_skill_visual(instance, 1);
-        if let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
-        {
-            state.attacking_started = true;
-            let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack);
-        }
+
+    fn registered_skill_mut(
+        &mut self,
+        address: RegisteredSkill,
+    ) -> Option<&mut crate::gameserver::appserver::moveshape::MoveShapeSkill> {
+        self.registered_skill_mut(address)
     }
-    let step = properties.query_property(MISSILE_FLYING_TIME);
-    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let Some(state) = skill.player_state::<PoisonMothExecutionState>() else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if !state.attacking_started { return terminal(QueuedSkillExecutionState::Pending); }
-    let position = state.current_position;
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let deadline = step.wrapping_mul(position).wrapping_add(delay).wrapping_add(skill.lifecycle().started_at_ms());
-    if runtime.now_milliseconds() < deadline { return terminal(QueuedSkillExecutionState::Pending); }
-    let Some(region) = resolve_state_move_shape(game, user.0, user.1)
-        .filter(|source| source.shape().is_assigned_to_server_region())
-        .and_then(|source| game.find_region(source.shape().get_region_id()))
-    else { return terminal(QueuedSkillExecutionState::Pending); };
-    let Some(cell) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<PoisonMothExecutionState>())
-        .and_then(|state| state.path.get(state.current_position as usize).copied())
-    else {
-        game.update_registered_skill_visual(instance, 3);
-        return terminal(QueuedSkillExecutionState::Completed);
-    };
-    let region_id = region.region_id();
-    if let Some(state) = game.registered_skill_mut(instance)
-        .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
-    { state.end_tile = (cell.0, cell.1); }
-    let block = game.find_region(region_id).map_or(2, |region| region.base().skill_cell_block(cell.0, cell.1));
-    let stop = match block {
-        3 => run_poison_moth_cell(game, instance, user, (cell.0, cell.1), runtime),
-        2 => true,
-        _ => false,
-    };
-    if stop {
-        game.update_registered_skill_visual(instance, 3);
-        if let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
-        { state.current_position = state.path.len() as u32; }
+
+    fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
+        self.update_registered_skill_visual(address, mode);
     }
-    if let Some(state) = game.registered_skill_mut(instance)
-        .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
-    { state.current_position = state.current_position.wrapping_add(1); }
-    terminal(QueuedSkillExecutionState::Pending)
+
+    fn skill_base_properties(&self, skill_id: u32, level: i32) -> Option<&CSkillBaseProperties> {
+        self.skill_base_properties(skill_id, level)
+    }
+
+    fn resolve_state_move_shape(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&Self::MoveShape> {
+        resolve_state_move_shape(self, region_id, identity)
+    }
+
+    fn resolve_state_move_shape_mut(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&mut Self::MoveShape> {
+        resolve_state_move_shape_mut(self, region_id, identity)
+    }
+
+    fn resolve_skill_sufferer(
+        &self,
+        lifecycle: &nebokrai_zone::skills::SkillLifecycle,
+    ) -> Option<(i32, ShapeIdentity)> {
+        resolve_skill_sufferer(self, lifecycle)
+    }
+
+    fn skill_target_path(
+        &self,
+        lifecycle: &nebokrai_zone::skills::SkillLifecycle,
+    ) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path(lifecycle)
+    }
+
+    fn poison_moth_region_present(&self, region_id: i32) -> bool {
+        self.find_region(region_id).is_some()
+    }
+
+    fn poison_moth_skill_cell_block(&self, region_id: i32, x: i32, y: i32) -> Option<u8> {
+        Some(self.find_region(region_id)?.base().skill_cell_block(x, y))
+    }
+
+    fn poison_moth_weapon_failure(
+        &mut self,
+        address: RegisteredSkill,
+        player: Option<i32>,
+        mode: u32,
+    ) {
+        ranged_weapon_failure(self, address, player, mode, RangedWeaponKind::Crossbow);
+    }
+
+    fn prepare_poison_moth_weapon_player(
+        &mut self,
+        address: RegisteredSkill,
+        player: Option<i32>,
+        properties: &CSkillBaseProperties,
+    ) -> bool {
+        prepare_ranged_weapon_player(self, address, player, properties, RangedWeaponKind::Crossbow)
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> PoisonMothContact<Runtime> for CGame {
+    fn check_poison_moth_ranged_weapon_cast(
+        &mut self,
+        address: RegisteredSkill,
+        original_user: (i32, ShapeIdentity),
+        runtime: &mut Runtime,
+    ) -> bool {
+        check_ranged_weapon_cast(
+            self, address, original_user, ArrowCastPathRule::DistanceAndBlocks,
+            RangedWeaponKind::Crossbow, runtime,
+        )
+    }
+
+    fn run_poison_moth_cell(
+        &mut self,
+        address: RegisteredSkill,
+        source: (i32, ShapeIdentity),
+        cell: (i32, i32),
+        runtime: &mut Runtime,
+    ) -> bool {
+        run_poison_moth_cell(self, address, source, cell, runtime)
+    }
 }
 
 pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(
@@ -227,11 +175,20 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(
             let target = if matches!(dispatch, PlayerSkillDispatch::Point { .. }) {
                 game.registered_skill(instance).and_then(|skill| resolve_skill_sufferer(game, skill.lifecycle()))
             } else { original_target };
-            let accepted = check_cast(game, instance, original_user, target, runtime);
+            // Точный общий GetS: исходный S объектной команды, свежий S
+            // координатной; отказ Check добавляет visual(2) перед общим End(0).
+            let accepted = zone::check_poison_moth_cast(game, instance, original_user, target, runtime);
             if !accepted { game.update_registered_skill_visual(instance, 2); }
             accepted
         },
-        |dispatch, started| PoisonMothExecutionState::begin(dispatch, started).into(), run_ai,
+        |dispatch, started| PoisonMothExecutionState::begin(dispatch, started).into(),
+        |game, instance, runtime| {
+            match zone::execute_poison_moth_ai(game, instance, runtime, |runtime: &mut Runtime| runtime.now_milliseconds()) {
+                PoisonMothAiOutcome::Pending => terminal(QueuedSkillExecutionState::Pending),
+                PoisonMothAiOutcome::Rejected => terminal(QueuedSkillExecutionState::Rejected),
+                PoisonMothAiOutcome::Completed => terminal(QueuedSkillExecutionState::Completed),
+            }
+        },
     )
 }
 
