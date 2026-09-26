@@ -153,6 +153,7 @@ pub(crate) mod appserver {
         pub(crate) mod chainlightning;
         pub(crate) mod cure;
         pub(crate) mod curestate;
+        pub(crate) mod statecast;
         pub(crate) mod daubpoison;
         pub(crate) mod daubpoisonstate;
         pub(crate) mod directprojectile;
@@ -212,6 +213,7 @@ pub(crate) mod appserver {
         pub(crate) mod inversechopped;
         pub(crate) mod flash;
         pub(crate) mod dash;
+        pub(crate) mod selfcast;
         pub(crate) mod playercast;
         pub(crate) mod rangedweaponcast;
         pub(crate) mod crossbowattack;
