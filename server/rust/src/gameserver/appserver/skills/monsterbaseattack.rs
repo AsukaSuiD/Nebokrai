@@ -1,3 +1,19 @@
+//! Hub исполнения боевых навыков монстров (`CMonsterBaseAttack` 0x2bd и
+//! зарегистрированные владельцы). Кластер A2 (26 сентября 2026):
+//! player-путь `0x2bd` (reuse/гейты/дистанция/failure 2) и общая доставка
+//! удара перенесены в Zone `skills/monsterbaseattack` и
+//! `skills/monsterattack` (машинная база и статусы VERIFIED/MATCH см. там,
+//! тела `.local/recon-a2/out/`); диспетчерский костяк — Zone
+//! `skills/monsterbasedispatch` (A1). Здесь остаются hub dispatcher
+//! расписания, реестр исполнителей `owned_registered_cast_executor`,
+//! selector-owners и общий монстр-драйвер `execute_owned_monster_base_attack`
+//! — их перенос отдельными порциями (заявленная граница волны).
+//! FIX DIFF-B1 этой же порции: машинный `CMonsterBaseAttack::AI` (RVA
+//! `0x114820`) завершает мёртвую цель mid-cast кадром failure 2 (только
+//! player-источнику) и `End(1)` со штампом reuse; hub теперь делает то же
+//! вместо прежнего снятия cast без reuse (см. ветвь у снимка цели).
+//! Остальное — прежняя документация владельца ниже.
+//!
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
 //! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
 //! вложенные обработчики смерти видят и изменяют ту же очередь источника.
@@ -86,15 +102,15 @@
 //! не имеет; исключение относится к первичному AI7, но не к приручённому CPet.
 //! CPet vtable 0x00652D0C хранит общий OnChangeSkill (+0x24 → 0x005DCBC0)
 //! и SelectAttackSkill (+0x8C → 0x005DD0B0). Поэтому приручение отключает
-//! boss/lord-selector и производный restore-delay AI5/AI103, но сохраняет
+//! boss/lord-selector и производный restore-delay AI5/AI23, но сохраняет
 //! исходный список odds, один RNG и общий default/IsRestored.
 //! CCarriage vtable 0x00653F9C наследует те же OnChangeSkill/SelectAttackSkill,
 //! а OnSearchEnemy (+0x18) указывает на RET1 0x0047B150. Обе формы повозки,
-//! первичная AI24 и auxiliary GetAI, проходят этот dispatch без поиска целей;
+//! первичная AI12 и auxiliary GetAI, проходят этот dispatch без поиска целей;
 //! номер первичного AI разрешается только у активного primary owner-а.
 //! CPet::OnSchedule (0x004E9DC0) выбирает собственные Attack/Follow/Stay:
 //! сохранённый property.ai не включает связывание Цзюмай, пост стража,
-//! стационарный поиск дальности или исключение AI13 из проверки цели.
+//! стационарный поиск дальности или исключение AI16 из проверки цели.
 //! Выбор этих методов использует GetAI, а не игровой tamed sign; нулевой
 //! auxiliary pointer не подменяется первичным AI. Признак приручения отдельно
 //! сохраняется для combat/scaling и отношений хозяина.
@@ -107,7 +123,7 @@
 //! до диспетчеризации всех навыков, без Tracing и общей проверки прямого пути.
 //! Отказ вызывает virtual OnLoseTarget и затем ставит SearchEnemy.
 //! Этот OnSchedule проверяет существование/смерть цели, но не IsAttackable;
-//! исключение относится ко всей стационарной семье, не только AI13.
+//! исключение относится ко всей стационарной семье, не только AI16.
 //! OnAttackingSchedule (0x004E9A20) ограничивает дистанцию цели от хозяина
 //! (при его отсутствии — от питомца) до GetCurrentSkill/OnChangeSkill/Begin.
 //! Граница distance >= MaxPetTracingDistance сбрасывает цель и ставит поиск,
@@ -271,7 +287,7 @@ use super::ragebreak::{RAGE_BREAK_SKILL_ID, execute_owned_monster_rage_break};
 use super::immediatestate::{
     check_immediate_state_cast, execute_monster_immediate_state, is_immediate_state_skill,
 };
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
+use super::kernel::skill_is_restored;
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
@@ -360,7 +376,6 @@ use crate::gameserver::appserver::ai::vilcouguardwithsword::select_village_count
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::states::state::{resolve_coordinate_sufferer, resolve_identity_sufferer};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -379,150 +394,46 @@ use nebokrai_zone::skills::monsterbasedispatch::{MonsterBaseDispatchGame, Monste
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
+// Player-путь CMonsterBaseAttack (reuse/гейты/дистанция/failure 2) перенесён
+// в Zone `skills/monsterbaseattack` (машинная база и статусы см. там);
+// здесь — hub исполнения монстра и делегации прежних сигнатур.
+pub(crate) use nebokrai_zone::skills::MONSTER_BASE_ATTACK_SKILL_ID;
+use nebokrai_zone::skills::MonsterCombatOutcome;
+
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
-pub(crate) const MONSTER_BASE_ATTACK_SKILL_ID: u32 = 0x2bd;
 
 pub(crate) const fn is_player_monster_base_attack(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::SelfTarget { skill_id: MONSTER_BASE_ATTACK_SKILL_ID, .. }
-        | PlayerSkillDispatch::Point { skill_id: MONSTER_BASE_ATTACK_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object { skill_id: MONSTER_BASE_ATTACK_SKILL_ID,
-            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE | 500 | 1100 | 1200, .. } })
+    nebokrai_zone::skills::is_player_monster_base_attack(dispatch)
 }
 
 fn player_base_attack_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
-fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, runtime: &mut Runtime, success: bool,
-) {
-    if success {
-        game.after_use_player_skill(player_id, MONSTER_BASE_ATTACK_SKILL_ID, runtime);
-    }
-}
-
+/// Внешнее завершение player-cast по dispatch регистра (делегат Zone).
 pub(crate) fn finish_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.dispatch()) else { return false };
-    end_player_monster_base_attack(game, player_id, runtime, success);
-    game.finish_player_skill(player_id, ai, dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
+    nebokrai_zone::skills::finish_player_monster_base_attack(game, player_id, ai, runtime, success)
 }
 
+/// Player-вход `0x2bd`: reuse/гейты/дистанция/failure 2 (делегат Zone,
+/// машинная база см. `nebokrai_zone::skills::monsterbaseattack`).
 pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    use super::lordfastattack::{calculate_attack, master_info, send_start};
-    let rejected = || player_base_attack_outcome(QueuedSkillExecutionState::Rejected);
-    if !is_player_monster_base_attack(dispatch) { return rejected(); }
-    let Some((region_id, level, source)) = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.learned_skill_level(MONSTER_BASE_ATTACK_SKILL_ID, game.skill_factory()), player.shape_view()?))
-    }) else { return rejected() };
-    let Some(properties) = game.skill_base_properties(MONSTER_BASE_ATTACK_SKILL_ID, level) else {
-        end_player_monster_base_attack(game, player_id, runtime, false);
-        return rejected();
+    let state = match nebokrai_zone::skills::execute_player_monster_base_attack(
+        game, player_id, dispatch, player_ai, runtime, game_tick_milliseconds,
+    ) {
+        MonsterCombatOutcome::Begun => QueuedSkillExecutionState::Begun,
+        MonsterCombatOutcome::Pending => QueuedSkillExecutionState::Pending,
+        MonsterCombatOutcome::Completed => QueuedSkillExecutionState::Completed,
+        MonsterCombatOutcome::Rejected => QueuedSkillExecutionState::Rejected,
+        MonsterCombatOutcome::RejectedAfterUse => QueuedSkillExecutionState::RejectedAfterUse,
     };
-    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let _can_be_breaked = properties.query_property(super::basemagic::SKILL_USAGE_CAN_BE_BREAKED);
-    if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_none() {
-        let now = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, MONSTER_BASE_ATTACK_SKILL_ID), reuse, now) {
-            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS1143");
-            end_player_monster_base_attack(game, player_id, runtime, false);
-            return rejected();
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(Some(MONSTER_BASE_ATTACK_SKILL_ID));
-        }
-        return player_base_attack_outcome(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
-        return rejected();
-    }
-    let requested = match dispatch {
-        PlayerSkillDispatch::Object { target, .. } => resolve_identity_sufferer(game, region_id, target),
-        PlayerSkillDispatch::Point { x, y, .. } => resolve_coordinate_sufferer(game, region_id, x, y),
-        PlayerSkillDispatch::SelfTarget { .. } => None,
-    };
-    let target = requested.and_then(|identity| game.base_magic_target_view(region_id, identity).map(|view| (identity, view)));
-    if target.is_some_and(|(identity, _)| game.base_magic_target_dead(region_id, identity)) {
-        game.send_self_state_skill_failure(0x000b_fe01, player_id, 2);
-        end_player_monster_base_attack(game, player_id, runtime, true);
-        return player_base_attack_outcome(QueuedSkillExecutionState::Completed);
-    }
-    let (fallback_x, fallback_y) = match dispatch {
-        PlayerSkillDispatch::Point { x, y, .. } => (x, y),
-        _ => (0, 0),
-    };
-    let (target_x, target_y) = target.map_or((fallback_x, fallback_y), |(_, view)| (view.tile_x, view.tile_y));
-    if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
-        let distance = target.map_or_else(
-            || super::baseattack::real_distance(source.tile_x, source.tile_y, target_x, target_y),
-            |(_, view)| source.real_distance(Some(view)),
-        );
-        if maximum_distance != 0 && maximum_distance < distance as u32 {
-            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0b);
-            end_player_monster_base_attack(game, player_id, runtime, false);
-            return rejected();
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.movement_shape_mut().set_direction(get_line_direction(source.tile_x, source.tile_y, target_x, target_y));
-        }
-        send_start(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level);
-        if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
-            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let started = game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.started_at_ms()).expect("базовая атака хранит начало");
-    if !skill_is_restored(started, delay, runtime.now_milliseconds()) {
-        return player_base_attack_outcome(QueuedSkillExecutionState::Pending);
-    }
-    let mut fire = CMessage::new(0x000b_fe01);
-    fire.add_byte(2);
-    fire.add_long(MONSTER_BASE_ATTACK_SKILL_ID as i32);
-    fire.add_short(level as i16);
-    fire.add_long(PLAYER_TYPE);
-    fire.add_long(player_id);
-    fire.add_long(target.map_or(0, |(identity, _)| identity.object_type));
-    fire.add_long(target.map_or(0, |(identity, _)| identity.id));
-    fire.add_long(target_x);
-    fire.add_long(target_y);
-    let _ = game.send_player_shape_around(player_id, None, &fire);
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
-        let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
-    }
-    if let Some((identity, _)) = target
-        && !(identity.object_type == PLAYER_TYPE && identity.id == player_id)
-        && let Some(master) = game.find_player(player_id).map(master_info)
-        && (if matches!(identity.object_type, 1100 | 1200) {
-            game.stationary_build_attackable_by_player(player_id, region_id, identity)
-        } else {
-            game.owned_player_skill_target_attackable(master, identity, region_id)
-        })
-        && let Some((master, mut attack)) = calculate_attack(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level, hit_modifier)
-    {
-        if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE | 1100 | 1200) {
-            attack.skill_id = super::skillfactory::UNKNOWN_SKILL_ID;
-            attack.skill_level = 1;
-            game.with_published_player_ai(player_id, player_ai, |game| {
-                game.apply_owned_skill_contact(master, identity, region_id, attack, runtime);
-                game.increase_owned_player_rp(player_id, true, 0);
-            });
-        }
-    }
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
-        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    end_player_monster_base_attack(game, player_id, runtime, true);
-    player_base_attack_outcome(QueuedSkillExecutionState::Completed)
+    player_base_attack_outcome(state)
 }
 
 fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) -> bool {
@@ -609,7 +520,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
 /// monster AI заменяется `GetDefaultAttackSkillID`. AI5 и наследующий его
-/// AI103 сохраняют существующий навык на cooldown и ставят полный restore
+/// AI23 сохраняют существующий навык на cooldown и ставят полный restore
 /// delay в хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
 /// Тело перенесено в Zone `skills/monsterbasedispatch.rs`; здесь делегат
 /// прежней сигнатуры для dispatcher-входа `run_owned_monster_change_skill`.
@@ -662,7 +573,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     if MonsterAiKind::is_generic_ai_type(property.ai)
-        || (matches!(property.ai, 2 | 20) && has_target)
+        || (matches!(property.ai, 2 | 101) && has_target)
     {
         return true;
     }
@@ -713,7 +624,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if property.ai == 20 {
+    if property.ai == 101 {
         if let Some(selected) = select_jiumai_enemy(
             game,
             region,
@@ -771,7 +682,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    if matches!(property.ai, 8 | 9 | 17 | 100 | 101) {
+    if matches!(property.ai, 8 | 9 | 13 | 14 | 20) {
         let Some(minimum_skill_distance) = minimum_skill_distance else {
             return false;
         };
@@ -842,7 +753,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        14 | 15 => select_country_war_enemy(
+        17 | 18 => select_country_war_enemy(
             game,
             region,
             owner,
@@ -850,7 +761,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.ai,
             property.guard_range as i32,
         ),
-        12 | 13 => {
+        15 | 16 => {
             let Some(minimum_skill_distance) = minimum_skill_distance else {
                 return false;
             };
@@ -864,7 +775,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        16 => {
+        19 => {
             let Some(minimum_skill_distance) = minimum_skill_distance else {
                 return false;
             };
@@ -879,7 +790,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        18 => select_nation_gladiator_enemy(
+        21 => select_nation_gladiator_enemy(
             game,
             region,
             owner,
@@ -887,7 +798,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
             property.race,
         ),
-        103 => {
+        23 => {
             let Some(minimum_skill_distance) = minimum_skill_distance else {
                 return false;
             };
@@ -901,7 +812,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 property.race,
             )
         }
-        104 => select_gods_battle_enemy(
+        24 => select_gods_battle_enemy(
             game,
             region,
             owner,
@@ -909,21 +820,21 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
             property.race,
         ),
-        19 => select_lord_enemy(
+        100 => select_lord_enemy(
             game,
             region,
             owner,
             area_index,
             property.guard_range as i32,
         ),
-        21 => select_boss_blue_enemy(
+        103 => select_boss_blue_enemy(
             game,
             region,
             owner,
             area_index,
             property.guard_range as i32,
         ),
-        23 => {
+        104 => {
             let Some(minimum_skill_distance) = minimum_skill_distance else {
                 return false;
             };
@@ -1211,7 +1122,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if !pet_ai && property.ai == 20 && target.is_none() && cast.is_none()
+    if !pet_ai && property.ai == 101 && target.is_none() && cast.is_none()
         && !ensure_jiumai_twin(game, region_owner.base_mut(), monster_id, &property)
     {
         return false;
@@ -1220,7 +1131,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && region_owner.base().find_monster_by_id(monster_id)
             .is_some_and(|monster| !monster.move_shape().can_fight())
     {
-        if pet_ai || property.ai != 20 {
+        if pet_ai || property.ai != 101 {
             release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
         }
         return true;
@@ -1264,7 +1175,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !pet_ai
-        && matches!(property.ai, 5 | 8 | 11 | 13 | 17 | 100 | 101 | 103)
+        && matches!(property.ai, 5 | 8 | 11 | 13 | 14 | 16 | 20)
     {
         return queue_stationary_guard_idle(
             region_owner.base_mut(),
@@ -1276,7 +1187,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !pet_ai
-        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 9 | 10 | 12 | 14 | 15 | 16 | 18 | 19 | 20 | 104)
+        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 9 | 10 | 15 | 17 | 18 | 19 | 21 | 24 | 100 | 101)
             || MonsterAiKind::is_generic_ai_type(property.ai))
     {
         return queue_monster_idle(game, region_owner.base_mut(), monster_id, &property, runtime);
@@ -1408,7 +1319,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !pet_ai
-        && matches!(property.ai, 21 | 23)
+        && matches!(property.ai, 103 | 104)
         && queue_boss_idle(game, region_owner.base_mut(), monster_id, &property, runtime)
     {
         return true;
@@ -1464,7 +1375,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
-            return super::monsterattack::end_owned_monster_skill_without_reuse(region_owner.base_mut(), monster_id, skill_id, game.skill_factory());
+            return super::monsterattack::end_owned_monster_skill_without_reuse(region_owner.base_mut(), monster_id, skill_id, game);
         }
         return false;
     };
@@ -1675,16 +1586,38 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region_owner.base_mut(),
             monster_id,
             &skill_properties,
-            runtime,
             range_dispatch,
+            runtime,
         );
     }
     let delay_ms = skill_properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(game, region_owner, target,
-    ).filter(|_| {
+    let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(game, region_owner, target);
+    // DIFF-B1 (кластер A2): машинный `CMonsterBaseAttack::AI` (RVA `0x114820`,
+    // тело `.local/recon-a2/out/monsterbaseattack-ai-114820.txt`) завершает
+    // мёртвую S кадром failure 2 (mode 2 message-owner, только player-
+    // источнику — у монстра dyn-cast не проходит, кадра нет) и `End(1)` со
+    // штампом reuse. Проверка стоит ДО любого допуска цели, ветви
+    // `IsAttackAble`/построек её не касаются. Прежний Rust снимал cast и
+    // цель без reuse (`clear_ai_target` без End); player-ветвь с кадром
+    // failure 2 уже соответствовала (`execute_player_monster_base_attack`).
+    // Теперь hub завершает машинным `End(1)` с reuse; AI-цель не трогается —
+    // следующий такт OnSchedule обработает мёртвую цель общей ветвью.
+    if cast.is_some_and(|cast| cast.dispatch().skill_id == MONSTER_BASE_ATTACK_SKILL_ID)
+        && target_snapshot.as_ref().is_some_and(|snapshot| snapshot.dead)
+    {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
+            let _ = monster.finish_base_attack_cast_with_clock(
+                MONSTER_BASE_ATTACK_SKILL_ID,
+                game.skill_factory(),
+                || runtime.now_milliseconds(),
+            );
+        }
+        return true;
+    }
+    let target_snapshot = target_snapshot.filter(|_| {
         target.object_type != MONSTER_TYPE
             || game.live_skill_target_attackable_in(region_owner, monster_shape.identity(), target)
     });
@@ -1975,7 +1908,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID {
         let outcome = super::monsterrangeattack::begin_owned_monster_range_cast(
-            region_owner.base_mut(), monster_id, skill_level, &skill_properties, now_ms, game.skill_factory(), runtime,
+            game, region_owner.base_mut(), monster_id, skill_level, &skill_properties, now_ms, runtime,
         );
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
             game, region_owner.base_mut(), monster_id, outcome, runtime,

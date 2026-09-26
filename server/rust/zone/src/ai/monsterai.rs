@@ -69,18 +69,27 @@
 //!   вводятся (ADR-0013).
 //! - Порядковые предикаты по `ai_type` записаны числовыми наборами вместо
 //!   матчинга по `MonsterAiKind` (классификатор `CAIFactory::CreateAI` остаётся
-//!   владением `appserver/ai/aifactory.rs` до порции фабрики). Эквивалентность
-//!   по его таблице: стационарное расписание = FixedPositionArcher(5),
-//!   GuardWithBow(8), CityGuardWithBow(11), VillageCountyGuardWithBow(13),
-//!   GuardCountry(17|100), GuardCountry2(101), GodsBattleGuardWithSword(103);
-//!   свой интервал атаки убирают также SmartGladiator(2), JiuMai(20),
-//!   BossBlue(21), BossFiend(23); generic = всякий тип вне именованного
-//!   набора `{0..=21, 23, 24, 100, 101, 103, 104}` (22 и 102 включены, как у
-//!   default-ветви `from_ai_type`).
+//!   владением `appserver/ai/aifactory.rs` до порции фабрики). Машинный реестр
+//!   (VERIFIED): `CAIFactory::CreateAI` RVA `0x1DC550`, byte-map `0x5DCB08`,
+//!   jump-table `0x5DCA94`, default-case `0x5DCA32` → `CMonsterAI`. Точная
+//!   таблица: 0 CGladiator, 1 CPassiveGladiator, 2 CSmartGladiator,
+//!   3 CStupidGladiator, 4 CArcher, 5 CFixedPositionArcher, 6 CStupidArcher,
+//!   7 CPuninessCreature, 8 CGuardWithBow, 9 CGuardWithSword,
+//!   10 CCityGuardWithSword, 11 CCityGuardWithBow, 12 CCarriage,
+//!   13 CGuardCountry, 14 CGuardCountry2, 15 CVilCouGuardWithSword,
+//!   16 CVilCouGuardWithBow, 17 CWarDeffendMonster, 18 CWarAttackMonster,
+//!   19 CNationCouGuardWithSword, 20 CGuardCountry, 21 CNationGladiator,
+//!   23 CGBGuardWithSward, 24 CGodsBattleMonsterAI, 100 CLord, 101 CJiuMai,
+//!   103 CBossBlue, 104 CBossFiend; 22, 25..=99, 102 и >104 — default
+//!   `CMonsterAI`. Стационарное расписание (собственный OnSchedule
+//!   `0x0020B890`) — ровно {5,8,11,13,14,16,20}; интервальный
+//!   timeGetTime-гейтинг `[+0x78]` имеют `CMonsterAI` и thunk-наследники
+//!   {0,1,3,4,6,9,10,15,17,18,19,21,23,24,100} вместе с default, собственные
+//!   расписания без интервала — {2,7,12,101,103,104} и стационарные.
 //! - Активный AI приходит проекцией `MonsterActiveAiView`: различение
 //!   Pet/Carriage/guard-station/JiuMai/PuninessCreature вычисляет hub-владелец
 //!   по своей таблице virtual-семей (guard post — CGuardWithSword и наследники
-//!   9/10/12/16).
+//!   9/10/15/19; JiuMai = 101; PuninessCreature = 7).
 //! - Часы каждого события читаются отдельным вызовом `now_milliseconds`
 //!   (fn-параметр от делегата старого main loop, как в
 //!   `skills/baseattackruntime.rs`); это точное значение blanket
@@ -174,23 +183,28 @@ pub const fn is_generic_ai_type(ai_type: u32) -> bool {
     !matches!(ai_type, 0..=21 | 23 | 24 | 100 | 101 | 103 | 104)
 }
 
-/// Общий OnSchedule 0x0060B890 и его наследник CGBGuardWithSward:
-/// AI 5/8/11/13/17/100/101/103.
+/// Собственное стационарное `OnSchedule 0x0020B890`: ровно AI5/8/11/13/14/16/20
+/// (CFixedPositionArcher, CGuardWithBow, CCityGuardWithBow, оба слота
+/// CGuardCountry, CGuardCountry2, CVilCouGuardWithBow). AI23
+/// (CGBGuardWithSward) стационарным не является: его слот — thunk
+/// интервального расписания.
 pub const fn uses_stationary_attack_schedule(ai_type: u32) -> bool {
-    matches!(ai_type, 5 | 8 | 11 | 13 | 17 | 100 | 101 | 103)
+    matches!(ai_type, 5 | 8 | 11 | 13 | 14 | 16 | 20)
 }
 
 /// `CMonsterAI::OnSchedule` (RVA `0x1DCF80`) расширяет только word из
-/// `GetAtcInterval`, затем складывает его с DWORD timestamp. Обычные
-/// наследники сохраняют это усечение, включая значения setup больше 65535.
-/// Стационарное OnSchedule 0x0060B890, SmartGladiator 0x006106E0, JiuMai
-/// 0x0060AB10 и оба босса переходят от дальности/Tracing/CheckCast прямо к
-/// Begin без дополнительного timestamp владельца.
+/// `GetAtcInterval`, затем складывает его с DWORD timestamp. Тот же
+/// интервальный timeGetTime-гейтинг `[this+0x78]` имеют thunk-наследники
+/// AI0/1/3/4/6/9/10/15/17/18/19/21/23/24/100 и default-ветвь CreateAI;
+/// усечение сохраняется, включая значения setup больше 65535. Собственные
+/// расписания без этого timestamp владельца — стационарное 0x0020B890,
+/// SmartGladiator 0x006106E0, PuninessCreature, Carriage, JiuMai 0x0060AB10
+/// и оба босса: они переходят от дальности/Tracing/CheckCast прямо к Begin.
 pub const fn schedule_attack_interval(
     ai_type: u32,
     ordinary_interval_ms: u32,
 ) -> Option<u32> {
-    if uses_stationary_attack_schedule(ai_type) || matches!(ai_type, 2 | 20 | 21 | 23) {
+    if uses_stationary_attack_schedule(ai_type) || matches!(ai_type, 2 | 7 | 12 | 101 | 103 | 104) {
         None
     } else {
         Some(ordinary_interval_ms & 0xffff)
@@ -198,45 +212,22 @@ pub const fn schedule_attack_interval(
 }
 
 /// Определяет достигнутые `OnIdle`, которые при отсутствии игроков переводят
-/// владельца в sleeping-индекс области. Умный гладиатор сначала обязан
-/// исчерпать сохранённые шаги отхода; приручение, цель, cast и фактическую
-/// пустоту соседних областей проверяет непосредственный runtime caller.
+/// владельца в sleeping-индекс области. Спят все типы, кроме AI12
+/// (CCarriage без OnIdle); умный гладиатор сначала обязан исчерпать
+/// сохранённые шаги отхода. Приручение, цель, cast и фактическую пустоту
+/// соседних областей проверяет непосредственный runtime caller.
 pub const fn hibernates_without_nearby_players(
     ai_type: u32,
     smart_gladiator_ready_to_idle: bool,
 ) -> bool {
-    is_generic_ai_type(ai_type)
-        || matches!(
-            ai_type,
-            0 | 3
-            | 4
-            | 5
-            | 6
-            | 8
-            | 9
-            | 10
-            | 11
-            | 12
-            | 13
-            | 16
-            | 17
-            | 20
-            | 21
-            | 23
-            | 100
-            | 101
-            | 103
-        )
-        || (ai_type == 2 && smart_gladiator_ready_to_idle)
+    ai_type != 12 && (ai_type != 2 || smart_gladiator_ready_to_idle)
 }
 
+/// Собственный Tracing/OnLoseTarget с постановкой `AddAIEvent(5)` есть у всех
+/// AI-владельцев, кроме AI12 (CCarriage); `CPet` отвечает этим условием
+/// всегда по своему OnSearchEnemy.
 pub const fn has_owned_search_enemy(ai_type: u32, pet_ai: bool) -> bool {
-    pet_ai
-        || is_generic_ai_type(ai_type)
-        || matches!(
-            ai_type,
-            0..=21 | 23 | 100 | 101 | 103 | 104
-        )
+    pet_ai || ai_type != 12
 }
 
 /// Сохраняет точный порядок и границу сравнения `SelectAttackSkill` (RVA
@@ -300,7 +291,7 @@ impl MonsterTraceTarget {
 /// Проекция активного AI владельца, достаточная диспетчеру: раскладку
 /// virtual-семей вычисляет hub по своей таблице (`CAIFactory`), Zone снова её
 /// не угадывает. `Carriage` покрывает обе формы повозки (auxiliary и primary
-/// AI24), `OtherPrimary` — всех прочих первичных владельцев, включая обычный
+/// AI12), `OtherPrimary` — всех прочих первичных владельцев, включая обычный
 /// `CMonsterAI` default-ветви фабрики.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MonsterActiveAiView {

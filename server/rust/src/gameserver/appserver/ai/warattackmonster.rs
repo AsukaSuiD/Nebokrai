@@ -2,7 +2,7 @@
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
 //! подтверждает поиск ближайшего живого противника по лагерю `CountryWarSys`.
-//! Реальные типы ИИ `14/15` сохраняют порядок игроков перед питомцами и замену
+//! Реальные типы ИИ `17/18` сохраняют порядок игроков перед питомцами и замену
 //! предыдущей цели при равной `RealDistance`; номер типа задаёт собственный
 //! лагерь как `ai - 17`.
 
@@ -36,7 +36,7 @@ pub(crate) fn consider_country_war_target(
     }
 }
 
-/// Выполняет достигнутый поиск AI14/AI15, сохраняя отдельные проходы игроков
+/// Выполняет достигнутый поиск AI17/AI18, сохраняя отдельные проходы игроков
 /// и питомцев и разрешая их лагерь через канонический `CountryWarSys`.
 pub(crate) fn select_country_war_enemy(
     game: &CGame,
@@ -46,7 +46,7 @@ pub(crate) fn select_country_war_enemy(
     ai_type: u32,
     guard_range: i32,
 ) -> Option<ShapeIdentity> {
-    let own_camp = ai_type as i32 - 14;
+    let own_camp = ai_type as i32 - 17;
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
         let Some(player) = game.find_player(player_id) else {

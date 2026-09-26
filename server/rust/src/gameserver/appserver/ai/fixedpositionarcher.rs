@@ -48,7 +48,7 @@ pub(crate) struct FixedArcherTarget {
 pub(crate) const fn attack_completion_actions(ai_type: u32, alive: bool, skill_ended: bool) -> &'static [AiShapeAction] {
     if ai_type == 6 {
         if skill_ended { &[AiShapeAction::SearchEnemy] } else { &[] }
-    } else if matches!(ai_type, 5 | 103)
+    } else if matches!(ai_type, 5 | 23)
         || (alive && super::monsterai::uses_stationary_attack_schedule(ai_type))
     {
         if skill_ended { &[AiShapeAction::ChangeSkill, AiShapeAction::SearchEnemy] }
@@ -59,7 +59,7 @@ pub(crate) const fn attack_completion_actions(ai_type: u32, alive: bool, skill_e
 }
 
 pub(crate) const fn inherits_fixed_archer_change_skill(ai_type: u32) -> bool {
-    matches!(ai_type, 5 | 103)
+    matches!(ai_type, 5 | 23)
 }
 
 /// Ставит общую точную очередь стационарного `OnIdle`. Каждый исходный
@@ -79,7 +79,7 @@ pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI103.
+/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI23.
 /// `false` означает, что выбранный concrete skill не разрешился и общий owner
 /// обязан назначить default skill. Разрешённый выбор сохраняется; для ещё не
 /// восстановленного навыка полный `GetRestoreTime` дописывается в FIFO.

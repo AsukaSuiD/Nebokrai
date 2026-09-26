@@ -183,7 +183,7 @@
 //! owner-а, без копирования target/FIFO/dormancy при смене master identity.
 //! Нулевой GetAI представлен None, а не запасным первичным контроллером.
 //! Прямые m_pPetAI-команды из pet-list адресуют свой слот независимо от GetAI.
-//! Если первичный тип тоже AI24, его action и master-таймеры также остаются
+//! Если первичный тип тоже AI12, его action и master-таймеры также остаются
 //! независимыми от auxiliary; переключение GetAI не переносит их состояние.
 //! Очереди, цель и сон разрешаются одним селектором при постановке событий и
 //! их обработке. Повозка наследует `WhenBeenHurted` (0x005DCE00) с Defense и
@@ -683,7 +683,7 @@ impl CMonster {
     }
 
     /// Соответствует `dynamic_cast<CCarriage *>(GetAI())`: до назначения
-    /// player-master учитывается первичный AI24, после назначения — отдельный
+    /// player-master учитывается первичный AI12, после назначения — отдельный
     /// auxiliary `CCarriage`, созданный для tamable-свойства с нулём попыток.
     pub(crate) fn is_carriage(&self, _property: &MonsterProperties) -> bool {
         matches!(
@@ -1587,17 +1587,17 @@ impl CMonster {
                 .as_ref()
                 .is_some_and(PassiveGladiatorState::has_enemy_players);
         // `CGuardWithSword::OnMoving` RVA `0x0020E260` добавляет SearchEnemy
-        // после успешного общего OnMoving и наследуется AI10/12/16; базовый
+        // после успешного общего OnMoving и наследуется AI10/15/19; базовый
         // factory type AI9 обязан проходить тот же путь. Отдельный
         // `CGuardCountry::OnMoving` RVA `0x0020C4F0` делает то же для живых
-        // factory-типов AI17/100, но не для самостоятельного AI101.
+        // factory-типов AI13/20, но не для самостоятельного AI14.
         // `CPassiveGladiator::OnMoving` RVA `0x00210E70` дополнительно требует
         // непустой `m_vEnemy`, которой соответствует owned IndexSet AI1.
         let search = if matches!(self.active_ai(), Some(ActiveMonsterAi::Pet)) {
             alive && self.move_shape.current_skill(factory).is_none()
         } else {
-            (alive && matches!(ai_type, 4 | 17 | 100))
-                || matches!(ai_type, 9 | 10 | 12 | 16)
+            (alive && matches!(ai_type, 4 | 13 | 20))
+                || matches!(ai_type, 9 | 10 | 15 | 19)
                 || passive_gladiator_search
         };
         if search && let Some(ai) = self.selected_base_ai_mut() {

@@ -1,4 +1,4 @@
-//! Национальный охранник `CGuardCountry`, типы ИИ `17` и `100`.
+//! Национальный охранник `CGuardCountry`, типы ИИ `13` и `20`.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
 //! подтверждает приоритет игрока другой страны и особое правило минимальной
@@ -85,7 +85,7 @@ pub(crate) fn select_country_guard_target(
     if let Some(selected) = selected {
         return Some(selected.identity);
     }
-    if matches!(property.ai, 17 | 100) {
+    if matches!(property.ai, 13 | 20) {
         select_guard_with_bow_target(
             game,
             owner,
@@ -113,7 +113,7 @@ pub(crate) fn retarget_special_guard_after_hurt(
     property: &MonsterProperties,
 ) {
     let region = owner.base();
-    if !matches!(property.ai, 8 | 17 | 100 | 101)
+    if !matches!(property.ai, 8 | 13 | 14 | 20)
         || region
             .find_monster_by_id(monster_id)
             .is_none_or(|monster| monster.ai_target().is_some())

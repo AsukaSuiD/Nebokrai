@@ -146,29 +146,29 @@ impl CGame {
                 && player.faction_id() == region.base().owned_city_faction())
                 || (player.union_id() != 0
                     && player.union_id() == region.base().owned_city_union())),
-            17 => {
+            13 | 20 => {
                 if u32::from(player.country()) == property.race {
                     permissions.player
                 } else {
                     permissions.country
                 }
             }
-            101 => u32::from(player.country()) != property.race && permissions.country,
-            12..=13 => {
+            14 => u32::from(player.country()) != property.race && permissions.country,
+            15..=16 => {
                 if player.country() == region.base().country {
                     permissions.player
                 } else {
                     permissions.country
                 }
             }
-            14..=15 => {
-                property.ai as i32 - 14
+            17..=18 => {
+                property.ai as i32 - 17
                     != self
                         .country_war_sys
                         .get_war_camp(i32::from(player.country()))
                     && permissions.country
             }
-            103 => {
+            23 => {
                 if player.gods_battle_faction() as u32 == property.race {
                     permissions.player
                 } else {
@@ -1381,10 +1381,10 @@ impl CGame {
                     Some((attacker.is_tamed(), attacker.is_tamed() || attacker.is_carriage(property)))
                 }))
             .flatten().unwrap_or((false, false));
-        let now_ms = if react && !matches!(ai_type, 2 | 19 | 20) {
+        let now_ms = if react && !matches!(ai_type, 2 | 100 | 101) {
             runtime.now_milliseconds()
         } else { 0 };
-        let lord_hurt_plan = (react && ai_type == 19)
+        let lord_hurt_plan = (react && ai_type == 100)
             .then(|| {
                 crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
                     self,
@@ -1415,19 +1415,19 @@ impl CGame {
                     } else if ai_type == 2 {
                         // Владелец AI2 применит реакцию после освобождения
                         // изменяемого заимствования монстра.
-                    } else if ai_type == 13 {
-                        // Поиск AI13 выполняется после освобождения изменяемого
+                    } else if ai_type == 16 {
+                        // Поиск AI16 выполняется после освобождения изменяемого
                         // заимствования монстра.
                     } else if ai_type == 11 {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
-                    } else if ai_type == 20 {
-                        // AI20 разрешает владельца периодического эффекта и
+                    } else if ai_type == 101 {
+                        // AI101 разрешает владельца периодического эффекта и
                         // связывает близнеца после освобождения заимствования.
-                    } else if ai_type == 19 {
-                        // AI19 применяет Defense, spatial-step и выбор цели
+                    } else if ai_type == 100 {
+                        // AI100 применяет Defense, spatial-step и выбор цели
                         // после освобождения заимствования монстра.
-                    } else if matches!(ai_type, 8 | 17 | 100 | 101) {
+                    } else if matches!(ai_type, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
@@ -1467,7 +1467,7 @@ impl CGame {
                 );
             }
             if react
-                && ai_type == 13
+                && ai_type == 16
             {
                 crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt(
                     self,
@@ -1478,7 +1478,7 @@ impl CGame {
                 );
             }
             if react
-                && ai_type == 20
+                && ai_type == 101
             {
                 let _ = retarget_jiumai_after_hurt(
                     self,
@@ -1507,7 +1507,7 @@ impl CGame {
                 );
             }
             if react
-                && matches!(ai_type, 8 | 17 | 100 | 101)
+                && matches!(ai_type, 8 | 13 | 14 | 20)
             {
                 crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                     self,

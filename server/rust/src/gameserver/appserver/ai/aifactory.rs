@@ -67,6 +67,10 @@ impl MonsterAiKind {
             | Self::VillageCountyGuardWithSword | Self::NationCountyGuardWithSword)
     }
 
+    /// Точное отображение машинного реестра `CAIFactory::CreateAI` (RVA
+    /// `0x1DC550`): case-отображение byte-map `0x5DCB08` + jump-table
+    /// `0x5DCA94`, default-case `0x5DCA32` создаёт обычный `CMonsterAI`
+    /// (включая 22, 25..=99, 102 и значения больше 104).
     pub(crate) const fn from_ai_type(ai_type: u32) -> Self {
         match ai_type {
             0 => Self::Gladiator,
@@ -81,21 +85,21 @@ impl MonsterAiKind {
             9 => Self::GuardWithSword,
             10 => Self::CityGuardWithSword,
             11 => Self::CityGuardWithBow,
-            12 => Self::VillageCountyGuardWithSword,
-            13 => Self::VillageCountyGuardWithBow,
-            14 => Self::WarDefendMonster,
-            15 => Self::WarAttackMonster,
-            16 => Self::NationCountyGuardWithSword,
-            17 | 100 => Self::GuardCountry,
-            18 => Self::NationGladiator,
-            19 => Self::Lord,
-            20 => Self::JiuMai,
-            21 => Self::BossBlue,
-            23 => Self::BossFiend,
-            24 => Self::Carriage,
-            101 => Self::GuardCountry2,
-            103 => Self::GodsBattleGuardWithSword,
-            104 => Self::GodsBattleMonster,
+            12 => Self::Carriage,
+            13 | 20 => Self::GuardCountry,
+            14 => Self::GuardCountry2,
+            15 => Self::VillageCountyGuardWithSword,
+            16 => Self::VillageCountyGuardWithBow,
+            17 => Self::WarDefendMonster,
+            18 => Self::WarAttackMonster,
+            19 => Self::NationCountyGuardWithSword,
+            21 => Self::NationGladiator,
+            23 => Self::GodsBattleGuardWithSword,
+            24 => Self::GodsBattleMonster,
+            100 => Self::Lord,
+            101 => Self::JiuMai,
+            103 => Self::BossBlue,
+            104 => Self::BossFiend,
             _ => Self::Monster,
         }
     }

@@ -1,4 +1,4 @@
-//! Владелец достигнутой семантики AI20: создание и связывание пары Цзюмай,
+//! Владелец достигнутой семантики AI101: создание и связывание пары Цзюмай,
 //! выбор цели с минимальным текущим HP и передача цели свободному близнецу.
 //! `WhenBeenHurted` сохраняет прямые допустимые цели и исходный одиночный шаг
 //! при исчезнувшем игроке. `OnSchedule` сначала сближает близнецов, затем
@@ -63,7 +63,7 @@ impl JiuMaiAiState {
     }
 }
 
-/// Выполняет достигнутый префикс `OnIdle` AI20. Обычный монстр один раз
+/// Выполняет достигнутый префикс `OnIdle` AI101. Обычный монстр один раз
 /// создаёт бессрочного близнеца того же свойства, а призванный близнец берёт
 /// обратный ID из `master_id` и не создаёт следующую сущность.
 pub(crate) fn ensure_jiumai_twin(
@@ -143,7 +143,7 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     let Some((twins_id, owner, target)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            if monster.active_primary_ai_type() != Some(20) || CMoveShape::is_died(monster.hit_points())
+            if monster.active_primary_ai_type() != Some(101) || CMoveShape::is_died(monster.hit_points())
                 || !monster.primary_ai_queues_idle()
             {
                 return None;
@@ -205,7 +205,7 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выбирает цель `OnSearchEnemy` AI20: среди игроков и питомцев внутри
+/// Выбирает цель `OnSearchEnemy` AI101: среди игроков и питомцев внутри
 /// дальности охраны остаётся первая цель с минимальным текущим HP.
 pub(crate) fn select_jiumai_enemy(
     game: &CGame,
@@ -317,7 +317,7 @@ pub(crate) fn release_jiumai_target(
     true
 }
 
-/// Выполняет достигнутые прямые ветви `WhenBeenHurted` AI20 после
+/// Выполняет достигнутые прямые ветви `WhenBeenHurted` AI101 после
 /// освобождения изменяемого заимствования цели. Событие защиты ставится всегда;
 /// свободная пара принимает существующего игрока либо приручённого монстра или
 /// повозку. При исчезнувшем игроке выбирается ближайший игрок, затем монстр;

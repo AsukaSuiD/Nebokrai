@@ -25308,7 +25308,7 @@ impl CGame {
             })?;
         if self
             .find_monster_property_by_origin_name(&original_name)
-            .is_none_or(|property| property.ai != 103)
+            .is_none_or(|property| property.ai != 23)
         {
             return None;
         }
@@ -33791,7 +33791,7 @@ impl CGame {
         let primary_ai = self.find_region(region_id)
             .and_then(|owner| owner.base().find_monster_by_id(monster_id))
             .and_then(CMonster::active_primary_ai_type);
-        let lord_hurt_plan = (primary_ai == Some(19) && current_health != 0).then(|| {
+        let lord_hurt_plan = (primary_ai == Some(100) && current_health != 0).then(|| {
             crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
                 self,
                 region_id,
@@ -33818,8 +33818,8 @@ impl CGame {
             if current_health != 0 {
                 monster.move_shape_mut().shape_mut().set_action(5);
             }
-            if current_health != 0 && primary_ai == Some(19) {
-                // AI19 применяет Defense, spatial-step и выбор цели после
+            if current_health != 0 && primary_ai == Some(100) {
+                // AI100 применяет Defense, spatial-step и выбор цели после
                 // освобождения изменяемого заимствования монстра.
             } else if current_health != 0 {
                 monster.when_been_hurted_by(
@@ -36876,14 +36876,14 @@ impl CGame {
         }
         let starts_criminal = match property.ai as i32 {
             8..=9 => true,
-            16..=18 | 100..=101 => self
+            13..=14 | 19..=21 => self
                 .find_player(attacker_id)
                 .is_some_and(|player| u32::from(player.country()) == property.race),
-            12..=13 => self.find_player(attacker_id).is_some_and(|player| {
+            15..=16 => self.find_player(attacker_id).is_some_and(|player| {
                 self.find_region(region_id)
                     .is_some_and(|region| player.country() == region.base().country)
             }),
-            103 => self
+            23 => self
                 .find_player(attacker_id)
                 .is_some_and(|player| player.gods_battle_faction() as u32 == property.race),
             _ => false,
@@ -38505,7 +38505,7 @@ impl CGame {
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 finish_owned_monster_attack_impact(
                     owner.base_mut(), dispatch.monster_id, dispatch.skill_id,
-                    &self.skill_factory, runtime,
+                    self, runtime,
                 );
                 self.restore_region_owner(owner);
             }
@@ -38547,7 +38547,7 @@ impl CGame {
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 finish_owned_monster_attack_impact(
                     owner.base_mut(), dispatch.monster_id, MONSTER_RANGE_ATTACK_SKILL_ID,
-                    &self.skill_factory, runtime,
+                    self, runtime,
                 );
                 self.restore_region_owner(owner);
             }
@@ -44394,7 +44394,7 @@ impl CGame {
                         ))
                     })
                     .unwrap_or((0, false, 0));
-                if !carriage_run && ai_type == 20 && !pet_ai {
+                if !carriage_run && ai_type == 101 && !pet_ai {
                     if let Some(mut owner) = self.take_region_owner(region_id) {
                         let _ = crate::gameserver::appserver::ai::jiumai::maintain_jiumai_twin(
                             self, owner.base_mut(), monster_id, runtime);

@@ -138,7 +138,7 @@ pub(crate) fn apply_lord_hurt_response(
     true
 }
 
-/// Выполняет подтверждённый `OnSearchEnemy` AI19 через общий nearest-проход,
+/// Выполняет подтверждённый `OnSearchEnemy` AI100 через общий nearest-проход,
 /// сохраняя игроков перед питомцами и замену при равной дистанции.
 pub(crate) fn select_lord_enemy(
     game: &CGame,

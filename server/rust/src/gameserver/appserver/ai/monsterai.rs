@@ -15,7 +15,8 @@
 //! - проекция активного AI (`MonsterActiveAiView`) вычисляется из canonical
 //!   `ActiveMonsterAi`/`MonsterAiKind` (единая таблица `aifactory.rs`
 //!   остаётся источником): guard-station покрывает CGuardWithSword и
-//!   наследников 9/10/12/16, обе формы повозки складываются в `Carriage`.
+//!   наследников 9/10/15/19, JiuMai = 101, обе формы повозки складываются
+//!   в `Carriage`.
 //!
 //! Проекция `uses_stationary_attack_schedule`/`schedule_attack_interval`/
 //! `hibernates_without_nearby_players`/`has_owned_search_enemy` в Zone
