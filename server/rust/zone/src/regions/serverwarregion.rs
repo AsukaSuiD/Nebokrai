@@ -1,31 +1,28 @@
 //! Данные, wire-stream decoder-семья и скалярные операции общего war-региона
-//! `CServerWarRegion` исторического GameServer, перенесённые в Zone
-//! `regions/` волной Z-M-Xd (семья war-регионов: war + godsbattle + village).
-//! Исходный владелец — `appserver/serverwarregion.h/.cpp`. Переходный агрегат
-//! `CServerWarRegion` остаётся в старом пакете: он хранит живой региональный
-//! реестр `CServerRegion`, а его contender/symbol колонки hub-потребители
-//! (decoder-ы city/godsbattle шимов, timeout aggregate city, `CGame`) читают и
-//! переписывают как поля. Этому модулю делегируются data-типы contender-ов и
-//! payload-логов, блокированные/typed-границы арифметики, потоковые readers с
-//! `RegionDecodeInputBlock`, error-семейство `WarRegionDecodeError` и чистые
-//! context-контракты без hub-типов в сигнатурах. Decode-context
-//! (`ServerRegionDecodeContext`) и contend-context с `run_base_region_ai` над
-//! живым `CServerRegion` остаются у старого пакета вместе с методами
-//! агрегата и evidence-блоком.
+//! `CServerWarRegion`. Исходный владелец — `appserver/serverwarregion.h/.cpp`;
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы
+//! сборки — `server/rust/src/manifest/_gameserver_export_manifest.toml`).
+//! Переходный агрегат `CServerWarRegion` остаётся в старом пакете: он хранит
+//! живой региональный реестр `CServerRegion`, а его contender/symbol колонки
+//! hub-потребители (decoder-ы city/godsbattle шимов, timeout aggregate city,
+//! `CGame`) читают и переписывают как поля. Этому модулю делегируются
+//! data-типы contender-ов и payload-логов, блокированные/typed-границы
+//! арифметики, потоковые readers с `RegionDecodeInputBlock`, error-семейство
+//! `WarRegionDecodeError` и чистые context-контракты без hub-типов в
+//! сигнатурах. Decode-context (`ServerRegionDecodeContext`) и contend-context
+//! с `run_base_region_ai` над живым `CServerRegion` остаются у старого пакета
+//! вместе с методами агрегата.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Contender lifecycle `OnEnterContend` RVA `0x001D26F0`,
-//! `DecContendTime` `0x001D25F0`, `CancelContendByPlayerID` `0x001D2C40`,
-//! `AddContend` `0x001D2D80`, `AI` `0x001D31A0`, `SetFacWinSymbol`
-//! `0x001D33A0`, `CancelContendBySymbolID` `0x001D3460` и
+//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY` (унаследован от шапки старого
+//! владельца, без повышения): contender lifecycle `OnEnterContend` RVA
+//! `0x001D26F0`, `DecContendTime` `0x001D25F0`, `CancelContendByPlayerID`
+//! `0x001D2C40`, `AddContend` `0x001D2D80`, `AI` `0x001D31A0`,
+//! `SetFacWinSymbol` `0x001D33A0`, `CancelContendBySymbolID` `0x001D3460` и
 //! `OnContendTimeOver` `0x001D3820`, decoder `DecordFromByteArray`
 //! `0x001D3110`, `UpdateContendPlayer` `0x001D3530`, phase callbacks и
-//! clear/reset имеют статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`; PDB
-//! подтверждает `tagContend` размером `0x34`, ordered `m_listContend +0x24C`,
-//! `m_FacWinSymbol +0x258` и три signed counters `+0x264..+0x26C` (наследие
-//! шапки старого владельца, без повышения).
+//! clear/reset. PDB подтверждает `tagContend` размером `0x34`, ordered
+//! `m_listContend +0x24C`, `m_FacWinSymbol +0x258` и три signed counters
+//! `+0x264..+0x26C`.
 //!
 //! `Vec` и `BTreeMap` сохраняют list/map order. `DWORD`-время и signed
 //! умножения сохраняют wrapping. Единственный неопределённый x86-край

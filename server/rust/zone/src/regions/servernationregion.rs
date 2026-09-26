@@ -1,17 +1,15 @@
-//! Данные и скалярные правила nation war-региона `ServerNationRegion`
-//! исторического GameServer, перенесённые в Zone `regions/` волной Z-M-X
-//! (семья регионов country+nation+city + гейты). Исходный владелец —
-//! `appserver/servernationregion.h/.cpp`. Переходный агрегат `ServerNationRegion`
-//! остаётся в старом пакете: хранит hub `CServerWarRegion` и делегирует этому
-//! агрегату весь чистый state и его скалярные операции без изменения
-//! сигнатур; inherited war decoder и evidence-блок остаются у старого пакета.
+//! Данные и скалярные правила nation war-региона `ServerNationRegion`.
+//! Исходный владелец — `appserver/servernationregion.h/.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `ServerNationRegion` остаётся в старом пакете: хранит hub
+//! `CServerWarRegion` и делегирует этому агрегату весь чистый state и его
+//! скалярные операции без изменения сигнатур; inherited war decoder
+//! остаётся у старого пакета.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Статусы достигнутых тел (`First-hit guard state`, morale mutation,
-//! `x87`-цепочка morale→exploit `0xF1230`, contend timing/damage arithmetic,
-//! exact constructor/`OnWarDeclare`/`OnRefreshRegion` lifecycle) сохранены из
+//! Статусы тел (`First-hit guard state`, morale mutation, `x87`-цепочка
+//! morale→exploit `0xF1230`, contend timing/damage arithmetic, exact
+//! constructor/`OnWarDeclare`/`OnRefreshRegion` lifecycle) унаследованы от
 //! шапки старого владельца без повышения; startup `RT_NATION` selector
 //! относится к границе inherited decoder-а старого пакета (ADR-0008) и не
 //! читается этим модулем.

@@ -1,24 +1,23 @@
-//! Spawn setup data-контракты `CServerRegion::AddNpc/AddMonsterRect`
-//! исторического GameServer и batch-ядра их spawn-циклов: ядро инициализации
-//! создаваемого NPC (порция 1), batch-циклы `AddNpc` и `AddMonsterRect` с
-//! телом `AddMonster` (порция 2). Исходный владелец —
-//! `appserver/serverregion.h/.cpp`. Переходный агрегат `CServerRegion` и
-//! доменные `CNpc`/`CMonster` остаются в старом пакете: агрегат хранит те же
-//! setup/monster колонки, factory-ветви `CreateObject(500/600, id)` остаются в
-//! `appserver/baseobject.rs`, а batch-ядра достигаются узкими trait-швами
-//! (`SpawnedNpcAccess`/`SpawnedMonsterAccess` над доменными объектами и
-//! store-трейты над переходными хранилищами) без изменения сигнатур методов
-//! переходного агрегата. Ядра читают монстр-реестр и skill-фабрику как
-//! уже zone/shared владельцев (`shared::resources::MonsterRegistry`,
-//! `skills::skillfactory::CSkillFactory`); startup decoder, lookup-семья NPC,
-//! AI refresh-фасады и context-обвязки log/send/guard этой порцией не
-//! переносятся — impl-трейтов старого пакета перенаправляют исходные
-//! context-вызовы в том же порядке.
+//! Spawn setup data-контракты `CServerRegion::AddNpc/AddMonsterRect` и
+//! batch-ядра их spawn-циклов: ядро инициализации создаваемого NPC,
+//! batch-циклы `AddNpc` и `AddMonsterRect` с телом `AddMonster`. Исходный
+//! владелец — `appserver/serverregion.h/.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `CServerRegion` и доменные `CNpc`/`CMonster` остаются в старом
+//! пакете: агрегат хранит те же setup/monster колонки, factory-ветви
+//! `CreateObject(500/600, id)` остаются в `appserver/baseobject.rs`, а
+//! batch-ядра достигаются узкими trait-швами (`SpawnedNpcAccess`/
+//! `SpawnedMonsterAccess` над доменными объектами и store-трейты над
+//! переходными хранилищами) без изменения сигнатур методов переходного
+//! агрегата. Ядра читают монстр-реестр и skill-фабрику как уже zone/shared
+//! владельцев (`shared::resources::MonsterRegistry`,
+//! `skills::skillfactory::CSkillFactory`); startup decoder, lookup-семья
+//! NPC, AI refresh-фасады и context-обвязки log/send/guard не переносятся —
+//! impl-трейтов старого пакета перенаправляют исходные context-вызовы в том
+//! же порядке.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Pub `AddNpc@CServerRegion` из карты стены — VA `0x00480A40`
+//! Pub `AddNpc@CServerRegion` из карты стены — VA `0x00480A40`
 //! (RVA `0x00080A40`, prototype `int __thiscall AddNpc(tagNpc*, bool, bool)`,
 //! `serverregion.cpp:1003`) — совпадает с метаданными исследовательской
 //! ведомости старого файла и с уже подтверждённой inline-записью
@@ -32,8 +31,7 @@
 //! нового утверждения. Перенесённые batch-тела сверены statement-в-statement
 //! с телом переходного владельца на момент переноса: различия только в
 //! pub-видимости, путях модулей и объявленных швах (store/SpawnedMonsterAccess/
-//! context-обвязки). Новой машинной сверки эта порция не добавляет, статусы
-//! не повышает.
+//! context-обвязки); статусы при переносе не повышались.
 
 use nebokrai_shared::resources::{
     MonsterProperties, MonsterRegistry, get_monster_property_by_origin_name,

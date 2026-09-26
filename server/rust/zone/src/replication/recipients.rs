@@ -6,7 +6,7 @@
 //! собственный контракт совпадает с живой проверкой: индекс области —
 //! `area_x * y + x` (row-major) с проверкой положительной границы, а
 //! `is_in_around` — `abs_diff < 2` по обеим осям сохранённых area index
-//! (`CShape::IsInAround` RVA `0x5BCE0` в той же пары `gameserver.exe` +
+//! (`CShape::IsInAround` RVA `0x5BCE0` в той же паре `gameserver.exe` +
 //! `GameServer.pdb`).
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md

@@ -1,15 +1,14 @@
-//! Реестр навыков живой фигуры `CMoveShape` исторического GameServer,
-//! перенесённый в Zone `regions/` волной moveshape (порция 4). Исходный
-//! владелец — `appserver/moveshape.h/.cpp`; переходный агрегат `CMoveShape`
-//! старого пакета хранит этот реестр внутри себя и делегирует сюда его
-//! поведение без изменения сигнатур своих методов.
+//! Реестр навыков живой фигуры `CMoveShape`. Исходный владелец —
+//! `appserver/moveshape.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Переходный агрегат `CMoveShape` старого пакета хранит
+//! этот реестр внутри себя и делегирует сюда его поведение без изменения
+//! сигнатур своих методов.
 //!
 //! Разрез записи навыка: скалярная база `CSkill` (ID (+0x04), level, concrete
 //! owner, item position, reuse timestamp +0x40 и owned visual) живёт здесь
 //! типом `SkillIdentity`, а execution kernel (Player/BattleFairy/Monster) и
 //! retained данные полёта — типом `skills/execution::RegisteredSkillRecord`
-//! (порция 5 волны moveshape; payload исполнения монстра и alias
-//! `MoveShapeSkill` живут там же в `skills/execution` после волны Z-M4).
+//! (там же payload исполнения монстра и alias `MoveShapeSkill`).
 //! Реестр связан с записью только швом `SkillIdentityAccess`
 //! (generic-trait сварка по прецеденту `StateRecordTarget`).
 //! Конструирование полной записи при AddSkill/CFightDefense также задаёт
@@ -40,10 +39,7 @@
 //! машинному коду (скан поля ID `CSkill +0x04` по векторам `+0x130`/`+0x150`,
 //! без зависимости от QuerySkillType и без раннего выхода).
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Публичные символы семейства: `?AddSkill@CMoveShape@@QAEHW4tagSkillID@@J@Z`
+//! Публичные символы семейства: `?AddSkill@CMoveShape@@QAEHW4tagSkillID@@J@Z`
 //! (`0x000D1C70`), `?AddSkill@CMoveShape@@QAEHPBDJ@Z` (`0x000D3C70`,
 //! name-вариант не перенесён), `?DelSkill@CMoveShape@@QAEHW4tagSkillID@@@Z`
 //! (`0x000CF320`), `?DelSkill@CMoveShape@@QAEHPBD@Z` (`0x000CF560`,

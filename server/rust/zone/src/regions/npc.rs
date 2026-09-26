@@ -1,20 +1,17 @@
-//! Data-профиль и скалярные правила `CNpc` исторического GameServer,
-//! перенесённые в Zone `regions/` первой порцией волны npc. Исходный
-//! владелец — `appserver/npc.h/.cpp`. Переходный агрегат `CNpc` остаётся в
-//! старом пакете, хранит те же колонки и делегирует сюда их поведение без
-//! изменения сигнатур; нематериальные accessor-ы чтения/записи полей
-//! остаются у переходного владельца. Формирование кадра `Talk` через hub
+//! Data-профиль и скалярные правила `CNpc` (type `500`). Исходный владелец —
+//! `appserver/npc.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; RSDS-запись
+//! внутри EXE задаёт тот же GUID и age, что PDB). Pubs зафиксированы в
+//! нотации section:offset; `.text` этой сборки начинается с RVA `0x1000`,
+//! т.е. `1:001d2e90` = RVA `0x001D3E90` = VA `0x005D3E90`.
+//! Переходный агрегат `CNpc` остаётся в старом пакете: хранит те же колонки
+//! и делегирует сюда их поведение без изменения сигнатур; нематериальные
+//! accessor-ы чтения/записи полей, формирование кадра `Talk` через hub
 //! `CMessage`, client encode через `move_shape` и spawn-семья
-//! `CServerRegion::AddNpc` этой порцией не переносятся.
+//! `CServerRegion::AddNpc` остаются у него.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2; RSDS-запись внутри EXE задаёт этот же GUID и age). Pubs
-//! зафиксированы в нотации section:offset; `.text` этой сборки начинается с
-//! RVA `0x1000`, поэтому, например, `1:001d2e90` = RVA `0x001D3E90` = VA
-//! `0x005D3E90`. Дизассембли и декомпилят машинного кода пары подтверждают
-//! переносимые правила:
+//! Дизассембл и декомпилят машинного кода пары подтверждают правила:
 //!
 //! - ctor `1:001d2e90` (VA `0x005D3E90`) — VERIFIED: вызывает базовый
 //!   `CMoveShape`, вешает vtable `0x0065DA1C` и записывает только type
@@ -22,12 +19,12 @@
 //!   буфер `+0x1D8=0`, size `+0x1E8=0`, capacity `+0x1EC=0xF`) и
 //!   `m_bShowList = true` (байт `+0x1F0=1`). Колонки live `+0x1F4` и born
 //!   `+0x1F8` ctor не трогает — Rust хранит их как `Option<u32>`, а
-//!   назначает region spawn до публикации объекта. Повторная сверка той же
-//!   волной: вызов базы — `CALL 0x4D0C60` (ctor `CMoveShape` `1:000cfc60` =
-//!   RVA `0x000D0C60`); полей figure/HP в layout `CMoveShape` нет, их
-//!   значения виртуально-константные (слоты `+0x8C`/`+0xD0` ниже), и
-//!   ctor-цепочка их не хранит, а current area `[+0x60]` и change-state
-//!   `[+0x80]` зануляет ctor `CShape` (RVA `0x0005B9A0`).
+//!   назначает region spawn до публикации объекта. Вызов базы — `CALL
+//!   0x4D0C60` (ctor `CMoveShape` `1:000cfc60` = RVA `0x000D0C60`); полей
+//!   figure/HP в layout `CMoveShape` нет, их значения виртуально-константные
+//!   (слоты `+0x8C`/`+0xD0` ниже), и ctor-цепочка их не хранит, а current
+//!   area `[+0x60]` и change-state `[+0x80]` зануляет ctor `CShape` (RVA
+//!   `0x0005B9A0`).
 //! - script-колонка — VERIFIED: отдельного pub `CNpc::SetScriptFile` в
 //!   функциях пары нет (соседний `SetScriptFile` VA `0x005CBAC0`
 //!   принадлежит `CBuild` и основание не подтверждает); запись
@@ -60,9 +57,8 @@
 //! - `AddToByteArray` `1:001d2dc0` (VA `0x005D3DC0`) — VERIFIED:
 //!   `JMP 0x0045B250` — tail-jump в `CShape::AddToByteArray` без
 //!   NPC-specific полей; encode остаётся у переходного владельца.
-//! - Витаблы `CNpc` ↔ `CMoveShape` — VERIFIED_DISASSEMBLY волной
-//!   vtable-сверки (identity точной пары подтверждена заново; сырой дамп
-//!   — `.local/evidence/audit-npc-vtable.txt`, драйвер
+//! - Витаблы `CNpc` ↔ `CMoveShape` — VERIFIED_DISASSEMBLY (сырой дамп сверки
+//!   — локальный `.local/evidence/audit-npc-vtable.txt`, драйвер
 //!   `audit-npc-vtable.py`): `CNpc` — pub `2:00012a1c` = RVA `0x0025DA1C`
 //!   = VA `0x0065DA1C`, 111 слотов, единственная витабла класса; `CMoveShape`
 //!   — `2:00006e7c` = RVA `0x00251E7C` = VA `0x00651E7C`, 105 слотов. На
@@ -111,8 +107,7 @@
 //!   внутри пятёрки return-0 (`+0x1A4/+0x1A8/+0x1AC/+0x1B0/+0x1B8`) по
 //!   машинному коду неразличим — тела идентичны, значение слота одно и то
 //!   же, статус ординала не ставится. Zone `moveshape::is_died` моделирует
-//!   базовый предикат поверх facts `current_hit_points`, его статус и
-//!   владелец — у moveshape-порции и здесь не меняются.
+//!   базовый предикат поверх facts `current_hit_points`.
 //! - `current_area: None` — VERIFIED_DISASSEMBLY как ctor-состояние плюс
 //!   NULL-branch регистрации: ctor `CShape` (RVA `0x0005B9A0`) пишет
 //!   `[+0x60] = 0` (current area-указатель) и `[+0x80] = 0` (change-state);
@@ -120,7 +115,7 @@
 //!   ставит change-state `SHAPE_CHANGE_NONE` и не пишет next-area
 //!   `+0x68/+0x6C`. Проекция фиксирует это состояние; назначение и смена
 //!   area после регистрации разрешаются dispatcher-ом region-слоя — это
-//!   граница порции, а не машинное утверждение о поздних состояниях.
+//!   граница проекции, а не машинное утверждение о поздних состояниях.
 //!   Прежний PARTIAL снят: расхождений проекций с машинными значениями не
 //!   установлено.
 
@@ -129,7 +124,7 @@ use super::shape::{CShape, ShapeFigure, ShapeView};
 
 pub const NPC_TYPE: i32 = 500;
 
-/// Data-профиль exact ctor-порции `CNpc` (VA `0x005D3E90`): type `500`,
+/// Data-профиль exact ctor-части `CNpc` (VA `0x005D3E90`): type `500`,
 /// включённый show list и пустой script; live/born ctor не записывает —
 /// `None` до назначения region spawn-ом.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

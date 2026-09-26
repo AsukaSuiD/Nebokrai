@@ -1,15 +1,14 @@
-//! Скалярная база `CMonster` исторического GameServer, перенесённая в Zone
-//! `regions/` второй порцией волны monster. Исходный владелец —
-//! `appserver/monster.h/.cpp`; переходный агрегат `CMonster` остаётся в старом
-//! пакете, хранит те же колонки и делегирует сюда их поведение без изменения
-//! сигнатур. Нематериальные accessor-ы чтения/записи полей (`master_info()`,
-//! `set_master_info()`, `hit_points()`, `original_name()`, `refresh_index()`
-//! и им подобные) остаются у переходного владельца.
+//! Скалярная база `CMonster`: script/tame/pet колонки и их правила. Исходный
+//! владелец — `appserver/monster.h/.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `CMonster` остаётся в старом пакете, хранит те же колонки и
+//! делегирует сюда их поведение без изменения сигнатур. Нематериальные
+//! accessor-ы чтения/записи полей (`master_info()`, `set_master_info()`,
+//! `hit_points()`, `original_name()`, `refresh_index()` и им подобные)
+//! остаются у переходного владельца.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Публичные символы семейства: `GetScriptFile` (RVA `0x00031410`),
+//! Публичные символы семейства: `GetScriptFile` (RVA `0x00031410`),
 //! `SetScriptFile` (`0x00038C70`), `SetMasterInfo` (`0x000E63E0`),
 //! `GetMasterInfo` (`0x000E63F0`), `DoesCreatureBeenTamed` (`0x000E6460`),
 //! `IncreaseTameAttemptCount` (`0x000E6490`), `SetTamedSign` (`0x000E64A0`),
@@ -25,11 +24,11 @@
 //! Отдельного pub-символа `IsTamable` нет: её тело встроено в
 //! `SetTamedSign` как `dwTamable == 1 && tameAttemptCount < dwMaxTameAttemptCount`.
 //! Родной `SetTamedSign` повторяет ту же tamable-проверку и отказ перезаписи
-//! живой master-связи внутри записи знака; переходный владелец оставляет
-//! guard-ы координатору `skills/monstertaming.rs`, а здесь хранит только
-//! саму запись. Родной `SetPetLevel` отсекает запись уровня `10+`;
-//! переходный владелец сохраняет прежнее единое поведение пары setter без
-//! отсечения, факт отмечен для будущей порции pet-поведения.
+//! живой master-связи внутри записи знака; эти guard-ы переходный владелец
+//! оставляет координатору `skills/monstertaming.rs`, а здесь хранит только
+//! саму запись. Родной `SetPetLevel` отсекает запись уровня `10+`; переходный
+//! владелец намеренно сохраняет прежнее единое поведение пары setter без
+//! отсечения — известное расхождение, отложенное для pet-поведения.
 
 use nebokrai_shared::resources::MonsterProperties;
 

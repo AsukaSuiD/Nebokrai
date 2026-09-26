@@ -1,10 +1,9 @@
-//! Принятое игровое client-соединение GameServer из `nets/netserver/myserverclient.cpp`,
-//! перенесённое в Zone app — состояние принятого игрового клиента
-//! game-направления. Источник контракта — та же точная пара, что у
-//! [`crate::app::game_message`].
+//! Принятое игровое client-соединение GameServer — состояние принятого
+//! игрового клиента game-направления. Исходник
+//! `nets/netserver/myserverclient.cpp`; источник контракта — та же точная
+//! пара, что у [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/gameserver.exe`,
-//! дизассемблер этого прохода):
+//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
 //! - ctor `CMyServerClient` `0x41C5C0`: base `0x41B850`, vtable `0x64D6EC`,
 //!   receive capacity ровно `0x5000` (`push 0x5000` + `[+0x64] = 0x5000`),
 //!   два компаньона `0xC800` в `+0x70/+0x74` (исходный send accumulator) и

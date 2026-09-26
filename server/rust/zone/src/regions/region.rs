@@ -1,26 +1,25 @@
-//! Базовый `CRegion` исторического GameServer, перенесённый в Zone
-//! `regions/` — владельца spatial/persistence поверхности регионов.
+//! Базовый `CRegion`: spatial/persistence поверхность регионов (cells,
+//! switches, resource `regions/{ID}.rgn`, byte-array codec). Исходники
+//! `region.h/.cpp` исторического GameServer; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! `GetCell` RVA `0x0002AC10`, `SetBlock` `0x0002AC50`, `GetBlock`
-//! `0x0007BCC0`, virtual `GetSecurity` `0x000854F0`, базовый
-//! `GetReturnPoint` `0x000F0280`, random-position family
-//! `0x000F02C0/0x000F04D0`, serializer `0x000F0540`, обе `GetSwitch`
-//! `0x000F0620/0x000F0670`, `New` `0x000F06C0`, resource `Save/Load`
-//! `0x000F0830/0x000F0EA0` и decoder
-//! `0x000F1070` имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
-//! `region.h/.cpp`. PDB и EXE фиксируют signed width/height по `+0x6C/+0x70`,
-//! cell pointer `+0x84`, row-major index и размер `tagCell == 4`. В random
-//! family EXE отдельно подтверждает `lSwitch` как little-endian word `+2`.
+//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: `GetCell` RVA `0x0002AC10`,
+//! `SetBlock` `0x0002AC50`, `GetBlock` `0x0007BCC0`, virtual `GetSecurity`
+//! `0x000854F0`, базовый `GetReturnPoint` `0x000F0280`, random-position
+//! family `0x000F02C0`/`0x000F04D0`, serializer `0x000F0540`, обе `GetSwitch`
+//! `0x000F0620`/`0x000F0670`, `New` `0x000F06C0`, resource `Save/Load`
+//! `0x000F0830`/`0x000F0EA0` и decoder `0x000F1070`. PDB и EXE фиксируют
+//! signed width/height по `+0x6C/+0x70`, cell pointer `+0x84`, row-major
+//! index и размер `tagCell == 4`. В random family EXE отдельно подтверждает
+//! `lSwitch` как little-endian word `+2`.
 //!
-//! Exact EXE фиксирует region fields `+0x60..+0x80`, cell pointer `+0x84` и
-//! switch-vector `+0x88` (`_Myfirst +0x8C`). Constructor ставит object type
-//! `200`, region/resource/size и notify timestamps в `0`, scale в `1.0`, но не
-//! инициализирует country/notify; достигнутый Rust prefix хранит их как
-//! `Option`. `with_constructor_defaults` вместе с `Default` выражает весь
-//! достигнутый constructor `0x000F0D90`; `Vec` и автоматический `Drop`
-//! сохраняют destructor `0x000F0750` без ручной STL/SEH механики. `New` сначала
+//! EXE фиксирует region fields `+0x60..+0x80` и switch-vector `+0x88`
+//! (`_Myfirst +0x8C`). Constructor ставит object type `200`,
+//! region/resource/size и notify timestamps в `0`, scale в `1.0`, но не
+//! инициализирует country/notify; Rust prefix хранит их как `Option`.
+//! `with_constructor_defaults` вместе с `Default` выражает весь достигнутый
+//! constructor `0x000F0D90`; `Vec` и автоматический `Drop` сохраняют эффект
+//! destructor `0x000F0750` без ручной STL/SEH механики. `New` сначала
 //! освобождает старые cells/switches, затем создаёт zero-filled block и
 //! возвращает `1`; ошибочные ранние `return` raw-декомпилята опровергнуты
 //! последовательным EXE control flow `0x004F06C0..0x004F0742`.
@@ -29,7 +28,7 @@
 //! type, width/height, `width*height*4` cell-байт, signed count и полные
 //! 20-байтовые switches. `Save` возвращает `0` только при невозможности открыть
 //! файл, `1` после close; Linux boundary отдаёт path и точные bytes вызывающему
-//! filesystem-owner-у, поскольку runtime открытия ещё не достигнут. `Load`
+//! filesystem-owner-у, поскольку runtime открытия не реализован. `Load`
 //! получает `Option<&[u8]>`: отсутствие файла, неверный header/version дают
 //! исходный `false`; ignored short `fread` после заголовка становится локальной
 //! typed-границей. Старый invalid-header путь не закрывал `FILE`; RAII не
@@ -49,18 +48,18 @@
 //! локальный `BLOCKED_MISSING_FACT`, а не воспроизводит pointer UB и не выдаёт
 //! клетку за safe. Единственная доказанная null-pointer ветка security при
 //! нулевом индексе сохраняет `SAFE`; `GetBlock/SetBlock` такого guard-а не
-//! имеют. Достигнутый virtual caller в `CPlayer::OnDied` остаётся
-//! границей самостоятельной death/PK механики. Отдельные тела STL,
-//! `Catch/Unwind`, STL vector internals и deleting-thunks сняты общей
-//! технической классификацией после переноса их ownership/codec effects;
-//! Посторонний domain destructor `CPlayerList::tagPropertiesUpgrade`, который
-//! дизассемблер приписал этому translation unit, не является частью `CRegion`
-//! и остаётся у своего недостигнутого owner-а.
+//! имеют. Виртуальный caller security в `CPlayer::OnDied` остаётся границей
+//! самостоятельной death/PK механики. Отдельные тела STL, `Catch/Unwind` и
+//! deleting-thunks не имеют domain-семантики поверх перенесённых
+//! ownership/codec effects; посторонний domain destructor
+//! `CPlayerList::tagPropertiesUpgrade`, который дизассемблер приписал этому
+//! translation unit, не является частью `CRegion`.
 //! Random-position сохраняет нормализацию/расширение прямоугольника, ровно
 //! 1000 random-попыток, затем x-major linear scan и финальную random-позицию с
 //! `false`, когда проходимой клетки нет во всём регионе. Исторический RNG
 //! остаётся явным context-owner-ом; block/switch проверяются через тот же
-//! byte-exact cell storage. Monster, loot и player death/PK owners остаются RAW.
+//! byte-exact cell storage. Monster, loot и player death/PK owners не
+//! перенесены и остаются неисследованными (RAW).
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};

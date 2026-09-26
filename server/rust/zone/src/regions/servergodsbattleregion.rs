@@ -1,21 +1,18 @@
 //! Данные, top-ten wire decoder и скалярные правила GodsBattle владельцев
-//! (`CGodsBattleMgr`, `CServerGodsBattleRegion`) исторического GameServer,
-//! перенесённые в Zone `regions/` волной Z-M-Xe (семья war-регионов
-//! war+godsbattle+village). Исходный владелец —
-//! `appserver/servergodsbattleregion.h/.cpp`. Переходные агрегаты остаются в
-//! старом пакете: manager хранит configuration `CGodsBattleConf` (setup
-//! владелец старого пакета), а region — hub `CServerWarRegion`; этому модулю
-//! делегируются top-ten entry/error/decoder, скалярный state manager-а
-//! (ordered region set, knock standings, единственный top-ten requester) и
-//! скалярный state региона (faction player/NPC membership и ordered
-//! contender-list) со всеми их операциями. NPC guard/counter lifecycle и
-//! GodsBattle-contend исполняет `CGame`; точный script case `11130` является
-//! живым caller-ом, а byte-owned имя contender сохраняет исходную GBK.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2; наследие шапки старого владельца, без повышения).
+//! (`CGodsBattleMgr`, `CServerGodsBattleRegion`). Исходный владелец —
+//! `appserver/servergodsbattleregion.h/.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; статусы
+//! унаследованы от шапки старого владельца, без повышения). Переходные
+//! агрегаты остаются в старом пакете: manager хранит configuration
+//! `CGodsBattleConf` (setup владелец старого пакета), а region — hub
+//! `CServerWarRegion`; этому модулю делегируются top-ten entry/error/decoder,
+//! скалярный state manager-а (ordered region set, knock standings,
+//! единственный top-ten requester) и скалярный state региона (faction
+//! player/NPC membership и ordered contender-list) со всеми их операциями.
+//! NPC guard/counter lifecycle и GodsBattle-contend исполняет `CGame`; точный
+//! script case `11130` является живым caller-ом, а byte-owned имя contender
+//! сохраняет исходную GBK.
 //!
 //! Region-set хранит ordered unique ID. Top-ten SZL exchange хранит
 //! единственный overwrite-able requester и terminal-marker decoder: безразмерный

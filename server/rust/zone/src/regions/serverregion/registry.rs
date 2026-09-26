@@ -1,7 +1,6 @@
-//! Identity-регистр фигур и монотонные счётчики ID `CServerRegion`
-//! исторического GameServer (порция 1). Исходный владелец —
-//! `appserver/serverregion.h/.cpp`; точная пара `GameServer/gameserver.exe +
-//! GameServer/GameServer.pdb`.
+//! Identity-регистр фигур и монотонные счётчики ID `CServerRegion`. Исходный
+//! владелец — `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe`
+//! + `GameServer.pdb`.
 //!
 //! Старые pointer-valued hash maps выражены registry identity: сами `CShape`
 //! остаются у runtime owner-а и разрешаются через `ShapeResolver`. Это

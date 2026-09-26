@@ -1,17 +1,14 @@
-//! Достигнутый network/send owner GameServer `CMyNetServer` из
-//! `nets/netserver/mynetserver.cpp`, перенесённый в Zone app — listener
-//! игровых клиентов game-направления. Источник контракта — та же точная пара,
-//! что у [`crate::app::game_message`].
+//! Network/send owner GameServer `CMyNetServer` — listener игровых клиентов
+//! game-направления. Исходник `nets/netserver/mynetserver.cpp`; источник
+//! контракта — та же точная пара, что у [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (дизассемблер этого прохода,
-//! `.exe/gameserver.exe`):
+//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
 //! - ctor `CMyNetServer` `0x418E70`: базовый `CServer` ctor `0x418A80`,
 //!   vtable `0x64D024`, поле `+0x120 = 0`, limits `+0x14C = 3` и
 //!   `+0x150 = 0x400000` — точные константы component;
 //! - `CreateServerClient` `0x418EB0` имеет статус `IMPLEMENTED` и создаёт
-//!   downstream `CMyServerClient`; sender-виртуальные slots зафиксированы
-//!   ранее в заголовком переносе: `SendBySocketID` slot `+0x38`, `SendByMapID`
-//!   slot `+0x3C`; `OnMapIDError` `0x418F10`.
+//!   downstream `CMyServerClient`; sender-виртуальные slots: `SendBySocketID`
+//!   slot `+0x38`, `SendByMapID` slot `+0x3C`; `OnMapIDError` `0x418F10`.
 //!
 //! `ServerCommandHandle` во всех трёх случаях синхронно копирует payload в
 //! owned-команду до возврата, поэтому старый общий RLE scratch-buffer не
@@ -23,7 +20,7 @@
 //!
 //! Oversized `SendAll` до отправки печатал inherited `CMySocket::m_lIndexID
 //! +0x34`. Exact `CMySocket` constructor это поле не инициализирует, а
-//! достигнутый `CGame::InitNetServer` writer-а не содержит. Поэтому Rust
+//! перенесённый `CGame::InitNetServer` writer-а не содержит. Поэтому Rust
 //! хранит только явно наблюдённое позднее значение как `Option`; сама
 //! локальная logging-граница отмечена в message-owner-е, не заменена
 //! придуманным нулём.

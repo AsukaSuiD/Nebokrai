@@ -1,12 +1,11 @@
-//! Typed-отказ пространственного членства `CServerRegion` исторического
-//! GameServer (порция 1) и ядра его membership-операций (порция 3): вход и
-//! выход фигуры и owner-обвязки позиционной регистрации move-shape. Исходный
-//! владелец — `appserver/serverregion.h/.cpp`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb` (SHA-256 EXE
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS
-//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, совпадение подтверждено
-//! оснасткой `.local/evidence/symbols.py identity`). Машинные статусы порций
-//! (прямой дизассембл тел точной пары):
+//! Typed-отказ пространственного членства `CServerRegion` и ядра его
+//! membership-операций: вход и выход фигуры и owner-обвязки позиционной
+//! регистрации move-shape. Исходный владелец —
+//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer/GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; совпадение
+//! подтверждено оснасткой `.local/evidence/symbols.py identity`). Машинные
+//! статусы (прямой дизассембл тел точной пары):
 //!
 //! | функция | RVA | статус |
 //! |---|---|---|
@@ -33,7 +32,7 @@
 //! `+0x34`): area-remove virtual `+0x34` области (`0x0047CE9A`) и сброс
 //! owner-link `m_pArea = 0` (`0x0047CE9D`) до стирания блока клетки;
 //! player-ветка вызывает `SetBlock(x, y, 0)` virtual `+0x90` (`0x0047CEEC`)
-//! и достигнутый player-leave virtual `0x00601A70` — точный `ret 4` без
+//! и player-leave virtual `0x00601A70` — точный `ret 4` без
 //! наблюдаемого эффекта (`0x0047CEFC`); NPC/monster-ветка — тот же
 //! `SetBlock(x, y, 0)` (`0x0047CECE`) без stub-вызова; прочие типы блок не
 //! стирают (`0x0047CEB3/0x0047CEB6` → `0x0047CF01`); registry-erase по типам
@@ -43,9 +42,9 @@
 //! (`before entry`-hook и virtual `AfterEnteredArea`) остаются у переходной
 //! обвязки старого пакета, которая по-прежнему получает весь агрегат
 //! `CServerRegion`; ядро возвращает решение typed-outcome. Owner-обвязки
-//! позиционной регистрации дополняют area facts и выбирают достигнутый
+//! позиционной регистрации дополняют area facts и выбирают перенесённый
 //! dispatch `CShape::SetTileXY`, не дублируя его ядро. Внутренности
-//! `GetRandomPos` `0x000F04D0` этой волной не дизассемблировались: при
+//! `GetRandomPos` `0x000F04D0` не дизассемблировались: при
 //! неудаче оригинал молча продолжает с записанными out-координатами, ядро
 //! поднимает typed-границу — отличие зафиксировано.
 

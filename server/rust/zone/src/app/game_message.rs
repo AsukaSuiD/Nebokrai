@@ -1,25 +1,24 @@
-//! Сообщение направления GameServer (`CMessage`) из
-//! `nets/netserver/message.cpp`, перенесённое в Zone app — владельца
-//! game-направления объединённого Zone-процесса. Источник контракта —
-//! точная пара `.exe/gameserver.exe` SHA-256
+//! Сообщение направления GameServer (`CMessage`): тип и runtime metadata
+//! game-направления. Исходник `nets/netserver/message.cpp`; источник
+//! контракта — точная пара `.exe/gameserver.exe` SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! ImageBase `0x400000`, PE timestamp `0x53FAFF2D` ↔ `.exe/GameServer.pdb`
 //! GUID `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2 (CodeView RSDS, match);
 //! PDB-owner `e:\svn\fengyun_russia_dev\nets\netserver\message.cpp`.
 //!
-//! Прежние адресные доказательства прежнего заголовка сохранены: ctor
-//! `CMessage(long)` RVA `0x000136D0`, `CreateMessage/CreateMessageWithoutRLE`
-//! RVA `0x00013700/0x00013850` со статусом `IMPLEMENTED, VERIFIED_DISASSEMBLY`
-//! (RLE-путь: capacity `0x800000` для входа до `0x100000` включительно, затем
-//! exact `compressed_len * 8`; decode/create/free общего scratch под critical
-//! section до возврата). Отдельный send-family — wire/domain — остаётся прежним
+//! Адресные свидетельства: ctor `CMessage(long)` RVA `0x000136D0`,
+//! `CreateMessage/CreateMessageWithoutRLE` RVA `0x00013700/0x00013850` со
+//! статусом `IMPLEMENTED, VERIFIED_DISASSEMBLY` (RLE-путь: capacity
+//! `0x800000` для входа до `0x100000` включительно, затем exact
+//! `compressed_len * 8`; decode/create/free общего scratch под critical
+//! section до возврата). Отдельный send-family — wire/domain — остаётся
 //! владельцем процесса стороной доменного расширения этого типа (см.
 //! `src/nets/netserver/message.rs`): `SendToSocket/SendToPlayer/SendAll`
 //! `0x00013910/0x000139C0/0x00013A70`, `Send/SendToBS` `0x00013B40/0x00013BE0`,
 //! region/area/country `0x00014100/0x000142B0/0x00014760`, обе around
 //! `0x00014420/0x00014970`, `Run` `0x000149D0` — тот же статус.
 //!
-//! Машинные точки самого типа зафиксированы дизассемблером в том же проходе:
+//! Машинные точки самого типа, зафиксированные дизассемблером:
 //! ctor `CMessage(long)` `0x4136D0` — базовый `0x413520`, vtable `0x64CA48`,
 //! `MsgType` в header `+4`, нули пяти runtime dword `+0x18/+0x1C/+0x20/+0x24/+0x28`
 //! (region, player, numeric map, socket, IPv4 через этот порядок полей);

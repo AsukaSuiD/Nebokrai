@@ -1,6 +1,6 @@
-//! Константы геометрии и чистая арифметика `CServerRegion` исторического
-//! GameServer (порция 1). Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! Константы геометрии и чистая арифметика `CServerRegion`. Исходный
+//! владелец — `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe`
+//! + `GameServer.pdb`.
 //!
 //! Legacy типы объектов `400/500/600/700` выбирают хранилище region registry
 //! и классификацию RTTI-фактов; war-soul span `15` — literal `idiv 0xF` из

@@ -1,16 +1,14 @@
-//! Tax data-контракты начисления и сбора налогов региона исторического
-//! GameServer (порция 1) и скалярные state-owner действия над
-//! `RegionParamState` (порция 3): `AddTaxMoney` `0x000826E0` и
+//! Tax data-контракты начисления и сбора налогов региона и скалярные
+//! state-owner действия над `RegionParamState`: `AddTaxMoney` `0x000826E0` и
 //! `CollectTodayTax` `0x0007D9B0`. Исходный владелец —
-//! `appserver/serverregion.h/.cpp`; точная пара `GameServer/gameserver.exe +
-//! GameServer/GameServer.pdb` (SHA-256 EXE
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS
-//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, совпадение подтверждено
-//! оснасткой `.local/evidence/symbols.py identity`). Двухфазный
+//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer/GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; совпадение
+//! подтверждено оснасткой `.local/evidence/symbols.py identity`). Двухфазный
 //! `CNetSession`-endpoint налогового диалога, лог сбора и публикация доли
-//! superior-региону в World остаются у переходного владельца до своих порций.
+//! superior-региону в World остаются у переходного владельца.
 //!
-//! Машинные статусы порций (прямой дизассембл тел точной пары):
+//! Машинные статусы (прямой дизассембл тел точной пары):
 //!
 //! | функция | RVA | статус |
 //! |---|---|---|

@@ -1,5 +1,5 @@
 //! Wire-проекция `tagRegionParam` регионов GameServer (налоги и владение
-//! городом), перенесённая в Zone `regions/`.
+//! городом).
 //!
 //! Точные девять DWORD в wire-порядке подтверждены обеими сторонами пары:
 //! Game `CProxyServerRegion::DecordFromByteArray` (`0x4FC440` base, country

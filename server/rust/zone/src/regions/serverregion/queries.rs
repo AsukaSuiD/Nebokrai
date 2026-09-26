@@ -1,6 +1,6 @@
-//! Observable traversal-контракты запросов `CServerRegion` исторического
-//! GameServer (порции 1 и 5). Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! Observable traversal-контракты запросов `CServerRegion`. Исходный
+//! владелец — `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe`
+//! + `GameServer.pdb`.
 //!
 //! `legacy_msvc_npc_hash_traversal` воспроизводит обход старого MSVC
 //! hash-хранилища NPC-кэша. Семейство ids/find/registered читает area-grid

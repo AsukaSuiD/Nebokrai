@@ -1,21 +1,18 @@
-//! Данные и скалярные правила country war-региона `ServerCountryRegion`
-//! исторического GameServer, перенесённые в Zone `regions/` волной Z-M-X
-//! (семья регионов country+nation+city + гейты). Исходный владелец —
-//! `appserver/servercountryregion.h/.cpp`. Переходный агрегат
-//! `CServerCountryRegion` остаётся в старом пакете: хранит hub `CServerRegion`,
-//! contender-список (element `ContendState` — data-тип Zone
+//! Данные и скалярные правила country war-региона `ServerCountryRegion`.
+//! Исходный владелец — `appserver/servercountryregion.h/.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `CServerCountryRegion` остаётся в старом пакете: хранит hub
+//! `CServerRegion`, contender-список (element `ContendState` — data-тип Zone
 //! `regions/serverwarregion`, re-export через hub) и карты concrete
 //! gates/flags поверх hub-типов, а этому агрегату делегирует чистый state
 //! (symbol ownership, area-maps, guard sets, стороны и фазовые флаги) и все
 //! скалярные операции без изменения сигнатур; wire-stream readers с
-//! `RegionDecodeInputBlock` перенесены в Zone `regions/serverwarregion`
-//! (волна Z-M-Xd), entry-effects для contenders, их вызовы и evidence-блок
-//! остаются у старого пакета.
+//! `RegionDecodeInputBlock` живут в Zone `regions/serverwarregion`, а
+//! entry-effects для contenders и их вызовы остаются у старого пакета.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Достигнутый subtype decoder `0x001CD3F0`, gate runtime
+//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY` (унаследован от шапки старого
+//! владельца, без повышения): subtype decoder `0x001CD3F0`, gate runtime
 //! `0x001CAC80/0x001CADD0/0x001CB1E0..0x001CB310`, refresh
 //! `0x001CB750/0x001CB880`, `ClearRegion` `0x001CBA50`, phase callbacks
 //! `0x001CABC0..0x001CAC60`, spatial `0x001CA9F0/0x001CE010`, virtual
@@ -24,10 +21,9 @@
 //! `0x001CE830..0x001CE970`, contender damage/time
 //! `0x001CA980/0x001CAFF0/0x001CB0D0`, enter/list/symbol
 //! `0x001CB710/0x001CCAC0/0x001CCB50/0x001CE190/0x001CE2B0`, AI/victory
-//! `0x001CE380/0x001CEA10` и `IsPlayerContendSymbol` `0x001D24E0` имеют
-//! статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`, а gate/camp/flag layout,
-//! map-key, overload return, area selection и refresh/clear order
-//! `VERIFIED_DISASSEMBLY` (наследие шапки старого владельца, без повышения).
+//! `0x001CE380/0x001CEA10` и `IsPlayerContendSymbol` `0x001D24E0`;
+//! `VERIFIED_DISASSEMBLY`: gate/camp/flag layout, map-key, overload return,
+//! area selection и refresh/clear order.
 //!
 //! `BTreeMap`/`BTreeSet`/Vec сохраняют STL order. Flags являются обычными
 //! `CBuild` type `0x44C`: wire `field_24` не применяется, initial action

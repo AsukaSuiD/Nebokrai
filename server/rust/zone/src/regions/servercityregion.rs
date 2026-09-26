@@ -1,30 +1,26 @@
-//! Данные и скалярные правила городского war-региона `CServerCityRegion`
-//! исторического GameServer, перенесённые в Zone `regions/` волной Z-M-X
-//! (семья регионов country+nation+city + гейты). Исходный владелец —
-//! `appserver/servercityregion.h/.cpp`. Переходный агрегат `CServerCityRegion`
-//! остаётся в старом пакете: хранит hub-обёртку `CServerWarRegion` (сама
-//! обёртка над Zone `regions/serverwarregion`, волна Z-M-Xd), карту concrete
-//! gates `CCityGate` и делегирует этому агрегату чистый state
+//! Данные и скалярные правила городского war-региона `CServerCityRegion`.
+//! Исходный владелец — `appserver/servercityregion.h/.cpp`; сверка по точной
+//! паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `CServerCityRegion` остаётся в старом пакете: хранит hub-обёртку
+//! `CServerWarRegion` (обёртку над Zone `regions/serverwarregion`), карту
+//! concrete gates `CCityGate` и делегирует этому агрегату чистый state
 //! (defence-return, guard sets, last-attacker колонки) и все скалярные
 //! операции без изменения сигнатур; wire-stream readers с
-//! `RegionDecodeInputBlock` перенесены в Zone `regions/serverwarregion`,
-//! decode-контексты над owner-ом хранилищ, вызовы readers и evidence-блок
-//! остаются у старого пакета.
+//! `RegionDecodeInputBlock` живут в Zone `regions/serverwarregion`, а
+//! decode-контексты над owner-ом хранилищ и вызовы readers остаются у
+//! старого пакета.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Достигнутые фазовые callbacks `0x001CF730`,
+//! Статус `IMPLEMENTED`: фазовые callbacks `0x001CF730`,
 //! `0x001CFA00..0x001CFD70`, `0x001D09F0`, ownership `0x001CED70/0x001CEF40`,
 //! victory `0x001CF1A0`, spatial `0x001CEE80/0x001CEF60`, virtual
 //! security/guard attackability `0x001CF0E0/0x001CF050`, gate runtime
 //! `0x001CAAA0/0x001CF370..0x001CF640`, clear `0x001CF970`, guard refresh
-//! `0x001CF7C0` и direct timeout-forwarding `0x001CFEB0` имеют статус
-//! `IMPLEMENTED`; layout gate-полей, decoder/factory returns, фазовый call
-//! order, child-ID `+0x158` и base-region registration `VERIFIED_DISASSEMBLY`
-//! (наследие шапки старого владельца, без повышения). Оставшаяся поверхность
-//! исходного файла сохраняет унаследованный статус `UNKNOWN` у старого
-//! пакета; этот модуль переносит только достигнутую семью.
+//! `0x001CF7C0` и direct timeout-forwarding `0x001CFEB0`; `VERIFIED_DISASSEMBLY`:
+//! layout gate-полей, decoder/factory returns, фазовый call order, child-ID
+//! `+0x158` и base-region registration (статусы унаследованы от шапки
+//! старого владельца, без повышения). Оставшаяся поверхность исходного файла
+//! сохраняет унаследованный статус `UNKNOWN` у старого пакета.
 //!
 //! `BTreeMap/BTreeSet/Vec` сохраняют STL order. Обязательный defence-return
 //! block хранится с нейтральным zero-default до decode без недостижимой

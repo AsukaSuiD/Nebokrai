@@ -1,10 +1,9 @@
 //! Динамическая block-разметка клеток региона и spatial shape-lookup
-//! девяти-area окружения `CServerRegion` исторического GameServer (порция 2).
-//! Исходный владелец — `appserver/serverregion.h/.cpp`; обе `RefeashBlock`
-//! `0x0007FAD0/0x00081680` и обе `GetShape` `0x0007F390/0x00081300` имеют
-//! статус `IMPLEMENTED, VERIFIED_DISASSEMBLY` исследовательского корпуса
-//! старого файла; точная пара `GameServer/gameserver.exe +
-//! GameServer/GameServer.pdb`.
+//! девяти-area окружения `CServerRegion`. Исходный владелец —
+//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer.pdb`. Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: обе
+//! `RefeashBlock` `0x0007FAD0/0x00081680` и обе `GetShape`
+//! `0x0007F390/0x00081300`.
 //!
 //! Block `3` — переоцениваемая пометка занятости клетки боевой фигурой:
 //! refresh сначала снимает все блоки `3`, затем возвращает их живым
@@ -14,7 +13,7 @@
 //! covering-фигуре, `get_shapes` собирает все. RTTI alive-факт concrete
 //! `CMoveShape` остаётся у переходного владельца старого пакета и приходит
 //! typed-access замыканием: `None` (неудачный downcast) пропускает фигуру.
-//! Skill-cell формула (порция 4) — чистое чтение живого типа блока клетки
+//! Skill-cell формула — чистое чтение живого типа блока клетки
 //! для пошагового полёта навыка с исходным `BLOCK_UNFLY` (2) вне сетки.
 
 use super::areagrid::get_area;

@@ -1,8 +1,7 @@
-//! Around-runtime view GameServer, перенесённый в Zone `replication/`.
-//!
-//! Точная пара GameServer: EXE `gameserver.exe` + `GameServer.pdb` (RSDS match,
-//! SHA-256 EXE `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`).
+//! Around-runtime view GameServer: разрешение игроков и sessions для
+//! around-рассылки одного кадра. Точная пара GameServer `gameserver.exe` +
+//! `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`).
 //! Wrapper `SendToAround` RVA `0x00014970` читает father-region по `+0x40`,
 //! узнаёт area-размеры владельца и текущие tile X/Y фигуры (`0x0005B110/
 //! 0x0005B140`) и передаёт управление deep overload `0x00014420`; этот модуль

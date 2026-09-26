@@ -1,10 +1,9 @@
-//! Достигнутый outgoing/receive и Linux I/O owner GameServer `CMyNetClient`
-//! из `nets/netserver/mynetclient.cpp/.h`, перенесённый в Zone app — исходящий
-//! край Game к World и Billing. Источник контракта — та же точная пара,
-//! что у [`crate::app::game_message`].
+//! Outgoing/receive и Linux I/O owner GameServer `CMyNetClient` — исходящий
+//! край Game к World и Billing. Исходник `nets/netserver/mynetclient.cpp/.h`;
+//! источник контракта — та же точная пара, что у
+//! [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (дизассемблер этого прохода,
-//! `.exe/gameserver.exe`):
+//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
 //! - ctor `CMyNetClient` `0x41A4B0`: базовый `CClient` ctor, task type zero
 //!   (исходный `ST_UNKNOWNSERVER == 0`), destructor `0x41A530` и
 //!   `GetSocketCommand` `0x41A520` остаются теми же свидетельствами;

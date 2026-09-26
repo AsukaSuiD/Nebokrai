@@ -1,10 +1,9 @@
-//! Построение и доступ к area-grid `CServerRegion` исторического GameServer
-//! вместе с картами боевых духов (порция 1). Исходный владелец —
-//! `appserver/serverregion.h/.cpp`; обе `GetArea` `0x00001DB0/0x0007BB60` и
+//! Построение и доступ к area-grid `CServerRegion` вместе с картами боевых
+//! духов. Исходный владелец — `appserver/serverregion.h/.cpp`; точная пара
+//! `gameserver.exe` + `GameServer.pdb`. Статус `IMPLEMENTED,
+//! VERIFIED_DISASSEMBLY`: обе `GetArea` `0x00001DB0/0x0007BB60` и
 //! `CreateAreaArray` `0x0007BE10`, spatial tail `CPlayer::SetWarSoulXY/
-//! DelWarSoul` `0x0042DF50/0x0042E0A0` имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY` исследовательского корпуса старого файла; точная
-//! пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! DelWarSoul` `0x0042DF50/0x0042E0A0`.
 //!
 //! Для положительных размеров grid использует исходное ceiling-деление и
 //! row-major `area_x * y + x`; старые zero/negative span и 32-bit allocation

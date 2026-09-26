@@ -1,22 +1,23 @@
-//! Достигнутая spatial/membership-часть `CShape` исторического GameServer, перенесённая в Zone `regions/`.
+//! Spatial/membership-часть `CShape`: позиция и геометрия фигуры, wire codec,
+//! distance-семейство и динамическая block-разметка. Исходники
+//! `server/gameserver/appserver/shape.h/.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Constructor RVA `0x0005B9A0`, base `SetPosXY` `0x0002ABE0`,
-//! `GetTileX/GetTileY/SetTileXY` `0x0005B110/0x0005B140/0x0005B170`,
-//! direction/geometry `0x0004A1C0/0x000FC5C0/0x0005B2B0..0x0005B380` и
-//! `SetBlock` `0x0005BA60` имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
-//! `server/gameserver/appserver/shape.h/.cpp`.
+//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: constructor RVA `0x0005B9A0`,
+//! base `SetPosXY` `0x0002ABE0`, `GetTileX/GetTileY/SetTileXY`
+//! `0x0005B110`/`0x0005B140`/`0x0005B170`, direction/geometry
+//! `0x0004A1C0`/`0x000FC5C0`/`0x0005B2B0..0x0005B380` и `SetBlock`
+//! `0x0005BA60`.
 //!
-//! Exact EXE подтверждает region-link `+0x40`, region ID `+0x44`, float X/Y,
+//! EXE подтверждает region-link `+0x40`, region ID `+0x44`, float X/Y,
 //! area/next-area links `+0x60/+0x64`, next-area X/Y `+0x68/+0x6C`, нулевые
 //! direction/position/state/action и остальной next-state, speed `2000.0`.
 //! Старые raw pointers region/area выражены typed link и area-index: живое
 //! владение остаётся у `CServerRegion`, без self-reference и `unsafe`.
-//! Float-поля хранятся бит-в-бит; tile conversion использует
-//! подтверждённое exact EXE x87 truncation toward zero. Неопределённый
-//! результат x87 для non-finite/out of
-//! range координаты становится локальным `BLOCKED_MISSING_FACT`.
+//! Float-поля хранятся бит-в-бит; tile conversion использует подтверждённое
+//! exact EXE x87 truncation toward zero. Неопределённый результат x87 для
+//! non-finite/out of range координаты становится локальным
+//! `BLOCKED_MISSING_FACT`.
 //!
 //! `SetBlock` меняет только клетки с исходным block `3 -> 0` либо `0 -> 3` в
 //! прямоугольнике virtual figure `DIR 2/DIR 0`. Конкретная figure и RTTI-факты

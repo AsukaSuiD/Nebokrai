@@ -1,10 +1,10 @@
-//! War-фазовое и city-ownership состояние `CServerRegion` исторического
-//! GameServer (порция 4): phase defaults `OnWarDeclare/Start/End/Mass` (RVA
-//! `0x00085560..0x000855B0`) и ownership/state accessors `SetOwnedCityOrg`,
-//! `SetWarNum`, `SetCityState`, `ReSetWarState` (`0x000855D0..0x00085680`).
-//! Исходный владелец — `appserver/serverregion.h/.cpp`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb` (машинная
-//! досверка 2026-09-26 подтвердила все тела построчно).
+//! War-фазовое и city-ownership состояние `CServerRegion`: phase defaults
+//! `OnWarDeclare/Start/End/Mass` (RVA `0x00085560..0x000855B0`) и
+//! ownership/state accessors `SetOwnedCityOrg`, `SetWarNum`, `SetCityState`,
+//! `ReSetWarState` (`0x000855D0..0x00085680`). Исходный владелец —
+//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer/GameServer.pdb` (все тела сверены построчно по машинному
+//! коду).
 //!
 //! Базовые тела записывают только скаляры переходного владельца
 //! (`m_lWarNum +0x238`, `m_CityState +0x23C` — имена полей INFERRED по

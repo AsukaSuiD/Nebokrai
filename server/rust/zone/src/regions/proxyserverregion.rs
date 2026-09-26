@@ -1,6 +1,6 @@
-//! Proxy-region GameServer `CProxyServerRegion`, перенесённый в Zone `regions/`, восстановленный по точной
-//! паре `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/proxyserverregion.cpp`.
+//! Proxy-region GameServer `CProxyServerRegion` (decoder со стороны Game).
+//! Исходный owner `server/gameserver/appserver/proxyserverregion.cpp`;
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
 //! Wire намеренно не является полным `CServerRegion`: он вызывает только
 //! `CBaseObject::DecordFromByteArray`, затем читает country byte, war-region

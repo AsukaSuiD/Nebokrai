@@ -1,33 +1,29 @@
-//! Базовый `CBaseObject` исторического GameServer, перенесённый в Zone
-//! `regions/` — владельца пространственной идентичности регионов.
+//! Базовая идентичность объектов GameServer (`CBaseObject`): type/ID/GUID,
+//! graphics ID, byte-string имя, constructor-defaults и wire codec.
+//! Исходники `server/gameserver/appserver/baseobject.h/.cpp`; сверка по точной
+//! паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`).
 //!
 //! Фабрики npc/monster (вызываются только старым `CServerRegion` в
-//! `serverregion.rs`) остаются в старом пакете ими же связными проводами; их
-//! доменные классы вернутся в Zone отдельным шагом.
+//! `serverregion.rs`) остаются в старом пакете связными с ним проводами.
 //!
-//! `AddToByteArray` RVA `0x000FC300`, scalar/name часть constructor-а
-//! `0x000FC3C0` и `DecordFromByteArray` `0x000FC440` имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, SHA-256 EXE
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, PDB
-//! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
-//! Исходники: `server/gameserver/appserver/baseobject.h/.cpp`.
+//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: `AddToByteArray` RVA
+//! `0x000FC300`, scalar/name часть constructor-а `0x000FC3C0`,
+//! `DecordFromByteArray` `0x000FC440` и identity helpers
+//! `GetHashValue/CalculateType/CalculateID` `0x000FC0C0/0x000FC0E0/0x000FC0F0`.
 //!
-//! Exact EXE подтверждает signed `m_lType +0x4`, `m_lID +0x8`, нулевой
-//! `CGUID +0xC`, `m_lGraphicsID +0x1C`, byte-string `+0x20`, include-child
-//! `+0x3C == true` и null father `+0x40`. Достигнутый codec пишет три
-//! little-endian `long`, затем имя с NUL; decoder использует локальный
-//! `char[256]`, сохраняет тот же порядок и на normal return явно ставит
-//! `AL=1` по `0x004FC4BD`. Входной include-child оба тела не читают.
-//! `Vec<u8>` заменяет `std::string` без навязывания UTF-8, а safe decoder
-//! останавливает отсутствие NUL/выход за старый 256-байтовый буфер локальным
-//! `BLOCKED_MISSING_FACT`; уже прочитанные scalar-поля и cursor сохраняются.
-//! Child-list/father ownership и полный destructor остаются только в локальном исследовательском корпусе: helper
-//! конструктора материализует только достигнутую region-chain часть и не
-//! объявляет Rust layout копией старого ABI.
-//! Identity helpers `GetHashValue/CalculateType/CalculateID` RVA
-//! `0x000FC0C0/0x000FC0E0/0x000FC0F0` также имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY`: верхний DWORD хранит type с исходным sign-extension
+//! EXE подтверждает signed `m_lType +0x4`, `m_lID +0x8`, нулевой `CGUID +0xC`,
+//! `m_lGraphicsID +0x1C`, byte-string `+0x20`, include-child `+0x3C == true` и
+//! null father `+0x40`. Codec пишет три little-endian `long`, затем имя с NUL;
+//! decoder использует локальный `char[256]`, сохраняет тот же порядок и на
+//! normal return явно ставит `AL=1` по `0x004FC4BD`. Входной include-child
+//! оба тела не читают. `Vec<u8>` заменяет `std::string` без навязывания UTF-8,
+//! а safe decoder останавливает отсутствие NUL/выход за старый 256-байтовый
+//! буфер локальным `BLOCKED_MISSING_FACT`; уже прочитанные scalar-поля и
+//! cursor сохраняются. Child-list/father ownership и полный destructor не
+//! материализованы: helper конструктора строит только достигнутую
+//! region-chain часть и не объявляет Rust layout копией старого ABI.
+//! Identity helpers: верхний DWORD хранит type с исходным sign-extension
 //! отрицательного ID, нижний — битовый образ ID.
 
 use std::fmt;

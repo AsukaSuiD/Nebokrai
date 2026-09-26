@@ -1,7 +1,7 @@
-//! Return-setup семейство `CServerRegion` исторического GameServer (порция 4):
-//! данные игрока/окна возврата и fallback-цепочка exact `GetReturnPoint`
-//! (`0x000814F0`). Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! Return-setup семейство `CServerRegion`: данные игрока/окна возврата и
+//! fallback-цепочка exact `GetReturnPoint` (`0x000814F0`). Исходный владелец
+//! — `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer/GameServer.pdb`.
 //!
 //! `GetReturnPoint` при null-игроке zero-write всех шести выходов сохраняет
 //! 0-инициализацию результата; иначе локальный `m_stSetup` (`+0x170..+0x18C`,
@@ -10,7 +10,7 @@
 //! `CCountryParam::main_return_point`. `DoesRecallWhenLost` (`0x0007BAC0`)
 //! читает `+0x184`. Constructor не записывает `m_stSetup`: до доказанного
 //! decoder/writer-а setup остаётся отдельной typed-границей
-//! `ServerReturnSetupBlock`. Машинная досверка 2026-09-26 подтвердила:
+//! `ServerReturnSetupBlock`. Машинная сверка всего тела подтверждает:
 //! null-ветвь — инлайн-порт базового `CRegion::GetReturnPoint` (RVA
 //! `0x000F0280`, тот же zero-write шести выходов); use_return ветвь пишет
 //! direction константой `-1`; fallback — три mutating карты

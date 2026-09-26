@@ -1,17 +1,16 @@
-//! Transition-семья смены области `CServerRegion` исторического GameServer:
-//! immutable plan (порция 1), staging-очереди area/region AI и ядро
-//! plan/commit (порция 3). Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` (SHA-256
-//! EXE `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, совпадение подтверждено
-//! оснасткой `.local/evidence/symbols.py identity`). Машинные статусы порций
-//! (прямой дизассембл тел точной пары):
+//! Transition-семья смены области `CServerRegion`: immutable plan,
+//! staging-очереди area/region AI и ядро plan/commit. Исходный владелец —
+//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
+//! `GameServer/GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; совпадение
+//! подтверждено оснасткой `.local/evidence/symbols.py identity`). Машинные
+//! статусы (прямой дизассембл тел точной пары):
 //!
 //! | функция | RVA | статус |
 //! |---|---|---|
 //! | `plan_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
 //! | `commit_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
-//! | staging-очереди (`stage_*`, `staged_area_transitions`, `take_staged_region_transitions`) | — | `PARTIAL`: staging-сайт исходного region AI отдельным телом этой волной не дизассемблировался |
+//! | staging-очереди (`stage_*`, `staged_area_transitions`, `take_staged_region_transitions`) | — | `PARTIAL`: staging-сайт исходного region AI отдельным телом не дизассемблировался |
 //!
 //! `OnShapeChangeArea` сверен по всему телу (`0x004802A0-0x004808A2`): gate
 //! null-объекта и отсутствующего owner-link `[+0x60]` (`0x004802C4-
@@ -28,8 +27,8 @@
 //! (`0x0048076E/0x00480771-0x004807B5/0x004807BC/0x004807C6`) и player-only
 //! `PlayerEnter` `0x00075580` (`0x004807D1`).
 //!
-//! Частичный эффект пути ненайденной цели, сверенный по телу и закрытый
-//! этой волной: оригинал выполняет `RemoveObject` прежней области
+//! Частичный эффект пути ненайденной цели, сверенный по телу: оригинал
+//! выполняет `RemoveObject` прежней области
 //! (`0x0048076E`) до bounds-check цели (`GetArea(next)`
 //! `0x00480771-0x004807B5`) и завершается без `AddObject`
 //! (`0x004807BC`) и без сброса `m_pArea` (запись `0x004807C6` только на
@@ -44,8 +43,7 @@
 //! сбрасывается caller-ом только после добавления, ordered snapshot берётся
 //! без очистки исходного list, cleanup очереди выполняет вызывающая сторона
 //! после применения всех `OnShapeChangeArea`. Owned-monster/NPC обвязки
-//! plan/commit остаются у переходного владельца generational hub-ов до своих
-//! волн.
+//! plan/commit остаются у переходного владельца generational hub-ов.
 
 use indexmap::IndexSet;
 

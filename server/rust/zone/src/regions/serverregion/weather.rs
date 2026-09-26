@@ -1,8 +1,8 @@
-//! Weather data-контракты `CServerRegion` исторического GameServer (порция 1):
-//! startup-таблица сегментов/опций и результат секундного weather tick-а;
-//! сами tick/change-действия (порция 4): periodic fragment `CServerRegion::AI`
-//! и exact `ChangeWeather`. Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+//! Weather data-контракты `CServerRegion`: startup-таблица сегментов/опций
+//! и результат секундного weather tick-а; сами tick/change-действия —
+//! periodic fragment `CServerRegion::AI` и exact `ChangeWeather`. Исходный
+//! владелец — `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe`
+//! + `GameServer/GameServer.pdb`.
 //! `ChangeWeather` (`0x00080210`) собирает единственную запись с нулевым
 //! цветом тумана, заменяет ей `m_vectorWeather +0x200` и вызывает
 //! `SendWeatherInfo(player=0)` (`0x0007C610`), сериализующий `0xBF507`;

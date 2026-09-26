@@ -1,18 +1,18 @@
 //! Данные и скалярные правила городских ворот `CCityGate` (factory type
-//! `0x4B0`) исторического GameServer, перенесённые в Zone `regions/` первой
-//! порцией волны citygate. Исходный владелец — `appserver/citygate.h/.cpp`.
-//! Переходный агрегат `CCityGate` остаётся в старом пакете поверх `CBuild`,
-//! хранит те же колонки и делегирует сюда их поведение без изменения
-//! сигнатур; нематериальные accessor-ы, hub-публикация владельцев
-//! `CServerCityRegion`/`ServerCountryRegion` и evidence-блок остаются у
-//! старого пакета.
+//! `0x4B0`) и их региональное гейтовое тело. Исходный владелец —
+//! `appserver/citygate.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb` (идентификаторы сборки —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
+//! агрегат `CCityGate` остаётся в старом пакете поверх `CBuild`, хранит те
+//! же колонки и делегирует сюда их поведение без изменения сигнатур;
+//! нематериальные accessor-ы, hub-публикация владельцев
+//! `CServerCityRegion`/`ServerCountryRegion`, region-обходы карт и
+//! применение block-эффектов остаются у переходных aggregate-ов старого
+//! пакета.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). `symbols.py pubs` по этой паре даёт 41 символ семейства
-//! `CCityGate`: собственные constructor `1:001dcb00`, destructor `1:001dcb20`,
-//! scalar deleting destructor `1:001dcb90`, `SetAction` `1:001dcb30`, общие
+//! `symbols.py pubs` по этой паре даёт 41 символ семейства `CCityGate`:
+//! собственные constructor `1:001dcb00`, destructor `1:001dcb20`, scalar
+//! deleting destructor `1:001dcb90`, `SetAction` `1:001dcb30`, общие
 //! `AI_Stand`/`AI_BeAttack`/`AI_Died` `1:001dcb80`, `AI` `1:001dcbb0`,
 //! `IsAttackAble` `1:001dcc10`, `OnBeenHurted` `1:001dcd80`, vtable
 //! `2:000138c4` с RTTI-записями, внешний `AddCityGate@CServerCityRegion`
@@ -20,24 +20,20 @@
 //! `UpdateCityGateToClient` обоих регионов и instantiation-ы `std::_Tree`
 //! карт `long → CCityGate*` и `long → tagCityGate`. Статусы общих
 //! `AI_Stand`/`AI_BeAttack`/`AI_Died` (`1:001dcb80`) и `AI` (`1:001dcbb0`)
-//! сохранены по evidence-блоку старого владельца без повторной сверки.
+//! унаследованы от evidence-блока старого владельца без повторной сверки.
+//! Региональное гейтовое тело: общие opcode константы `OperatorCityGate`,
+//! wire-проекция client gate state, скалярные правила gate-операций обоих
+//! владельцев (city `0x001CF370..0x001CF640` и country
+//! `0x001CAC80`/`0x001CADD0`/`0x001CB1E0..0x001CB310`) и общий x-major
+//! footprint scan (`0x001CAAA0`) — статусы унаследованы от шапок старых
+//! владельцев без повышения.
 //!
 //! Принятое решение по vtable: slot `+0x178` ворот указывает на общий no-op
 //! thunk `0x00485540` (pub-символ `?OnDied@CCityGate@@UAEXXZ` = `1:00084540`)
 //! вместо inherited `CBuild::OnDied` (`0x001DD9D0`, у владельца постройки
 //! статус UNKNOWN), поэтому сохранённое script-поле ворот не исполняется из
 //! death-pipeline. Особенность зафиксирована как поведение оригинала и не
-//! «улучшается»; сам death-контракт ворот остаётся открытым вопросом и
-//! переносится будущей порцией death-pipeline.
-//!
-//! Вторая порция (волна Z-M-X, семья регионов country+nation+city + гейты)
-//! добавляет региональное гейтовое тело: общие opcode константы
-//! `OperatorCityGate`, wire-проекцию client gate state, скалярные правила
-//! gate-операций обоих владельцев (city `0x001CF370..0x001CF640` и country
-//! `0x001CAC80/0x001CADD0/0x001CB1E0..0x001CB310`) и общий x-major footprint
-//! scan (`0x001CAAA0`). Статусы сохранены из шапок старых владельцев без
-//! повышения; сами region-обходы карт и применение block-эффектов остаются у
-//! переходных aggregate-ов старого пакета.
+//! «улучшается»; сам death-контракт ворот остаётся открытым вопросом.
 
 use nebokrai_shared::values::CGuid;
 
