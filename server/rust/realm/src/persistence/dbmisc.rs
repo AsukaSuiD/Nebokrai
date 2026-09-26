@@ -61,8 +61,17 @@ const LOAD_AUCTION_LIMIT: i32 = 100_000;
 /// INSERT 1..3 и A2B 7..9): живой отказ A2S в `DoneListIn` вместо него
 /// публикует чужой `OT_OUT_INSERT_NEW_ITEM_ERROR` (ветка ниже в этом файле),
 /// поэтому член 6 — мёртвый объявленный discriminant без наблюдаемой записи.
-/// Следующие члены продолжают последовательность 8..14: их значения — INFERRED
-/// продолжением от машинной точки 7 (новых машинных записей не снималось).
+/// Хвост enum (после машинной точки 7) снят досверкой писателей и потребителей
+/// `Nworldserver.exe` той же точной пары: 10 = delete-item-успех (producer RVA
+/// `0xF2B1D`, consumer → DelItemFromDb `0xF364E`), 13 = delete-item-back
+/// (consumer-ветвь `0xF36D7`; producer не наблюдается — имя INFERRED), 16 =
+/// read-auction-result (producers `0xF53D9`/`0xF1FC1`, consumer — ветвь idx14
+/// bytemap `0xF2BF8`), 19 = modify-money (producer `0xF2B28`, consumer →
+/// DelMoneyFromDb `0xF375D`; поля note player/money подтверждены). Членов
+/// 11/12/14/15/17/18 машинная запись не знает — UNKNOWN и не объявляются.
+/// Фантомный член «read auction» (прежнее значение 10) удалён: машинного
+/// note-входа у этой операции нет (обработчик вызывается напрямую), живых
+/// write-site в Rust не было; значение 10 занято delete-item.
 ///
 /// Число не выходит в wire и здесь намеренно не переиспользуется как protocol
 /// ID: наблюдаемым контрактом являются названные переходы между очередями.
@@ -81,11 +90,14 @@ pub enum OperatorType {
     OT_IN_MODIFY_STATE_A2B = 7,
     OT_OUT_MODIFY_STATE_A2B_OK = 8,
     OT_OUT_MODIFY_STATE_A2B_ERROR = 9,
-    OT_IN_READ_AUCTION = 10,
-    OT_OUT_READ_AUCTION_RESULT = 11,
-    OT_IN_DELETE_ITEM_SUCESS = 12,
+ /// Машинная точка 10: producer RVA `0xF2B1D`; consumer → DelItemFromDb `0xF364E`.
+    OT_IN_DELETE_ITEM_SUCESS = 10,
+ /// Число 13 MATCH (consumer-ветвь `0xF36D7`); имя — INFERRED (producer не наблюдается).
     OT_IN_DELETE_ITEM_BACK = 13,
-    OT_IN_MODIFY_MONEY = 14,
+ /// Машинная точка 16: producers `0xF53D9`/`0xF1FC1`; consumer — ветвь bytemap `0xF2BF8`.
+    OT_OUT_READ_AUCTION_RESULT = 16,
+ /// Машинная точка 19: producer `0xF2B28`; consumer → DelMoneyFromDb `0xF375D`.
+    OT_IN_MODIFY_MONEY = 19,
 }
 
 pub struct DbNote {
