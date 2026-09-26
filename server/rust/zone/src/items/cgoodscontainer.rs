@@ -1,14 +1,6 @@
-//! Базовый derived lifecycle `CGoodsContainer` исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
-//!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cgoodscontainer.rs` (волна Z-C1); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса (не
-//! расхождения): `CContainer` — Zone `items/ccontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константа — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `ShapeIdentity` —
-//! Zone `regions/` (re-export `identity`), `CGuid` и wire-кодеки — Shared.
+//! Базовый derived lifecycle `CGoodsContainer` исторического GameServer:
+//! owner type/id, container mode и общая stack-ветка add поверх
+//! `CContainer`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/container/cgoodscontainer.cpp`. Constructor,

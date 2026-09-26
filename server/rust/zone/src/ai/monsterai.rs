@@ -2,17 +2,17 @@
 //! приручённого `CPet`: типизированные решения OnSchedule/OnIdle/OnChangeSkill,
 //! отдельный timestamp интервала атаки и hub-оркестрация преследования,
 //! стояния, снятия цели и stiffen-перехода над владельцами старого пакета.
+//! Контракт: `docs/gameplay/npc-ai.md`.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходные владельцы PDB:
-//! `server/gameserver/appserver/ai/monsterai.cpp` (ядро расписания), соседние
+//! `server/gameserver/appserver/ai/monsterai.cpp` (ядро расписания); соседние
 //! вызовы `ai/baseai.cpp`, `ai/pet.cpp` и координатор
-//! `appserver/skills/monsterbaseattack.cpp` остаются у своих порций.
+//! `appserver/skills/monsterbaseattack.cpp` — свои владельцы.
 //!
-//! Машинная база кластера A1 (VERIFIED по этой паре, до переноса свидетельства
-//! зафиксированы в старом файле `appserver/ai/monsterai.rs` и его соседях):
+//! Машинная база (VERIFIED по этой паре):
 //!
 //! - `CMonsterAI::OnSchedule` (`1:0x1dbf80` → RVA `0x1DCF80`): пустой базовый
 //!   hook; owner `[+0x68]` обязателен; `HasTarget == 1`; очереди пусты
@@ -46,11 +46,11 @@
 //! - Контракт результата Begin: отказ — это `OnLoseTarget + AddAIEvent(5)`
 //!   (в Rust — `BeginRejected` → `release_owned_monster_target` +
 //!   `begin_active_ai_search_enemy` в `finish_monster_skill_call`).
-//! - `CBaseAI::MoveTo` (`baseai.cpp` RVA `0x0C9020`; `0x0C8020` — середина
-//! Slip, ранний якорь исправлен по свежей сверке прологов): один Slip для ходьбы,
-//!   два для бега с исходным направлением; после Move timestamp берётся заново.
+//! - `CBaseAI::MoveTo` (`baseai.cpp` RVA `0x0C9020`; адрес `0x0C8020` —
+//!   середина `Slip`, не вход MoveTo): один Slip для ходьбы, два для бега с
+//!   исходным направлением; после Move timestamp берётся заново.
 //!
-//! Честные UNKNOWN этой порции (не достраиваются догадкой): сайт вызова `Run`
+//! UNKNOWN (не достраиваются догадкой): сайт вызова `Run`
 //! и каденсия AI глобальным циклом; точная форма backoff-шага ветви
 //! преследования `MoveTo`; семантика поля `owner+0x170`, принятого здесь как
 //! `can_fight` по INFERRED name; маскировка вызова vt `+0x12C` вокруг Tracing;
@@ -58,7 +58,7 @@
 //! `GetDefaultAttackSkillID` 0x004CE240) и поле `tdI[2]`; type шаблона списка
 //! навыков монстра (удерживается setup-срезом, а не выводом шаблона).
 //!
-//! Объявленные швы переноса (не расхождения):
+//! Швы к hub-владельцам:
 //!
 //! - Трейты ниже — переходные фасады прежних владельцев `CGame`, `CPlayer`,
 //!   `CServerRegion`, `ServerRegionOwner`, `CMoveShape` и `CMonster`
@@ -70,7 +70,7 @@
 //!   вводятся (ADR-0013).
 //! - Порядковые предикаты по `ai_type` записаны числовыми наборами вместо
 //!   матчинга по `MonsterAiKind` (классификатор `CAIFactory::CreateAI` остаётся
-//!   владением `appserver/ai/aifactory.rs` до порции фабрики). Машинный реестр
+//!   владением старого пакета `appserver/ai/aifactory.rs`). Машинный реестр
 //!   (VERIFIED): `CAIFactory::CreateAI` RVA `0x1DC550`, byte-map `0x5DCB08`,
 //!   jump-table `0x5DCA94`, default-case `0x5DCA32` → `CMonsterAI`. Точная
 //!   таблица: 0 CGladiator, 1 CPassiveGladiator, 2 CSmartGladiator,
@@ -526,7 +526,7 @@ pub trait MonsterDispatcherGame {
     ) -> Option<ShapeView>;
 
     // Пространственный runtime `CBaseAI::MoveTo` (slip-шаги и задержка хода;
-    // сами FindFreeCell-порядки остаются у прежнего `baseai` до его порции).
+    // сами FindFreeCell-порядки — владение `ai/baseai.rs` и hub-реализации).
     fn find_slip_step_in_direction(
         &self,
         region: &<Self::RegionOwner as MonsterDispatcherOwner>::Region,
@@ -560,8 +560,8 @@ pub trait MonsterDispatcherGame {
         figure: ShapeFigure,
     ) -> bool;
 
-    // Узкие маршруты к ещё hub-владельцам производных AI (их перенос — свои
-    // порции; здесь только прежний контракт вызова).
+    // Узкие маршруты к ещё hub-владельцам производных AI (здесь только
+    // прежний контракт вызова).
     /// derived `OnLoseTarget` близнеца Цзюмай; признак отказа отбрасывается
     /// вызывающим диспетчером, как и раньше.
     fn release_jiumai_target(

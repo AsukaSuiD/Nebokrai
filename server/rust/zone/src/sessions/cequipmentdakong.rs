@@ -1,15 +1,12 @@
-//! Сессионное расширение DaKong/XiangQian GameServer, перенесённое в Zone
-//! `sessions/`.
+//! Сессионное расширение DaKong/XiangQian GameServer в Zone `sessions/`.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/session/cequipmentdakong.rs` (волна Z-C4);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): восьмислотовый shadow-контейнер — Zone
-//! `items/cequipmentdakongcontainer.rs`, DaKong-семейство фабрики
-//! (`deal_enchase_gems`, ветви внешних свойств, условие седьмого слота, снимки
-//! камня/предмета и типы событий) — Zone `content/goodsfactory.rs` (волна
-//! Z-G0b) и реэкспортируется здесь для потребителей старого пакета,
-//! `ShapeIdentity` — Zone `regions/identity.rs`, `CGuid` — Shared.
+//! Прежняя форма: `src/gameserver/appserver/session/cequipmentdakong.rs`.
+//! Типы подключаются из других zone-владельцев: восьмислотовый
+//! shadow-контейнер — Zone `items/cequipmentdakongcontainer.rs`,
+//! DaKong-семейство фабрики (`deal_enchase_gems`, ветви внешних свойств,
+//! условие седьмого слота, снимки камня/предмета и типы событий) — Zone
+//! `content/goodsfactory.rs` и реэкспортируется здесь для потребителей старого
+//! пакета, `ShapeIdentity` — Zone `regions/identity.rs`, `CGuid` — Shared.
 //!
 //! Точная пара `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/session/cequipmentdakong.cpp`. Расширение во

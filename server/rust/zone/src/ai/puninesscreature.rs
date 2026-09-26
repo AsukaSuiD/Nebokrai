@@ -7,8 +7,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\puninesscreature.cpp`.
-//! Тела дочитаны машинно волной Z-AI (3 из 3 методов класса, кроме ctor
-//! `0x0060F370`):
+//! Машинная сверка: разобраны все три метода класса, кроме ctor `0x0060F370`:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -21,10 +20,9 @@
 //! приручённого монстра (его текущий владелец `CPet`, даже при setup AI7).
 //! `GetDirPos` (`0x0045B330`) безотказен для восьми направлений.
 //!
-//! Граница порции Z-AI (не расхождения): общий monster tick hub, runtime-вход
-//! `CGame` (собственный `OnSchedule` вызывается до background/passive) и
-//! применение цели остаются hub-владением своих порций; пространственная
-//! мутация — общий `MoveTo` `ai/monsterai.rs`.
+//! Остаются hub-владением: общий monster tick hub, runtime-вход `CGame`
+//! (собственный `OnSchedule` вызывается до background/passive) и применение
+//! цели; пространственная мутация — общий `MoveTo` `ai/monsterai.rs`.
 
 use nebokrai_shared::runtime::get_line_direction;
 

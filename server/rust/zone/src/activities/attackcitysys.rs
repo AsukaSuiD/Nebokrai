@@ -1,4 +1,4 @@
-//! Владелец GameServer-снимка городских войн `CAttackCitySys`, перенесённый в Zone `activities/`.
+//! Владелец GameServer-снимка городских войн `CAttackCitySys` в Zone `activities/`.
 //!
 //! Snapshot/setup (`0x00060E40`), initial state (`0x000600F0`), faction update
 //! (`0x000601F0`) и фазовые callbacks `0x00060320`,

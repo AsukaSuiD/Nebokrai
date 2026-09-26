@@ -5,12 +5,9 @@
 //!
 //! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), `appserver/skills/{thunder,thunder2}.cpp`.
-//! Адресная конвенция факт-листа волны: истинный RVA (pub off + 0x1000;
-//! VA = off + 0x401000, т.е. VA = RVA + 0x400000). Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/thunder.rs`; тела перенесены
-//! буквально порцией T1 «thunder/leiming2/tianhuo — BF-облака призыва».
+//! Адресная конвенция: истинный RVA (pub off + 0x1000; VA = RVA + 0x400000).
 //!
-//! Машинный факт (MATCH по снятой доказательной базе):
+//! Машинные факты:
 //!
 //! - Check `0x121330` (VA `0x521330`): S=null → тихий 0; RTTI → CPlayer;
 //!   состояния S в порядке первого совпадения (0x192 → ZHGS0046, 0xD2 →
@@ -30,37 +27,34 @@
 //!   читает Master/предмет/таблицу, затем параметры конструктора; clock
 //!   предшествует ID, SetCenter/Initialize — проверке региона U. Отказ самого
 //!   Summon не меняет завершающий End(1); область живёт независимо от навыка.
-//!   RVA тела Summon факт-лист волны не называет — новых утверждений здесь
-//!   нет, перенос прежнего тела буквально.
+//!   RVA тела Summon разведкой не назван; тело следует прежнему буквально.
 //! - Численные адаптеры сохраняют x87-усечение и младший DWORD результата i64.
 //!
-//! Fix №2 порции T1 (BF918-доставка, MATCH): `CThunder::AI` `0x121BAB`
-//! (VA `0x521BAB`) и `CLeiming2::AI` `0x12080B` (VA `0x52080B`) рассылают
+//! BF918-доставка: `CThunder::AI` `0x121BAB` (VA `0x521BAB`) и
+//! `CLeiming2::AI` `0x12080B` (VA `0x52080B`) рассылают
 //! `SendToAround(U-шейп, player)`; `CTianhuo::AI` `0x12300B` (VA `0x52300B`)
-//! шлёт точечный `SendToPlayer`. Ранее принятая точечная унификация
-//! («решение C» порции №6b) верна только для tianhuo/ResetSkill/fatalblow;
-//! здесь круг для thunder/leiming2 восстановлен: payload тот же (id, GUID,
-//! len, blob `SerializeForOldClient`), доставка — через hub-шов
+//! шлёт точечный `SendToPlayer`. Точечная унификация верна только для
+//! tianhuo/ResetSkill/fatalblow; для thunder/leiming2 — круг: payload тот же
+//! (id, GUID, len, blob `SerializeForOldClient`), доставка — через hub-шов
 //! `send_summon_cloud_goods_update_around`. Форма кадра совпадает с точечным
-//! `send_battle_fairy_goods_update` (порция №6b): координатор №6b не открывает
-//! сборку кадра отдельно от точечной доставки, поэтому круговая ветка собирает
-//! тот же кадр у своего шва — второго энкодера формы здесь не появляется.
-//! UNKNOWN: второй
-//! аргумент исходного `SendToAround` (exclude-player) доказательной базой не
-//! покрыт; делегат доставляет без исключений (`None`), как делала прежняя
-//! реконструкция до унификации.
+//! `send_battle_fairy_goods_update`: координатор `battlefairyskill` не
+//! открывает сборку кадра отдельно от точечной доставки, поэтому круговая
+//! ветка собирает тот же кадр у своего шва — второго энкодера формы здесь
+//! не появляется. UNKNOWN: второй аргумент исходного `SendToAround`
+//! (exclude-player) доказательной базой не покрыт; делегат доставляет без
+//! исключений (`None`).
 //!
 //! Объявленные швы переноса (не расхождения): hub-трейт `SummonCloudGame` —
 //! переходный фасад прежнего `CGame` (реализация у делегата
 //! `appserver/skills/thunder.rs`); конструктор фаланги, её Initialize(RNG) и
 //! регистрация области с входным `0xBF502` выполняются прежним владельцем
 //! через callback `complete_summon` (`ThunderSummon`/`Leiming2Summon`); сами
-//! типы фаланг — zone `skills/thunderphalanx`/`skills/thunder2phalanx`
-//! (порция T2), прежний владелец вызывает их конструкторы фасадом; внутри
-//! callback машинный порядок
-//! SetCenter → Initialize → допуск региона U → Add → `0xBF502` сохранён.
+//! типы фаланг — zone `skills/thunderphalanx`/`skills/thunder2phalanx`,
+//! прежний владелец вызывает их конструкторы фасадом; внутри callback
+//! машинный порядок SetCenter → Initialize → допуск региона U → Add →
+//! `0xBF502` сохранён.
 //! Потребление швов статическое (generic), dyn-совместимость и
-//! `Send`-контракт не вводятся (прецедент ADR-0013). Часы `now` — шов
+//! `Send`-контракт не вводятся (ADR-0013). Часы `now` — шов
 //! делегата (прежний main-loop runtime). UNKNOWN списком: второй аргумент
 //! `SendToAround` (выше); RVA тела Summon CThunder (выше).
 
@@ -97,12 +91,12 @@ pub(crate) const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 const SUMMON_CLOUD_GOODS_UPDATE_MESSAGE: i32 = 0x0b_f918;
 
 /// Hub-фасады прежнего владельца `CGame` для BF-облаков призыва
-/// (CThunder/CLeiming2/CTianhuo, порция T1); открывают только прежние
+/// (CThunder/CLeiming2/CTianhuo); открывают только прежние
 /// обращения, имена сохраняют исходную операцию. Реализация остаётся у
 /// делегата старого пакета `appserver/skills/thunder.rs`.
 pub trait SummonCloudGame: BattleFairyGame {
-    /// Around-доставка кадра `0xBF918` от формы игрока-U (fix №2 порции T1,
-    /// якоря `0x121BAB`/`0x12080B`). Значение второго аргумента исходного
+    /// Around-доставка кадра `0xBF918` от формы игрока-U (якоря
+    /// `0x121BAB`/`0x12080B`). Значение второго аргумента исходного
     /// `SendToAround` (exclude-player) — UNKNOWN; делегат не исключает никого.
     fn send_summon_cloud_goods_update_around(&mut self, player_id: i32, message: &CMessage);
 
@@ -142,9 +136,9 @@ pub fn thunder_base_damage(target_damage_factor: u32, sprite: i32) -> i32 {
     truncate_original_i64_low(f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6)
 }
 
-/// Кадр `0xBF918` с круговой доставкой от U (fix №2 порции T1): форма кадра
-/// идентична точечному `send_battle_fairy_goods_update` (порция №6b) — id,
-/// GUID, len, blob `SerializeForOldClient`; отличается только получатель.
+/// Кадр `0xBF918` с круговой доставкой от U: форма кадра идентична точечному
+/// `send_battle_fairy_goods_update` — id, GUID, len, blob
+/// `SerializeForOldClient`; отличается только получатель.
 fn send_summon_cloud_goods_update<Game: SummonCloudGame>(
     game: &mut Game, player_id: i32, ex_id: CGuid, old_client_payload: &[u8],
 ) {

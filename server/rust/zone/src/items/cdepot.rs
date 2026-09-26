@@ -1,14 +1,8 @@
-//! Lock/position/expansion core `CDepot` исторического GameServer, перенесённый
-//! в Zone `items/` — владельца типов контейнеров и операций над ними.
+//! Lock/position/expansion core `CDepot` исторического GameServer: locked
+//! склад поверх `CVolumeLimitGoodsContainer` с базовыми позициями `0..95` и
+//! extension-anchor группами по 13 ячеек.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cdepot.rs` (волна Z-C2a); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса: amount-limit
-//! отчёты — Zone `items/camountlimitgoodscontainer.rs`, volume base и его wire
-//! helper — Zone `items/cvolumelimitgoodscontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `CGuid` —
-//! Shared. Player-владелец публикует этот контейнер под extend-id
+//! Player-владелец публикует этот контейнер под extend-id
 //! [`PlayerContainerKind::Depot`][crate::items::playercontainers::PlayerContainerKind]
 //! единого каталога (дизайн D4); константы `96/13/161` ниже — внутренняя
 //! разметка позиций склада (база 96 ячеек, шаг extension-группы 13, конец

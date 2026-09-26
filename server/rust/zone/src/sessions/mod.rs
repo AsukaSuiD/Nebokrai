@@ -15,7 +15,7 @@ mod validation; // состояние проверок игрового вход
 
 pub use sequence::{
     CSequenceRegistry, CSequenceString, SequenceRegistryInitializationError, SequenceSerializeError,
-}; // реестр и строка проверочной последовательности.
+};
 pub use validation::{
     LoginValidationRelease, LoginValidationState, PreparedSequence, SequencePreparationError,
-}; // подготовка последовательности и состояние входа.
+};

@@ -27,8 +27,8 @@
 //! passive-реакцию Defense. `Clear` (`1:0x20fec0` → RVA `0x210ec0`)
 //! опустошает список после базового `CBaseAI::Clear` hub-владельца.
 //!
-//! Хранилище переходит в Zone целиком; владелец экземпляра остаётся переходный
-//! `CMonster` старого пакета. Критерий спасения vulnerable-товарищей по доле
+//! Хранилище принадлежит Zone; экземпляр живёт на переходном `CMonster`
+//! старого пакета. Критерий спасения vulnerable-товарищей по доле
 //! HP (`< 0.4`) относится к SmartGladiator и в этом типе не встречается.
 //! Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\passivegladiator.cpp`.

@@ -7,9 +7,8 @@
 //! EncodeToByteArray 0x005F8ED0, CalculateAttackPower 0x005F92D0,
 //! Attack 0x005F93B0, AI 0x005F94B0.
 //! Композит `CSnowStormPhalanx` (CShape + область) и тела
-//! `summon_snow_storm`/`apply_snow_storm_attack` перенесены из старых
-//! адаптера и клея буквально порцией T5 «zonalcast-хаб»; новых машинных
-//! оснований композит не добавляет. Summon сохраняет Master(country0) и
+//! `summon_snow_storm`/`apply_snow_storm_attack` следуют старым адаптеру и
+//! клею без новых машинных оснований. Summon сохраняет Master(country0) и
 //! Player EM либо 0 до свежей таблицы; порядок запросов — в
 //! `SnowStormSummonParameters::read`; после свойств ctor получает часы и ID.
 //! SetTile→Initialize с RNG выполняются до повторного чтения actual

@@ -5,9 +5,9 @@
 //! `4F5C98E0…`, RSDS match), `appserver/skills/{agility,agility2,natural,
 //! rapture,daubpoison,manashield,machineshield}.cpp` и owners состояний.
 //!
-//! MATCH по машинной разведке порции №4 (запись в docs/status/audit.md
-//! 26.09.2026): Check после reuse (usage 10005 общего cast) не даёт источнику
-//! не типа Player Move0, а у игрока MP0 означает тихий отказ; щиты требуют
+//! Машинно установлено: Check после reuse (usage 10005 общего cast) не даёт
+//! источнику не типа Player Move0, а у игрока MP0 означает тихий отказ;
+//! щиты требуют
 //! Player и допускают Move0 даже при MP0. Строки ошибок GS0278/GS0279/GS0288
 //! байт-сверены. AI: первая фаза читает MP, заново спрашивает цену, выполняет
 //! signed DWORD-проверку, затем SetMP → OnChangeStates → CAN → visual0 →

@@ -1,15 +1,6 @@
-//! Storage/query/lock core `CAmountLimitGoodsContainer` GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
-//!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/camountlimitgoodscontainer.rs` (волна Z-C1);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): listener handles — Zone `items/ccontainer.rs`, goods-core и
-//! mode со stack-merge — Zone `items/cgoods.rs`/`items/cgoodscontainer.rs`,
-//! реестр `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b),
-//! `ShapeIdentity` — Zone `regions/` (re-export `identity`), `CGuid` и
-//! wire-кодеки — Shared.
+//! Storage/query/lock core `CAmountLimitGoodsContainer` исторического
+//! GameServer: owned хранилище GUID→`CGoods` с limit, lock-видимостью и
+//! позиционными операциями.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/camountlimitgoodscontainer.cpp`.
@@ -27,7 +18,7 @@
 //! скрыты от public find/get. `GCM_TEST` не уничтожает отделённые goods: Rust
 //! возвращает их вызывающему, сохраняя ownership без legacy raw pointers.
 //! Полный persisted codec достигнут общим player GameSave-проходом; listener
-//! messages и player AI tree ещё требуют реконструкции; полный декомпилят хранится локально до замыкания соседних owners.
+//! messages и player AI tree ещё требуют реконструкции.
 
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoods::{CGoods, GoodsDecodeError};

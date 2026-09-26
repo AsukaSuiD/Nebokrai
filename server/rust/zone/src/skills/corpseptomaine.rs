@@ -6,15 +6,12 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/corpseptomaine.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/corpseptomaine.rs`; тела execute_owned,
-//! player-путь и `add_corpse_poison_state` перенесены буквально (кластер D
-//! полосы Monster 0x19x, карта — запись аудита «Zone skills: карта полосы
-//! Monster 0x19x — 5 кластеров волн», 26 сентября 2026).
+//! `appserver/skills/corpseptomaine.cpp`; тела execute_owned,
+//! player-путь и `add_corpse_poison_state` перенесены буквально.
 //!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
+//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
 //! D3-corpseptomaine.md`, тела `.local/recon-de/disasm/CCorpsePtomaine.txt`)
-//! — MATCH по всем пунктам, кроме FIX F2 ниже:
+//! подтверждает всё, кроме исправленного FIX F2:
 //!
 //! - vtable `0x257F5C`: End `0x546090` — ICF-фолд общего End
 //!   (`CAgility::End` — нули `[+0x50]/[+0x4C]`, GetUser → SetMoveable(1) →
@@ -61,10 +58,10 @@
 //! виртуальным вратам, а разрешители Rust отвечают «мёртв/неатакуем» —
 //! зафиксированы как неснимаемый остаток модели арены, машинная форма
 //! scan-ветки player-пути сохранена. Monster-путь фильтра не имел и не
-//! имеет: кандидаты читаются общим hub-хелпером `monsterattack` кластера A2.
+//! имеет: кандидаты читаются общим hub-хелпером `monsterattack`.
 //!
 //! Объявленные швы переноса (не расхождения): hub-трейты `monsterattack`
-//! (кластер A2; `published region` публикует настоящий derived region без
+//! (`published region` публикует настоящий derived region без
 //! копии base/состояния, публикация настоящего `CPlayerAI` — тот же контракт
 //! коллебека удара), арена состояний — общий hub `spiderpoison`
 //! (`SpiderPoisonStateArena`: Cure-факт и замена первого 0x191 с порядком

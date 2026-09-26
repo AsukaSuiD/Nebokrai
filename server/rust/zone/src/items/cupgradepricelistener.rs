@@ -1,12 +1,5 @@
-//! Visitor суммарной цены equipment-upgrade GameServer, перенесённый в Zone
-//! `items/` — владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/listener/cupgradepricelistener.rs` (волна Z-C2c);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): `CGoods` — Zone `items/cgoods.rs`, GAP-константа цены
-//! upgrade — Zone `content/goods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b).
+//! Visitor суммарной цены equipment-upgrade исторического GameServer:
+//! wrapping-accumulator value-id `1` свойства `GAP_GOODS_UPGRADE_PRICE`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/listener/cupgradepricelistener.cpp`. Accumulator начинается с

@@ -1,11 +1,9 @@
 //! Яростный прорыв `CRageBreak` (0x6E): Check, AI и порядок наложения
-//! состояний. Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`)
+//! состояний. Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`)
 //! + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/ragebreak.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/ragebreak.rs`; тела перенесены буквально
-//! порцией T4. Общий stateskill старого пакета обслуживает три Begin,
-//! registered visual loop1 и полный End (навигация делегата); здесь —
-//! конкретные Check/AI, порядок состояний и wire-visual.
+//! `appserver/skills/ragebreak.cpp/.h`. Общий stateskill старого пакета
+//! обслуживает три Begin, registered visual loop1 и полный End (навигация
+//! делегата); здесь — конкретные Check/AI, порядок состояний и wire-visual.
 //!
 //! Машинные якоря (VA = RVA + 0x400000): ctor `0x59F880` (0x54 байта,
 //! фабричный индекс `0x15`, `CGoodsContainer::Add` `0x469C4B`), vtable

@@ -1,4 +1,4 @@
-//! Проверочная последовательность сессии Zone; перенесена из переходного
+//! Проверочная последовательность сессии Zone. Прежняя форма: переходный
 //! `src/gameserver/appserver/message/sequencestring.rs`.
 //!
 //! Исходный владелец PDB: `server/gameserver/appserver/message/sequencestring.cpp`.

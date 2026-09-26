@@ -8,13 +8,11 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterthorn.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/monsterthorn.rs` (кластер A2 полосы
-//! Monster, 26 сентября 2026); монстр-кейсы диспетчера остаются у hub
-//! прежнего пакета.
+//! `appserver/skills/monsterthorn.cpp`; тела перенесены буквально.
+//! Монстр-кейсы диспетчера остаются у hub старого пакета.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`)
+//! подтверждает:
 //!
 //! - ctor (RVA `0x141490`): `[+4] = 0x197`; Begin-скелет трёх форм
 //!   (`0x141520`/`0x1415F0`/`0x1416E0`): форвард `CAttackSkill::Begin` →

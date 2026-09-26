@@ -1,13 +1,9 @@
-//! YuanBao-специализация однослотовой currency shadow GameServer, перенесённая
-//! в Zone `items/` — владельца типов контейнеров и операций над ними.
+//! YuanBao-специализация однослотовой currency shadow исторического
+//! GameServer: catalog `YUANBAO` и source extend `5` поверх generic core
+//! `cshadowwallet`.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cshadowyuanbao.rs` (волна Z-C3); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса (не
-//! расхождения): generic shadow core — Zone `items/cshadowwallet.rs`,
-//! `YuanBaoCurrency` — Zone `items/cyuanbao.rs`. Extend-литерал source-гейта
-//! выражен вариантом `PlayerContainerKind::YuanBao` единого каталога
-//! `items/playercontainers.rs` (дизайн D4).
+//! Source-гейт выражен вариантом `PlayerContainerKind::YuanBao` единого
+//! каталога `items/playercontainers.rs` (дизайн D4).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cshadowyuanbao.cpp`. Собственные

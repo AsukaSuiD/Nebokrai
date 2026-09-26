@@ -2,10 +2,7 @@
 //! BoaLock использует тот же lifecycle, но запрещает только движение.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
 //! RSDS match), `appserver/skills/blindstate.cpp` и `boalockstate.cpp`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/
-//! blindstate.rs`; тела перенесены буквально порцией №6c «self/zone-касты»
-//! (разведка — запись аудита «Zone skills: машинная разведка
-//! battlefairy-навыков (порция №6)», 26 сентября 2026). Данные и 8-байтная
+//! Тела перенесены буквально. Данные и 8-байтная
 //! запись семейства — `effects/blind.rs` (там же адреса конструкторов и
 //! общего кодека: Serialize `0x1F51E0`, Unserialize `0x1EAAC0`,
 //! GetRemainedTime `0x1F2CD0`, AI-fold `0x1D5BA0`); Begin самого CBlind —

@@ -3,17 +3,11 @@
 //! (0x1F9). Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), исходные владельцы
 //! `appserver/skills/{summoncreatureskill,summoncorpsecandle,summonskeleton,
-//! summonspore,bossfiendsummon}.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/summoncreatureskill.rs` и малые файлы
-//! констант; тела Begin/AI/Summon перенесены буквально (кластер C полосы
-//! Monster 0x19x, карта — запись аудита «Zone skills: карта полосы Monster
-//! 0x19x — 5 кластеров волн», 26 сентября 2026). Одноимённого класса
+//! summonspore,bossfiendsummon}.cpp`. Одноимённого класса
 //! `CSummonCreatureSkill` в PDB не существует: Rust-файл — общий путь
-//! дериватов `CSummonSkill` (факт карты полосы).
+//! дериватов `CSummonSkill`.
 //!
-//! Машинная разведка кластера по этой паре (свежая MATCH-запись, 26 сентября
-//! 2026) сняла семью целиком; сопоставление с перенесённым кодом — MATCH по
-//! всем пунктам:
+//! Машинная разведка по этой паре сняла семью целиком:
 //!
 //! - база `CSummonSkill`: ctor `0x1E0EC0` пишет `[+0x48] = 3`; dtor `0x5E0F20`
 //!   пишет sentinel `0x7FFFFFFF`;
@@ -27,11 +21,11 @@
 //!   только у игрока) → `CSkill::End` `0x4D84C0`; reuse-clock читается после
 //!   создания и публикации всех существ;
 //! - Summon: слот vtable `+0x94` K-вариант реален — трио-фолд `0x53E260`,
-//!   у CBossFiendSummon собственное тело `0x52C610`. Поправка к карте полосы:
-//!   Summon НЕ 4-классовый фолд — карта завышала RVA на −0x1000; истинные VA
-//!   тела семьи `0x53E260` (Summon трио), `0x53E8D0` (CheckCastCondition),
-//!   `0x53F270` (AI-фолд, читатель `K = Query(20010)`). JJ-вариант слота
-//!   `+0x5C` — stub `xor eax, eax; ret 0xC` у базы и у трио/BossFiend:
+//!   у CBossFiendSummon собственное тело `0x52C610`. Summon НЕ 4-классовый
+//!   фолд; истинные VA тела семьи `0x53E260` (Summon трио), `0x53E8D0`
+//!   (CheckCastCondition), `0x53F270` (AI-фолд, читатель `K = Query(20010)`).
+//!   JJ-вариант слота `+0x5C` — stub `xor eax, eax; ret 0xC` у базы и у
+//!   трио/BossFiend:
 //!   семантики 4-му аргументу НЕТ; живой JJ только
 //!   `CSpiderMist::Summon` `0x541140` (J1/J2 = tile X/Y точки через
 //!   SetTileXY слот `+0x88`);
@@ -44,14 +38,13 @@
 //! - `CSummonSkill::AfterUseSkill` `0x53CF30` изнашивает оружие только при
 //!   источнике-player; пересчёта свойств игрока в семье нет;
 //! - wire: AddToByteArray группы `0x1E47A0` и entry `0xBF502` с
-//!   `include_child = true` — MATCH zone-конверту `summonshape`;
+//!   `include_child = true`, как у zone-конверта `summonshape`;
 //! - пакет визуала `0xBFE01` читает GetDir «как есть»: ни Begins/AI/Summon/
-//!   UpdateVisualEffect, ни `CSkill::Begin` поворота не содержат. Прежний
-//!   явный `set_direction(get_line_direction(source→dest))` реконструкции
-//!   (player-стадия Begin и monster-Begin каста) — расхождение и удалён:
-//!   сверка с драйвером каста волны A (`appserver/skills/monsterbaseattack.rs`)
-//!   показала, что generic-хвост диспетчера сам ставит поворот, но семья
-//!   уходит в собственные executors раньше него; внешний поворот монстру
+//!   UpdateVisualEffect, ни `CSkill::Begin` поворота не содержат;
+//!   `set_direction` в реконструкции не вводится: сверка с драйвером каста
+//!   (`appserver/skills/monsterbaseattack.rs`) показала, что generic-хвост
+//!   диспетчера сам ставит поворот, но семья уходит в собственные executors
+//!   раньше него; внешний поворот монстру
 //!   задаёт движение подхода (`CMoveShape::OnMove` выставляет direction на
 //!   каждом шаге — `zone/regions/moveshape.rs::on_move_wire`), поворот
 //!   игрока принадлежит клиенту.

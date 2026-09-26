@@ -1,15 +1,11 @@
 //! Пошаговые снаряды `CEnergyBolt` (`0x1A0`), `CSnakeBolt` (`0x1A5`) и
-//! `CZombieClaw` (`0x1A2`). Источник: точная пара `gameserver.exe`
-//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходные владельцы
-//! `energybolt.cpp`, `snakebolt.cpp` и `zombieclaw.cpp`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/energybolt.rs`; тела Check/AI
-//! и helpers перенесены буквально (кластер B полосы Monster 0x19x, карта —
-//! запись аудита «Zone skills: карта полосы Monster 0x19x — 5 кластеров
-//! волн», 26 сентября 2026). ICF-свёртка классов доказана по RVA:
+//! `CZombieClaw` (`0x1A2`). Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`)
+//! + `GameServer.pdb` (RSDS match), исходные владельцы `energybolt.cpp`,
+//! `snakebolt.cpp` и `zombieclaw.cpp`. ICF-свёртка классов доказана по RVA:
 //! EnergyBolt ≡ SnakeBolt ≡ ZombieClaw, общий End `0x53AF50`; базовые
-//! Begin — CAttackSkill `0x5DEB00…`. Payload полёта и область удара вынесены
-//! раньше (`skills/execution/payload.rs` `PathProjectileProgress`/
-//! `PathProjectileScope`, порция 5 волны moveshape).
+//! Begin — CAttackSkill `0x5DEB00…`. Payload полёта и область удара —
+//! `skills/execution/payload.rs` (`PathProjectileProgress`/
+//! `PathProjectileScope`).
 //!
 //! CPlayer и CMonster разделяют зарегистрированный жизненный цикл Attack: Begin
 //! создаёт эффект до Check, первый AI повторно списывает MP и поворачивает U,

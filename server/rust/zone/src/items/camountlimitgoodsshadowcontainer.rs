@@ -1,13 +1,6 @@
-//! Count-limit слой goods shadow container исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/camountlimitgoodsshadowcontainer.rs`
-//! (волна Z-C3); отличия — нормализация `pub(crate)`→`pub` на границе crate и
-//! швы переноса (не расхождения): `PreviousContainer` — Zone
-//! `items/ccontainer.rs`, shadow/query core — Zone
-//! `items/cgoodsshadowcontainer.rs`.
+//! Count-limit слой goods shadow container исторического GameServer:
+//! максимум записей и `AddShadow` report поверх metadata/query core
+//! `CGoodsShadowContainer`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/camountlimitgoodsshadowcontainer.cpp`.
@@ -17,7 +10,7 @@
 //! incoming pointer-а после stack merge.
 //!
 //! `BTreeMap` и resolver mechanics принадлежат base owner-у. Clone target и
-//! packet assembly ещё требуют реконструкции; полный декомпилят хранится локально до их concrete caller-ов.
+//! packet assembly ещё требуют реконструкции.
 
 use super::ccontainer::PreviousContainer;
 use super::cgoodsshadowcontainer::{

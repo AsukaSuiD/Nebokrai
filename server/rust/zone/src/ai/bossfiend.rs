@@ -7,8 +7,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp`.
-//! Свидетельства машинной базы зафиксированы разведкой линий D/E и прежней
-//! шапкой `appserver/ai/bossfiend.rs`; тела перенесены буквально:
+//! Машинная сверка по этой паре:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -17,19 +16,17 @@
 //! | полная фиксация выбранного навыка: проверка таймера и запись момента призыва используют два отдельных чтения часов в исходных местах | тот же VA | [`choose_boss_fiend_attack_skill`] | `MATCH` |
 //! | `OnSearchEnemy`: один выбор проходит игроков, затем питомцев и сохраняет особое предпочтение целей не ближе минимальной дистанции текущего навыка | подтверждён прежней шапкой владельца | [`select_boss_fiend_enemy`] | `MATCH` |
 //!
-//! Граница порции E1 (не расхождения): общий monster tick hub — `Run`,
-//! боевой caller `OnSchedule` без обычного attack-speed gate, `OnIdle` со
-//! случайным шагом либо ожиданием, `OnMoving` и усыпление при отсутствии
-//! игроков — остаются hub-владением и этой волной не затрагиваются. FIFO
-//! caller сохраняет target/current skill, `Tracing`, `CheckCast` и потерю
-//! цели. Выполнение выбранного навыка (`bossfiendsummon` и реестр
-//! исполнителей) остаётся у своих skill-owner-ов.
+//! Остаются hub-владением: общий monster tick hub — `Run`, боевой caller
+//! `OnSchedule` без обычного attack-speed gate, `OnIdle` со случайным шагом
+//! либо ожиданием, `OnMoving` и усыпление при отсутствии игроков. FIFO caller
+//! сохраняет target/current skill, `Tracing`, `CheckCast` и потерю цели.
+//! Выполнение выбранного навыка (`bossfiendsummon` и реестр исполнителей)
+//! остаётся у своих skill-owner-ов.
 //!
-//! Объявленные швы (не расхождения):
+//! Швы к hub-владельцам:
 //!
 //! - [`BossFiendDispatcherMonster`] — доступ к одноразовым порогам призыва и
-//!   таймеру последнего принудительного призыва на hub-владельце `CMonster`;
-//!   сами состояние и тело выбора перенесены.
+//!   таймеру последнего принудительного призыва на hub-владельце `CMonster`.
 //! - Часы проверки таймера и фиксации призыва читаются отдельными вызовами
 //!   `now_milliseconds` (fn-параметр делегата старого main loop); точное
 //!   значение равно `game_tick_milliseconds`
@@ -37,10 +34,9 @@
 //! - Enemy-проход повторяет общий шов кандидатов
 //!   [`super::lord::EnemySearchDispatcherRegion`]/
 //!   [`super::lord::EnemySearchDispatcherPlayer`]; ядро отбора
-//!   [`consider_distance_target`] совпадает с дистанционным ядром
-//!   hub-`guardtarget` (`consider_guard_distance_target`), которое охранники
-//!   переносят своей волной — до неё этот файл держит тело собственного RVA
-//!   владыки демона, общий дом пересобирается той порцией.
+//!   [`consider_distance_target`] ниже повторяет общее дистанционное ядро
+//!   `ai/guardtarget.rs` (`consider_guard_distance_target`), но держит тело
+//!   собственного RVA владыки демона.
 
 use nebokrai_shared::resources::{MonsterProperties, MonsterSkill};
 

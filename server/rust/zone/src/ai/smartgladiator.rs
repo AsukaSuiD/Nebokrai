@@ -7,7 +7,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp`.
-//! Тела дочитаны машинно волной Z-AI (5 из 5 функций класса):
+//! Машинная сверка: разобраны все пять функций класса:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -16,18 +16,18 @@
 //! | `OnSchedule`: пустые очереди `[+0x14]`/`[+0x28]`; бой по общей схеме без `GetAtcInterval`-гейта; без цели и непустом `m_qTarget` — `front` (`tagCell{lX,lY}`) идёт в координатный `CBaseAI::MoveTo(run=0)` (`0x0061083D`), затем `pop` всегда, включая неуспешное движение | VA `0x006106E0` (входной hook `0x00485540`, безцелевая ветвь `0x006107EF`) | [`execute_smart_gladiator_retreat`] расписание — hub-оркестрация; ячейка — [`SmartGladiatorState`] | `MATCH` |
 //! | `OnSearchEnemy`: игроки перед питомцами, живые внутри `GetGuardRange` (vt `+0x138`); ближайшая угроза (`<=` заменяет запись) и цель с HP vt `+0xD0`/`+0xD8` < 0.4 с минимальным абсолютным HP (замена при строго меньшем); vulnerable → virtual `SetTarget`, иначе от ближайшего — `GetLineDir(threat → owner)`, `GetDirPos` и `push_back` `tagCell{lX,lY}` | VA `0x00610AC0` | [`SmartGladiatorSelection`], [`select_smart_gladiator_enemy`], [`retreat_step_from`] | `MATCH` |
 //! | `WhenBeenHurted`: базовый hurt всегда (`0x004C93E0`); тип 400 вне боя — существующий игрок при HP-части владельца < 0.75 (double-константа `0x3FE8000000000000`, vt `+0xD0`/`+0xD8`) принимается целью, иначе отход от этого игрока; игрок исчез — отход от ближайшего живого игрока, иначе **шаг к ближайшему монстру**, иначе шаг по текущему `GetDir`; тип 600 вне боя — приручённое существо или повозка принимается целью | VA `0x006103B0` | [`apply_player_hurt_response`], [`apply_monster_hurt_response`] | `MATCH` |
-//! | hurt-отход/сближение: найденный ориентир пишет направление формы `CShape::SetDir` (owner vtable `+0x60`, `0x0044A1C0`) перед `GetDirPos` и общим координатным `MoveTo(run=0)` (AI vtable `+0x58`, `0x004C9020`, точка вызова `0x006105A9`) | vtable `CShape` `0x0064EA04`, RVA-место `0x00610561`/`0x006105A9` | [`apply_player_hurt_response`] | `MATCH`; две ветки прежнего hub расходились: шаг к ближайшему монстру прежний hub разворачивал отходом, а запись `SetDir` не выполнял — исправлено волной Z-AI |
+//! | hurt-отход/сближение: найденный ориентир пишет направление формы `CShape::SetDir` (owner vtable `+0x60`, `0x0044A1C0`) перед `GetDirPos` и общим координатным `MoveTo(run=0)` (AI vtable `+0x58`, `0x004C9020`, точка вызова `0x006105A9`) | vtable `CShape` `0x0064EA04`, RVA-место `0x00610561`/`0x006105A9` | [`apply_player_hurt_response`] | `MATCH`; две ветки прежнего hub расходились: шаг к ближайшему монстру прежний hub разворачивал отходом, а запись `SetDir` не выполнял (расхождения устранены) |
 //!
 //! `GetDirPos` (`0x0045B330`) безотказен для восьми направлений; входной
 //! state-вопрос `0x0047B150` собственных `OnSearchEnemy` — `RET1`-эквивалент.
 //!
-//! Граница порции Z-AI (не расхождения): общий monster tick hub, `Hibernate`
-//! (vtable `+0x64`, `0x005DCC50`), реальный путь `monsterbaseattack` (в т.ч.
-//! его hurt-вход `periodicattack`) и применение цели остаются hub-владением
-//! своих порций. Фактическое пространственное перемещение и журналирование —
-//! через фасады `ai/monsterai.rs` и [`SmartGladiatorDispatcherMonster`].
+//! Остаются hub-владением: общий monster tick hub, `Hibernate` (vtable
+//! `+0x64`, `0x005DCC50`), реальный путь `monsterbaseattack` (в т.ч. его
+//! hurt-вход `periodicattack`) и применение цели. Фактическое пространственное
+//! перемещение и журналирование — через фасады `ai/monsterai.rs` и
+//! [`SmartGladiatorDispatcherMonster`].
 //!
-//! Объявленные швы (не расхождения):
+//! Швы к hub-владельцам:
 //!
 //! - [`SmartGladiatorDispatcherMonster`] — очередь шагов на hub-владельце
 //!   `CMonster`, общая hurt-ветвь, назначение цели и запись направления

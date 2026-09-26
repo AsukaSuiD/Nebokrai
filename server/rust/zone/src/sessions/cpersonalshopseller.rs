@@ -1,9 +1,7 @@
-//! Personal-shop seller plug GameServer, перенесённый в Zone `sessions/`.
+//! Personal-shop seller plug GameServer в Zone `sessions/`.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/session/cpersonalshopseller.rs` (волна Z-C4);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): shadow-контейнер 8×6 — Zone
+//! Прежняя форма: `src/gameserver/appserver/session/cpersonalshopseller.rs`.
+//! Типы подключаются из других zone-владельцев: shadow-контейнер 8×6 — Zone
 //! `items/cvolumelimitgoodsshadowcontainer.rs`, `ShadowRemovedReport` — Zone
 //! `items/cgoodsshadowcontainer.rs`, `ContainerListenerHandle` — Zone
 //! `items/ccontainer.rs`, `CGuid` — Shared.

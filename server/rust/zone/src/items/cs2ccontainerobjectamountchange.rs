@@ -1,14 +1,12 @@
-//! Изменение количества container-object `0xC0102` GameServer, перенесённое
-//! в Zone `items/` — владельца типов контейнеров и wire их изменений
-//! (волна Z-C5).
+//! Изменение количества container-object `0xC0102` GameServer: build-only
+//! кодек кадра source container/object/amount.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` (SHA-256 EXE
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS
 //! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2), исходный owner
 //! `appserver/message packaging/cs2ccontainerobjectamountchange.cpp`.
-//! Кодековая форма сверена прежними порциями; сохраняется полный wire:
-//! source container type/id/extend/position, object type/GUID и итоговое
-//! amount.
+//! Сохраняется полный wire: source container type/id/extend/position, object
+//! type/GUID и итоговое amount.
 //!
 //! Build-only граница: кадр собирается здесь (`message`); прямая доставка
 //! одному player и разрешение получателей `SendToSession` через ordered plug

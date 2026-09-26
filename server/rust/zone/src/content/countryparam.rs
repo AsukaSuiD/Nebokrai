@@ -1,7 +1,6 @@
 //! GameServer-владелец `CCountryParam`, подтверждённый точными
 //! `gameserver.exe + GameServer.pdb`; исходники
 //! `server/gameserver/appserver/country/countryparam.cpp/.h`.
-//! Перенесён в Zone `content/`.
 //!
 //! Game decoder позиционно присваивает 39 signed scalar-параметров, затем
 //! очищает пять передаваемых maps и читает main return points, technology

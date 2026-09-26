@@ -8,13 +8,12 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterrangeattack.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/monsterrangeattack.rs` (кластер A2
-//! полосы Monster, 26 сентября 2026); hub оркестрации монстра остаётся у
-//! `execute_owned_monster_base_attack` прежнего пакета.
+//! `appserver/skills/monsterrangeattack.cpp`; тела перенесены буквально.
+//! Hub оркестрации монстра остаётся у `execute_owned_monster_base_attack`
+//! старого пакета.
 //!
-//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`)
+//! подтверждает:
 //!
 //! - ctor (RVA `0x111590`): `[+4] = 0x2ef`; статические
 //!   `g_dwLength/g_dwHeight == 7`, маска `g_bScope` по `0x006A0ECC`.

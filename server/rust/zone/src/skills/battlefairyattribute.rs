@@ -1,15 +1,14 @@
 //! Атрибутные навыки CPojia..CYufa (октет Po/Yu, 0x212..0x219): Check/AI.
 //!
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}.cpp`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/
-//! battlefairyattribute.rs`; тела перенесены буквально порцией №6b «BF-ядро».
+//! `appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}.cpp`;
+//! тела перенесены буквально.
 //! Единый скелет и константы октета подтверждены машинно (CYujia vs CPojia —
 //! 167/167 инструкций); собственный `End(bool)` 8-fold `0x1246C0` остаётся у
 //! координатора (`skills/battlefairyskill.rs`); state — 9-fold AI/End/
 //! Serialize/Unserialize/GetRemainedTime/OnChangeRegion, данные и формулы —
-//! `effects/battlefairy.rs`, живой hub-lifecycle — прежний
-//! `battlefairyattributestate.rs`. Отдельный признак двойного списания у
+//! `effects/battlefairy.rs`, живой hub-lifecycle — `battlefairyattributestate.rs`
+//! старого пакета. Отдельный признак двойного списания у
 //! одного класса (extra QueryProperty у Yumo: расход уже в Check, затем
 //! повторно в первом AI) сохранён `YUMO_SKILL_ID`-веткой.
 //!
@@ -73,7 +72,7 @@ pub struct BattleFairyAttributeSkill {
 }
 
 /// Таблица октета: ID навыка → код свойства формулы и вид (буквальные записи
-/// прежних `pojia.rs`..`yufa.rs`; вид совпадает с машинным отображением
+/// `pojia.cpp`..`yufa.cpp`; вид совпадает с машинным отображением
 /// `effects::battle_fairy_attribute_kind`).
 pub const fn definition(skill_id: u32) -> Option<BattleFairyAttributeSkill> {
     let (value_usage, kind) = match skill_id {

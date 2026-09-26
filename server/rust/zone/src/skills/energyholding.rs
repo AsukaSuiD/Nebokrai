@@ -3,11 +3,8 @@
 //! RSDS match), `appserver/skills/energyholding.cpp`. Машинные якоря:
 //! Begin `0x149BF0`, Check `0x14A190`, AI `0x14A4A0`; skill End(H) 3-fold
 //! `0x1502F0` — общий зарегистрированный End, здесь не дублируется
-//! (порядок clear+End исполняет прежний kernel/вход). Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/energyholding.rs`; тела
-//! Check/AI перенесены буквально порцией №6c «self/zone-касты» (разведка —
-//! запись аудита «Zone skills: машинная разведка battlefairy-навыков
-//! (порция №6)», 26 сентября 2026).
+//! (порядок clear+End исполняет общий kernel/вход). Тела Check/AI
+//! перенесены буквально.
 //!
 //! Зарегистрированный Attack Begin сохраняет раннее время и visual loop1;
 //! Check проверяет исходного игрока, reuse, оружие категории 2, signed MP
@@ -27,9 +24,9 @@
 //! Kernel владеет единственным исполнением; отдельного пути здесь нет.
 //!
 //! Объявленные швы переноса (не расхождения): hub `selfcast::SelfCastGame`
-//! реализован у прежнего владельца; общий зарегистрированный вход остаётся
-//! у `playercast` делегата; machine накопления `accumulatedstate` объявлена
-//! швом `add_energy_holding_state` (владелец поделён с SoulCollect).
+//! реализован у владельца старого пакета; общий зарегистрированный вход
+//! остаётся у `playercast` делегата; machine накопления `accumulatedstate`
+//! объявлена швом `add_energy_holding_state` (владелец поделён с SoulCollect).
 
 use crate::regions::serverregion::geometry::PLAYER_TYPE;
 

@@ -1,4 +1,5 @@
 //! Форма цели и снимок ожидающей команды навыка Zone.
+//! Contract: `docs/gameplay/skills.md` («От запроса до первого Begin»).
 //! Источник: gameserver.exe + GameServer.pdb, appserver/player.cpp/.h,
 //! appserver/ai/baseai.cpp/.h и appserver/ai/playerai.cpp/.h.
 //! HasTarget VA 0x004C7DD0; сравнение object/point в CPlayerAI

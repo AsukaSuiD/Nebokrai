@@ -1,5 +1,8 @@
-//! Правила и агрегат рамки двустороннего обмена GameServer `CTrader`,
-//! перенесённые в Zone `trade/`.
+//! Агрегат и правила рамки двустороннего обмена исторического GameServer
+//! `CTrader`: три trade-shadow container-а, ready-state, source metadata и
+//! скалярная приёмка предложений.
+//!
+//! Contract: docs/gameplay/trade.md (двусторонний обмен).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/session/ctrader.cpp` (агрегат, правила рамки и
@@ -7,11 +10,11 @@
 //! источника предложения и сверка количества на commit). Агрегат `CTrader` с
 //! тремя trade-shadow container-ами `(goods, Gold, YuanBao)`, ready-state,
 //! source metadata, terminal clear и отчётами `TraderOfferAdded`/
-//! `TraderOfferRemoved` перенесён сюда волной Z-C4: все его поля — типы Zone
-//! items (волна Z-C3) и скаляры, методы принимают `CGoods`/`CGoodsFactory` по
-//! ссылке (Zone items/content), хранимого доступа к живому `CPlayer`/`CGame`
-//! нет — hub-форма не требуется, и агрегат следует карте в Zone вместо
-//! прецедента container-owner старого пакета. `CGame` по-прежнему выполняет
+//! `TraderOfferRemoved`: все его поля — типы Zone items и скаляры, методы
+//! принимают `CGoods`/`CGoodsFactory` по ссылке, хранимого доступа к живому
+//! `CPlayer`/`CGame` нет — hub-форма не требуется, и агрегат следует карте в
+//! Zone вместо прецедента container-owner старого пакета. `CGame` по-прежнему
+//! выполняет
 //! достигнутую двухфазную проверку и ownership transaction: исходные goods
 //! остаются у player до commit, затем переходят в packet второго участника;
 //! при частичном отказе они удаляются у получателя и возвращаются в packet
@@ -24,12 +27,11 @@
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемейству trade разведки «Zone
-//! player: машинная разведка trade/auction/bank/ground currency» от 26
-//! сентября 2026 (CTrader трёх shadow-контейнеров; reset ready у обоих
-//! участников при любой смене рамки `OnObjectAdded`; commit `0x1B9470` —
-//! 1241 insn, per-goods AmountChange → packet Add → move publish; частичный
-//! отказ → Clear(temp) + RollBack(map) полностью и немедленно):
+//! age 2). Машинный статус — `MATCH` по подсемейству trade дизассембла тел
+//! точной пары: CTrader трёх shadow-контейнеров; reset ready у обоих
+//! участников при любой смене рамки `OnObjectAdded`; commit `0x1B9470` — 1241
+//! insn, per-goods AmountChange → packet Add → move publish; частичный отказ
+//! → Clear(temp) + RollBack(map) полностью и немедленно.
 //!
 //! | правило | машинный факт | здесь | статус |
 //! |---|---|---|---|
@@ -40,7 +42,7 @@
 //! | сверка количества | packet снимает часть стека (`>=`), экипировка целиком (`==`) | [`trade_offer_amount_satisfies`] | семья `MATCH` |
 //! | rollback stack-merge | полный merge (`amount == original`) обратим вычитанием; иначе `None` | [`trade_rollback_merge_reversible`] | семья `MATCH` |
 //!
-//! Риск-ноты переноса (разведка порции T):
+//! Риск-ноты:
 //!
 //! - Reset ready: `record_offer`/`remove_offer`/`clear` агрегата немедленно
 //!   сбрасывают собственный `ready`, а `CGame` затем сбрасывает готовность
@@ -53,15 +55,10 @@
 //!   нет — как и у release-формы оригинала вопрос о частичном unmerge остаётся
 //!   [`trade_rollback_merge_reversible`] == `false` (возврат `None` caller-а).
 //!
-//! Швы переноса: числовые index рамки, скалярные предикаты и агрегат
-//! перенесены буквально (pub/пути нормализованы); shadow-контейнеры и их
-//! отчёты `GoodsShadow`/`PlacedShadowGoods`/`ShadowPresenceReport`/
-//! `ShadowRemovedReport` — Zone `items/` владельцы (волна Z-C3), `CGoods` —
-//! Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared. Двухфазная
-//! ownership transaction commit/rollback и reset готовности второго участника
-//! остаются у `CGame`. Константы сессии обмена материализованы здесь же,
-//! потому что `CSessionFactory` создаёт рамку именно с этими параметрами.
+//! Двухфазная ownership transaction commit/rollback и reset готовности
+//! второго участника остаются у `CGame`. Константы сессии обмена
+//! материализованы здесь же, потому что `CSessionFactory` создаёт рамку
+//! именно с этими параметрами.
 
 use crate::content::goods::GAP_PARTICULAR_ATTRIBUTE;
 use crate::content::goodsfactory::CGoodsFactory;
@@ -515,6 +512,5 @@ impl CTrader {
     }
 }
 
-// Полный достигнутый CTrader lifecycle исполняется typed owner-ами: агрегат
-// здесь, двухфазная transaction commit/rollback — у `CGame`; отдельной
-// сохранённой RAW-копии замещённых функций в owner-файле нет.
+// Достигнутый CTrader lifecycle исполняется typed owner-ами: агрегат здесь,
+// двухфазная transaction commit/rollback — у `CGame`.

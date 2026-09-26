@@ -1,13 +1,12 @@
-//! Equipment-compose plug GameServer, перенесённый в Zone `sessions/`.
+//! Equipment-compose plug GameServer в Zone `sessions/`: трёхслотовый
+//! shadow-контейнер и сессионный lifecycle composite-сессии.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/session/cequipmentcompose.rs` (волна Z-C4);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): трёхслотовый shadow-контейнер — Zone
+//! Прежняя форма: `src/gameserver/appserver/session/cequipmentcompose.rs`.
+//! Типы подключаются из других zone-владельцев: shadow-контейнер — Zone
 //! `items/cequipmentcomposeshadowcontainer.rs`, `CGoods` — Zone
 //! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b),
-//! `ShapeIdentity` — Zone `regions/identity.rs`.
+//! `CGoodsFactory` — Zone `content/goodsfactory.rs`, `ShapeIdentity` — Zone
+//! `regions/identity.rs`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/session/cequipmentcompose.cpp`. Process-owned

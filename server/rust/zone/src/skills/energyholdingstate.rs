@@ -3,11 +3,7 @@
 //! RSDS match), `appserver/skills/energyholdingstate.cpp`. Машинные якоря:
 //! state ctor `0x1EC410`, AddEnergy `0x1EC490`, GetRemainedTime `0x201200`;
 //! данные, signedness лимита, 12-байтная запись и формула множителя —
-//! `effects/energyholding.rs`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/energyholdingstate.rs`; тела перенесены
-//! буквально порцией №6c «self/zone-касты» (разведка — запись аудита
-//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026).
+//! `effects/energyholding.rs`. Тела перенесены буквально.
 //!
 //! Заряд ограничен сохранённым уровнем. AddEnergy требует живого GetUser и
 //! публикует снятие, затем установку; loop1 остаётся живым между пакетами.
@@ -23,8 +19,8 @@
 //! visual первичного Begin оставляет ей незавершённое loop1-состояние.
 //!
 //! Объявленные швы переноса (не расхождения): hub `selfcast::SelfCastGame`
-//! реализован у прежнего владельца; машина накопления `accumulatedstate`
-//! (`add_accumulated_state`, `update_accumulated_visual`) остаётся у прежнего
+//! реализован у владельца старого пакета; машина накопления `accumulatedstate`
+//! (`add_accumulated_state`, `update_accumulated_visual`) остаётся у старого
 //! пакета, поделена с SoulCollect и объявлена швами `add_energy_holding_state`
 //! и `update_energy_holding_accumulated_visual`.
 

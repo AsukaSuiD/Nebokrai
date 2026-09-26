@@ -1,32 +1,30 @@
 //! Координатор семейства навыков боевого духа: общий зарегистрированный вход,
 //! общий End-контракт и wire visual девятнадцати тел `*Effect::UpdateVisualEffect`.
 //!
-//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! семейство `appserver/skills/*` и базовый `appserver/states/skill.cpp`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/
-//! battlefairyskill.rs`; тела перенесены буквально порцией №6b «BF-ядро»
-//! (свежая машинная разведка BF-ядра по той же точной паре; идентификатор
-//! бинарника и подтверждение PDB см. в шапке `skills/baseattackruntime.rs`).
+//! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match;
+//! идентификатор бинарника см. в шапке `skills/baseattackruntime.rs`),
+//! семейство `appserver/skills/*` и базовый `appserver/states/skill.cpp`;
+//! тела перенесены буквально.
 //!
-//! End-контракт координатора (MATCH по машинной разведке; сама цепочка живёт
-//! в прежнем hub `states/skill.rs` и здесь не переоткрывается): `End` семейства
+//! End-контракт координатора (сама цепочка живёт
+//! в hub `states/skill.rs` старого пакета и здесь не дублируется): `End` семейства
 //! `CStateSkill` `0x5DFBD0`: arg≠0 → GetUser → virtual `AfterUseSkill`
 //! `0x53CF30`; всегда `CSkill::End(arg)` `0x4D84C0`: user? → virtual
 //! `OnEndSkill` (+0x158, пустая база) → зануление 9 DWORD +0xC..+0x2C →
 //! reuse-штамп `timeGetTime` только при arg≠0 → прямой delete effect (без
 //! virtual End) → ended=1. Cooldown — после AfterUse, до разрушения эффекта.
 //!
-//! Визуал-таблица (MATCH): 19 отдельных тел без ICF между ними; две формы
+//! Визуал-таблица: 19 отдельных тел без ICF между ними; две формы
 //! диспетча — JT16 (7 атакующих: BFBaseAttack `0x1170E0`, CFatalBlow
 //! `0x11E480`, CTianhuo `0x1223B0`, CThunder `0x120E30`, CLeiming2 `0x11FA80`,
 //! CBloodLoss `0x11A840`, CPoisonArrow `0x1191A0`) и remap14→JT8 (12 кастеров
-//! со своими байтовыми картами разведки). Failure-кадр `[byte 4][byte mode]`
+//! со своими байтовыми картами). Failure-кадр `[byte 4][byte mode]`
 //! точечным SendToPlayer под `dynamic_cast CPlayer`; wide-8 кастеры пишут
 //! `add_long(4)+add_byte(8)`; все ветки сходятся в базовый хвост
 //! `CVisualEffect::UpdateVisualEffect` (он остаётся у внешнего dispatcher-а
 //! `states/skill.rs`, сюда не входит).
 //!
-//! Кандидаты расхождения порции №6b (решения и якоря):
+//! Установленные поправки переноса (решения и машинные якоря):
 //!
 //! (A) Исправлено при переносе: CFatalBlow (`0x51E538`/`0x51FB3B`/`0x51E5C8`)
 //! и CLeiming2 в case0 и fire пишут ЖИВОЙ тип юзера `[user+4]`, CThunder —
@@ -49,15 +47,15 @@
 //! же: id, GUID (1+16 или маркер), len, blob `SerializeForOldClient`.
 //!
 //! Объявленные швы переноса (не расхождения): трейты `BattleFairyPlayer`,
-//! `BattleFairyMoveShape` и `BattleFairyGame` — переходные фасады прежних
-//! `CPlayer`/`CMoveShape`/`CGame`, реализация остаётся у них в файле-делегате
+//! `BattleFairyMoveShape` и `BattleFairyGame` — фасады `CPlayer`/`CMoveShape`/
+//! `CGame` старого пакета, реализация остаётся у них в файле-делегате
 //! `appserver/skills/battlefairyskill.rs`; имена членов сохраняют исходную
 //! операцию. Швы потребляются статически (generic), dyn-совместимость и
 //! `Send`-контракт не вводятся (прецедент ADR-0013). Аргумент `runtime` у
 //! зарегистрированного входа непрозрачен: координатор не читает его сам, а
-//! передаёт check/AI ветвям (у делегата это прежний main-loop runtime, у
-//! перенесённых тел — часы `now`). Hub-lifecycle арены состояний и
-//! end-оркестрация инстансов остаются прежнему владельцу и вызываются по
+//! передаёт check/AI ветвям (у делегата это main-loop runtime старого пакета,
+//! у перенесённых тел — часы `now`). Hub-lifecycle арены состояний и
+//! end-оркестрация инстансов остаются тому же владельцу и вызываются по
 //! одноимённым швам. UNKNOWN списком: достижимость fire Po при NULL-sufferer
 //! (пункт B); динамика war-soul типов источника (пункт A).
 
@@ -96,7 +94,7 @@ enum BattleFairyFireTarget {
     LifeShield,
 }
 
-/// Источник wire-типа source в кадрах begin/fire (решение A порции №6b).
+/// Источник wire-типа source в кадрах begin/fire (решение A шапки файла).
 #[derive(Clone, Copy)]
 enum BattleFairySourceType {
     /// Литерал 700 во всех ветках (CThunder и пять остальных атакующих).
@@ -181,7 +179,7 @@ pub struct BattleFairyPkPermissions {
     pub criminal: bool,
 }
 
-/// Игрок-заклинатель боевого духа: переходный фасад прежнего `CPlayer`.
+/// Игрок-заклинатель боевого духа: фасад `CPlayer` старого пакета.
 pub trait BattleFairyPlayer {
     fn player_id(&self) -> i32;
 
@@ -223,7 +221,7 @@ pub trait BattleFairyPlayer {
     fn selected_battle_fairy_skill_id(&self) -> u32;
 }
 
-/// Живая фигура-участник BF-исполнения: переходный фасад прежнего `CMoveShape`.
+/// Живая фигура-участник BF-исполнения: фасад `CMoveShape` старого пакета.
 pub trait BattleFairyMoveShape {
     fn shape(&self) -> &CShape;
 
@@ -236,7 +234,7 @@ pub trait BattleFairyMoveShape {
     fn state_at(&self, position: usize) -> Option<(StateKey, &StateData)>;
 }
 
-/// Переходные фасады прежнего владельца `CGame`, открывающие BF-ядру только
+/// Фасады `CGame` старого пакета, открывающие BF-ядру только
 /// прежние обращения; имена сохраняют исходную операцию.
 pub trait BattleFairyGame {
     /// Hub-исполнение монстра записи навыка (`CMonster` старого пакета).
@@ -653,7 +651,7 @@ pub fn send_battle_fairy_skill_failure<Game: BattleFairyGame>(game: &Game, playe
     game.send_battle_fairy_message_to_player(player_id, &message);
 }
 
-/// Обновление предмета боевого духа wire `0xBF918` (решение C порции №6b):
+/// Обновление предмета боевого духа wire `0xBF918` (решение C шапки файла):
 /// оригинал доставляет `SendToPlayer(player_id)` точечно — машинные якоря
 /// `0x501BDE..0x501C61` и `0x51F249`. Отказ Serialize не подавляет пакет:
 /// payload приходит от делегата уже без статуса. Форма кадра: id, GUID,
@@ -672,8 +670,8 @@ pub fn send_battle_fairy_goods_update<Game: BattleFairyGame>(
     game.send_battle_fairy_message_to_player(player_id, &message);
 }
 
-// Read-проекции BF-summon (перенесены из прежнего `thunder.rs` порцией №6b;
-// старый `thunder.rs` держит shim-реэкспорт до порции №6c, дублирования нет).
+// Read-проекции BF-summon (здесь единственная копия; старый пакет
+// пользуется ими через публичную поверхность модуля).
 
 pub fn summon_user_cch<Game: BattleFairyGame>(game: &Game, source: ShapeIdentity) -> i32 {
     if source.object_type == 400 {
@@ -695,9 +693,8 @@ pub fn summon_user_region<Game: BattleFairyGame>(game: &Game, source: (i32, Shap
     Some(region)
 }
 
-/// `MasterInfo` заклинателя боевого духа по живым полям игрока (тело
-/// `master_info` прежнего `thunder.rs`; собрано здесь для BF-summon порции
-/// №6b без дублирования чтений).
+/// `MasterInfo` заклинателя боевого духа по живым полям игрока (общее тело
+/// BF-summon семьи, собрано здесь без дублирования чтений).
 pub fn battle_fairy_master_info<Player: BattleFairyPlayer>(player: &Player) -> MasterInfo {
     let permissions = player.battle_fairy_pk_permissions();
     MasterInfo {

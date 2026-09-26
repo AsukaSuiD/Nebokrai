@@ -3,11 +3,9 @@
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
 //! `appserver/skills/lifeshield.cpp` (Begin×3 `0x118190…`, Check `0x118850`,
 //! AI `0x118A60`, собственный End(H) `0x11A700`; state ctor `0x1F29C0`,
-//! AddCure `0x1F2FD0` зависит от CureState — уже в Zone). Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/lifeshield.rs`; тела перенесены
-//! буквально порцией №6b «BF-ядро». Переходный End CLifeShieldState (Cure +
-//! обновление живой фигуры) — hub-lifecycle прежнего `lifeshieldstate.rs`,
-//! сюда не переносится.
+//! AddCure `0x1F2FD0` зависит от CureState — уже в Zone). Тела перенесены
+//! буквально. End CLifeShieldState (Cure + обновление живой фигуры) —
+//! hub-lifecycle `lifeshieldstate.rs` старого пакета, сюда не переносится.
 //!
 //! Общий координатор боевой феи выполняет base Begin, создаёт visual и
 //! завершает захваченный экземпляр навыка. Здесь находятся Check и AI:
@@ -17,7 +15,7 @@
 //!
 //! Запись MP предшествует сериализации предмета. BF918 отправляется даже
 //! при отказе сериализации, без отката частичных изменений — точечно, решение
-//! C порции №6b (якоря в шапке `skills/battlefairyskill.rs`); только затем
+//! C (якоря в шапке `skills/battlefairyskill.rs`); только затем
 //! задаются прерываемость, visual0 и ожидание абсолютного срока.
 //! Первый прежний щит проходит End и destructor свежего остатка позиции.
 //! После этого читаются уровень и параметры нового щита: Begin(U,U) с
@@ -26,7 +24,7 @@
 //!
 //! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
 //! BattleFairyGame`; списание MP с сериализацией — шов `spend_battle_fairy_mana`;
-//! первичный Begin щита — прежний hub самозащитных состояний за швом
+//! первичный Begin щита — hub самозащитных состояний старого пакета за швом
 //! `begin_life_shield_state`.
 
 use crate::content::CSkillBaseProperties;

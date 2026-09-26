@@ -2,10 +2,8 @@
 //! а также consume-API для `CThunderSlash`. Источник: точная пара
 //! `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match),
 //! исходные владельцы `appserver/skills/ragebreakstate.cpp/.h` и
-//! `appserver/skills/furystate.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/ragebreakstate.rs`; тела перенесены
-//! буквально порцией T4. Данные, 12-байтный codec и формулы усиления —
-//! Zone `effects/attackgain.rs` (тип `{RageBreak,Fury}State`,
+//! `appserver/skills/furystate.cpp/.h`. Данные, 12-байтный codec и формулы
+//! усиления — Zone `effects/attackgain.rs` (тип `{RageBreak,Fury}State`,
 //! `ATTACK_GAIN_STATE_BYTES`); ниже — только живые callbacks.
 //!
 //! Машинные якоря тела (VA = RVA + 0x400000): ctor `0x5FD1C0`

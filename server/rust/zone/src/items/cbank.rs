@@ -1,13 +1,8 @@
-//! Lock-gate `CBank` поверх однослотового `CWallet` GameServer, перенесённый в
-//! Zone `items/` — владельца типов контейнеров и операций над ними.
+//! Lock-gate `CBank` поверх однослотового `CWallet` исторического GameServer:
+//! locked state скрывает query и mutation базового wallet до внешне
+//! подтверждённого player-password check.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cbank.rs` (волна Z-C1); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса: owner base —
-//! Zone `items/cgoodscontainer.rs`, currency core — Zone `items/cwallet.rs`,
-//! `CGoods` — Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared. Player-владелец
-//! публикует этот контейнер под extend-id
+//! Player-владелец публикует этот контейнер под extend-id
 //! [`PlayerContainerKind::Bank`][crate::items::playercontainers::PlayerContainerKind]
 //! единого каталога (дизайн D4).
 //!

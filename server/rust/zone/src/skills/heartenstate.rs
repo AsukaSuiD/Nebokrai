@@ -1,17 +1,16 @@
 //! Применение и снятие Hearten у живой фигуры Game.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb (точная
 //! пара `4F5C98E0…` + RSDS match), `appserver/skills/heartenstate.cpp` и
-//! `heartenstate.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/heartenstate.rs`; тела перенесены
-//! буквально порцией №6a. Данные, срок и формула прибавки — Zone
+//! `heartenstate.h`; тела перенесены буквально. Данные, срок и формула
+//! прибавки — Zone
 //! `effects/hearten.rs` (ctor `0x005EE500`, vtable `0x006600D4`, writer
 //! `0x005D4D10`, reader `0x004F9D80`, property callback `0x005EE740`).
 //!
 //! Loop1 visual создаёт общий каталог арены. Между Begin и append нет
 //! внешнего callback; первый UpdateVisualEffect принадлежит последующему
 //! UpdateProperty. Объявленные швы переноса (не расхождения): hub
-//! `statecast::*` реализован у прежнего владельца; property-визуалы и End
-//! ветки остаются у `states/state.rs` и объявлены швами.
+//! `statecast::*` реализован у владельца старого пакета; property-визуалы и
+//! End ветки остаются у `states/state.rs` и объявлены швами.
 
 use crate::effects::{HEARTEN_STATE_BYTES, HeartenState};
 use crate::regions::ShapeIdentity;

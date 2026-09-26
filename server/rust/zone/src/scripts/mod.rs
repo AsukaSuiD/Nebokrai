@@ -5,4 +5,4 @@ mod variables; // механика и wire-формат списков сцен�
 pub use variables::{
     CVariableList, GameVariable, GameVariableMutationOutcome, GameVariableSnapshotError,
     GameVariableValue,
-}; // типы сценарных переменных и их мутаций.
+};

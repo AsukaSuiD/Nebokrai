@@ -3,20 +3,15 @@
 //! (CHeal/CHeal2/CSuperHeal/CSuperHeal2). Источник:
 //! gameserver.exe + GameServer.pdb, `appserver/states/stateskill.cpp`
 //! и совместимые `appserver/skills/{cure,hearten,promotion,godbless{,2},
-//! heal{,2},superheal{,2}}.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/{cure,hearten,promotion,godbless,
-//! heal}.rs` и старшие state-файлы; тела перенесены буквально порцией
-//! №6a «state-касты пятёрки + heal-квартет» (разведка — запись аудита
-//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026, по точной паре `gameserver.exe` `4F5C98E0…` +
-//! `GameServer.pdb` RSDS match).
+//! heal{,2},superheal{,2}}.cpp/.h` (точная пара `gameserver.exe`
+//! `4F5C98E0…` + `GameServer.pdb` RSDS match).
 //!
 //! Общий кадр `publish_state_cast_visual` — перенос тела
 //! `publish_state_skill_visual` переходного `stateskill.rs`: wire `0xBFE01`,
 //! личная ветвь отказов BYTE-парой `[0, mode]` только игроку, around-кадр
 //! с S (fallback U) для mode 1. У пятёрки нет flight-хвоста; DWORD-форма
-//! отказов `[dword 0][byte mode]` принадлежит Fury/RageBreak и переносится
-//! порцией T4 как `RageCastVisualContract` + `publish_rage_cast_visual`
+//! отказов `[dword 0][byte mode]` принадлежит Fury/RageBreak —
+//! `RageCastVisualContract` + `publish_rage_cast_visual` ниже
 //! (якорь `UpdateVisualEffect@CRageBreakEffect` VA `0x59FB90`).
 //!
 //! Объявленные швы переноса (не расхождения): трейты ниже — переходные
@@ -31,10 +26,9 @@
 //! `resolve_applied_state_sufferer`, `update_property_state_visual`,
 //! `update_applied_state_end_visual`, `update_player_state_properties`) —
 //! переносятся не как тела, а объявляются швами `{check,spend}_cast_mana`,
-//! `check_skill_path` и одноимёнными методами трейта; их машинное поведение
-//! уже сверено соседними волнами и здесь не переоткрывается.
+//! `check_skill_path` и одноимёнными методами трейта.
 //! Аргумент `now` — часы прежнего main loop (делегат передаёт
-//! `runtime.now_milliseconds()`), как в `skills/flash.rs` порции №5.
+//! `runtime.now_milliseconds()`), как в `skills/flash.rs`.
 
 use nebokrai_shared::values::CGuid;
 
@@ -73,7 +67,7 @@ pub trait StateCastPlayer {
 /// typed-доступа, которыми пользуются Begin/restart/AI/End состояний пятёрки.
 /// Имена сохраняют методы прежнего владельца; сериализуемый учёт записей
 /// (`append/insert_replacement_state_record`) остаётся его логикой.
-/// Запрет боя (`CBossBlueFuryState::Begin/AI/End`) приехал порцией E3.
+/// Запрет боя (`set_fightable`) обслуживает `CBossBlueFuryState::Begin/AI/End`.
 pub trait StateCastMoveShape {
     fn shape(&self) -> &CShape;
 
@@ -385,8 +379,7 @@ pub struct StateCastVisualContract {
 }
 
 /// Контракт visual Fury/RageBreak: поверх пятёрочного один RP-отказ несёт
-/// DWORD-префикс (`add_long(0)` перед BYTE mode) — форма `[dword 0][byte 8]`,
-/// отложенная порцией №6a и перенесённая порцией T4.
+/// DWORD-префикс (`add_long(0)` перед BYTE mode) — форма `[dword 0][byte 8]`.
 pub struct RageCastVisualContract {
     pub skill_id: u32,
     pub kind: SkillVisualEffectKind,

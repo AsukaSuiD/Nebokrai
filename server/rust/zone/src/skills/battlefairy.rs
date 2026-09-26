@@ -1,4 +1,5 @@
 //! Правила навыков боевого духа.
+//! Contract: `docs/gameplay/skills.md` (уровень, слоты, сброс навыка).
 //! Источник: gameserver.exe + GameServer.pdb, appserver/player.cpp/.h
 //! (проверка уровня VA 0x0042E7A0–0x0042E81C) и
 //! appserver/player.cpp/.h (снятие/установка девяти навыков

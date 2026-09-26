@@ -1,16 +1,6 @@
-//! Cell/storage core `CVolumeLimitGoodsContainer` исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
-//!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cvolumelimitgoodscontainer.rs` (волна Z-C1);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate (включая
-//! `pub(super)` depot-помощника wire-декодера) и швы переноса (не расхождения):
-//! amount-limit ядро и stack-merge — Zone
-//! `items/camountlimitgoodscontainer.rs`/`items/cgoodscontainer.rs`, `CGoods` —
-//! Zone `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `ShapeIdentity` —
-//! Zone `regions/` (re-export `identity`), `CGuid` и wire-кодеки — Shared.
+//! Cell/storage core `CVolumeLimitGoodsContainer` исторического GameServer:
+//! owned goods в `CAmountLimitGoodsContainer` и позиционный слой
+//! available/inactive/occupied cells.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cvolumelimitgoodscontainer.cpp`.
@@ -27,7 +17,7 @@
 //! exact release→resize→restore-owner order. Persisted codec и player
 //! packet expansion достигнуты общим GameSave owner-ом. Auction-scale mutation
 //! связана с `CPlayer::TellClientScale`; listener messages и clone ниже
-//! остаются RAW до замыкания соответствующих owners.
+//! ещё требуют реконструкции.
 //! Swap использует единый remove→Add→rollback-алгоритм; packet-owner подставляет
 //! синхронный Add с GoodsAI/player-listener и для основной, и для обратной попытки.
 

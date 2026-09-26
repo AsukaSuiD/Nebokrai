@@ -1,19 +1,9 @@
-//! Однослотовая currency-проекция `CShadowWallet` GameServer, перенесённая в
-//! Zone `items/` — владельца типов контейнеров и операций над ними.
+//! Однослотовая currency-проекция `CShadowWallet` исторического GameServer и
+//! generic core `CShadowCurrencyContainer` для неё и `CShadowYuanBao`.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cshadowwallet.rs` (волна Z-C3); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса (не
-//! расхождения): count-limit слой и shadow core — Zone
-//! `items/camountlimitgoodsshadowcontainer.rs`/`items/cgoodsshadowcontainer.rs`,
-//! `PreviousContainer` — Zone `items/ccontainer.rs`, stack-merge outcome — Zone
-//! `items/cgoodscontainer.rs`, generic wallet core — Zone `items/cwallet.rs`,
-//! `CGoods` — Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared. Extend-литералы
-//! source-гейта выражены вариантами единого каталога
-//! `items/playercontainers.rs` (дизайн D4): wallet-проекция —
-//! `PlayerContainerKind::Wallet`, player-владелец самого source wallet —
-//! `PlayerContainerKind::Wallet` (type `400` оставлен константой этого файла).
+//! Source-гейт проекции выражен вариантом `PlayerContainerKind::Wallet`
+//! единого каталога `items/playercontainers.rs` (дизайн D4); type `400`
+//! оставлен константой этого файла.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cshadowwallet.cpp`. Shadow не
@@ -24,7 +14,7 @@
 //! Порядок частичных эффектов сохранён буквально: null/неверный
 //! catalog не меняет старую запись; корректный catalog сначала
 //! публикует `RemoveShadow` для первой записи и очищает map, и только
-//! потом проверяет previous/source. Поэтом отказ после этой точки
+//! потом проверяет previous/source. Поэтому отказ после этой точки
 //! оставляет projection пустой. Успешный derived add пишет map
 //! напрямую и не перепроверяет count-limit.
 //!

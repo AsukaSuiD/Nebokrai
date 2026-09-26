@@ -53,8 +53,7 @@ use super::{ElementPhalanxAttack, ElementSummonLiveField};
 /// независимо от результата регистрации (швы `ZonalCastContact` в
 /// `skills/zonalcast.rs`). Обхода прежних областей и вызова
 /// ReplaceAffectRegion в Summon нет. Разные маски выбирает `yin_yang_scope`
-/// по исходному skill ID. Перенесено буквально порцией T5 «zonalcast-хаб»;
-/// `MATCH` против `git show HEAD`.
+/// по исходному skill ID.
 pub fn summon_yin_yang<Game, Runtime>(
     game: &mut Game,
     instance: Game::SkillAddress,

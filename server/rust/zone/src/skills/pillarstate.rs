@@ -1,12 +1,8 @@
 //! Живое переключение, visual и End защитной стойки CPillarState в Zone.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/pillarstate.cpp/.h`. Машинные якоря:
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/pillarstate.cpp/.h`. Машинный якорь:
 //! Begin состояния `0x1F4B60`; данные, срок и сохраняемая запись —
-//! `effects/pillar.rs`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/pillarstate.rs`; тела перенесены
-//! буквально порцией №6c «self/zone-касты» (разведка — запись аудита
-//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026).
+//! `effects/pillar.rs`.
 //!
 //! Повторный каст снимает первый ID74; Begin запрещает движение после visual.
 //! End ищет фактического Sufferer и снимает его запрет движения перед удалением.

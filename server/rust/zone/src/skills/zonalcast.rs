@@ -5,12 +5,9 @@
 //! Источник: gameserver.exe + GameServer.pdb (точная пара, ниже; RSDS match),
 //! `appserver/skills/weak.cpp`, `poisonfog.cpp`, `snowstorm.cpp`,
 //! `yinyang.cpp/yinyang2.cpp`, `godthunder.cpp/godthunder2.cpp`,
-//! `firewall.cpp`, `chaossphere.cpp` и `soulmirror.cpp`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/zonalcast.rs` и клей
-//! владельцев (`weak.rs`, `poisonfog.rs`, `snowstorm.rs`, `chaossphere.rs`,
-//! `yinyang.rs`, `godthunder{,2}.rs`), тела перенесены буквально порцией
-//! T5 «zonalcast-хаб»; реализация фасадов швов остаётся у прежнего
-//! владельца в том же файле-делегате.
+//! `firewall.cpp`, `chaossphere.cpp` и `soulmirror.cpp`. Реализация фасадов
+//! швов остаётся у прежнего владельца в файле-делегате
+//! `appserver/skills/zonalcast.rs`.
 //!
 //! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
 //! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
@@ -19,8 +16,8 @@
 //! Конвенция адресов: пабы PDB записаны как `seg:off` сегмента `.text`;
 //! истинный RVA = off + 0x1000, VA = RVA + ImageBase 0x400000.
 //!
-//! Машинная проверка порции T5 (дизассемблер точной пары; статусы ниже
-//! относятся только к перечисленным ветвям):
+//! Машинная проверка дизассемблером точной пары (статусы ниже относятся
+//! только к перечисленным ветвям):
 //!
 //! - `VERIFIED` скелет `CWeak::CheckCastCondition` (RVA `0x1AF050`): свежая
 //!   таблица `QuerySkillBaseProperties` → reuse `10005` + `timeGetTime` →
@@ -59,29 +56,28 @@
 //!   `0x152F40`, CFireWall `0x1AB140`, CChaosSphere `0x1A7940`, CSoulMirror
 //!   `0x1A4400`). Источники X/Y mode 1: живой S с откатом к сохранённой точке
 //!   (проверено для CWeak/CFireWall/CSnowStorm/CGodThunder/CYinYang/CYinYang2/
-//!   CChaosSphere; у CGodThunder2 тот же шаблон компилятора — `MATCH` без
-//!   отдельного досмотра); PoisonFog всегда пишет сохранённую точку;
+//!   CChaosSphere; у CGodThunder2 тот же шаблон компилятора, без отдельного
+//!   досмотра); PoisonFog всегда пишет сохранённую точку;
 //!   SoulMirror — текущий центр U.
-//! - Входной кадр области `0x000BF502` (5-полевый префикс + снимок) сверен
-//!   прежними порциями: таблица RVA уникальных тел AddToByteArray — в шапке
-//!   `skills/summonshape.rs`; per-пhalanx encoder-ы — в шапках
+//! - Входной кадр области `0x000BF502` (5-полевый префикс + снимок): таблица
+//!   RVA уникальных тел AddToByteArray — в шапке `skills/summonshape.rs`;
+//!   per-phalanx encoder-ы — в шапках
 //!   `skills/{weak,poisonfog,snowstorm,godthunder,masked_area,chaossphere}.rs`
 //!   и в `docs/gameplay/skills.md`.
 //!
-//! Честные неизвестные (не повышаются этой порцией): тела
-//! `CheckCastCondition`/`AI` YinYang/YinYang2, GodThunder/GodThunder2 и
-//! SoulMirror (у последнего иная арность Check — `UAEHPAVCMoveShape@@0@Z`)
-//! индивидуально не досматривались; их ветви перенесены по прежней
-//! реконструкции и сверены с `git show HEAD` (`MATCH` контента, статус
-//! `PARTIAL` без постатейной машинной выписки). Клиентское чтение
-//! кадров — вне серверной базы (`UNKNOWN`, как в соседних волнах).
+//! Честные неизвестные: тела `CheckCastCondition`/`AI` YinYang/YinYang2,
+//! GodThunder/GodThunder2 и SoulMirror (у последнего иная арность Check —
+//! `UAEHPAVCMoveShape@@0@Z`) индивидуально не досматривались; их ветви
+//! следуют прежней реконструкции (статус `PARTIAL` без постатейной
+//! машинной выписки). Клиентское чтение кадров — вне серверной базы
+//! (`UNKNOWN`).
 //!
 //! Объявленные швы переноса (не расхождения): трейты ниже — переходные
 //! фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`, реализация
 //! остаётся у него в файле-делегате `appserver/skills/zonalcast.rs`; имена
 //! членов сохраняют исходную операцию. Швы потребляются статически
-//! (generic), dyn-совместимость и `Send`-контракт не вводятся (прецедент
-//! ADR-0013 семейства statecast/selfcast). Общие хелперы старого пакета
+//! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
+//! Общие хелперы старого пакета
 //! переносятся не как тела, а объявляются швами: MP/путь/оружие
 //! `rangedweaponcast` (`check_cast_mana*`, `spend_cast_mana*`,
 //! `check_skill_path`, арбалетные проверки), мастер и живые CCH/элемент
@@ -89,13 +85,13 @@
 //! областей и рассылка BF502 (`CGame::add_*_phalanx`/`send_*_entry`),
 //! оружейный множитель/критическая ставка `globe_setup` + goods factory.
 //! Тело `CFireWall::Summon` остаётся у прежнего владельца `appserver/
-//! skills/firewall.rs` (файл вне порции) и вызывается швом `summon_fire_wall`.
+//! skills/firewall.rs` и вызывается швом `summon_fire_wall`.
 //! `CSoulMirror` граница: его обход области и призыв клеток живут в
-//! `skills/soulmirror.rs` (порция №6c, швы `SelfCastGame`), отсюда вызов
-//! идёт швом `apply_soul_mirror_area`; маска клетки (`soul_mirror_scope_*`)
-//! тоже принадлежит ему; входной снимок порождённых зеркалом существ —
-//! wire-конверт `skills/summonshape.rs` (сноска по визуалам: hub visual
-//! переносит только кадр `0xBFE01`, BF502 — дело summonshape).
+//! `skills/soulmirror.rs` (швы `SelfCastGame`), отсюда вызов идёт швом
+//! `apply_soul_mirror_area`; маска клетки (`soul_mirror_scope_*`) тоже
+//! принадлежит ему; входной снимок порождённых зеркалом существ —
+//! wire-конверт `skills/summonshape.rs` (hub visual публикует только кадр
+//! `0xBFE01`, BF502 — дело summonshape).
 //! Часы прежнего main loop приходят указателем `now_milliseconds`
 //! (делегат передаёт перечитывание через `runtime.now_milliseconds()`).
 
@@ -556,8 +552,7 @@ pub trait ZonalCastContact<Runtime>: ZonalCastGame {
         runtime: &mut Runtime,
     );
 
-    /// Тело `CFireWall::Summon` прежнего владельца `appserver/skills/firewall.rs`
-    /// (файл вне порции T5).
+    /// Тело `CFireWall::Summon` прежнего владельца `appserver/skills/firewall.rs`.
     fn summon_fire_wall(
         &mut self,
         address: Self::SkillAddress,
@@ -566,7 +561,7 @@ pub trait ZonalCastContact<Runtime>: ZonalCastGame {
         runtime: &mut Runtime,
     );
 
-    /// Обход области SoulMirror `skills/soulmirror.rs` порции №6c
+    /// Обход области SoulMirror `skills/soulmirror.rs`
     /// (через прежнего делегата `appserver/skills/soulmirror.rs`).
     fn apply_soul_mirror_area(
         &mut self,

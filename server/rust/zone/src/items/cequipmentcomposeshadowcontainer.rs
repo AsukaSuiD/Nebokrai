@@ -1,13 +1,6 @@
-//! Трёхслотовая shadow-сессия compose GameServer, перенесённая в Zone
-//! `items/` — владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cequipmentcomposeshadowcontainer.rs`
-//! (волна Z-C3); отличия — нормализация `pub(crate)`→`pub` на границе crate и
-//! швы переноса (не расхождения): count-limit слой и shadow core — Zone
-//! `items/camountlimitgoodsshadowcontainer.rs`/`items/cgoodsshadowcontainer.rs`,
-//! `PreviousContainer` — Zone `items/ccontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, `CGuid` — Shared.
+//! Трёхслотовая shadow-сессия compose исторического GameServer: слоты
+//! base/sub/result поверх count-limit слоя и shadow core с намеренным
+//! обходом owner/extend/capacity validation в `AddShadow`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cequipmentcomposeshadowcontainer.cpp`.

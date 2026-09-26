@@ -8,8 +8,8 @@
 //! CalculateAttackPower VA 0x00600120, 0x005FE6E0, 0x005F2600,
 //! 0x005F5E90, 0x005EF3F0 и 0x005FEFB0 соответственно.
 //! Тела `apply_element_phalanx_attack`/`apply_element_phalanx_war_soul`
-//! перенесены из старого `appserver/skills/elementphalanxattack.rs` буквально
-//! порцией T5 «zonalcast-хаб»: IsDied→PK seed→Calculate→receipt без RP;
+//! перенесены из старого `appserver/skills/elementphalanxattack.rs` буквально:
+//! IsDied→PK seed→Calculate→receipt без RP;
 //! Player по attacker ID и оружейный множитель разрешаются при каждом
 //! попадании живыми швами `ZonalCastGame`/`ZonalCastContact`
 //! (`skills/zonalcast.rs`). Поиск Player не зависит от master type; его

@@ -1,9 +1,7 @@
 //! BFBaseAttack (0x224): Check/AI и Summon снаряда базовой атаки феи.
 //!
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/battlefairybasemagic.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/battlefairybasemagic.rs`; тела перенесены
-//! буквально порцией №6b «BF-ядро».
+//! `appserver/skills/battlefairybasemagic.cpp`; тела перенесены буквально.
 //!
 //! Общий зарегистрированный вход владеет Begin, visual и End; здесь остаются
 //! Check, AI и создание самостоятельного снаряда. Check использует исходную

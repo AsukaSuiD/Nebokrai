@@ -1,12 +1,9 @@
 //! Общая геометрия, визуальный формат и контактная атака рывков
-//! Flash/LittleFlash, плюс переходные hub-швы семейства melee-рывков
-//! (dash/flash/littleflash/rush). Источник: gameserver.exe/GameServer.pdb,
-//! appserver/skills/flash.cpp, littleflash.cpp и littleflash2.cpp.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/dash.rs`;
-//! тела перенесены буквально, порт — порция №5 «player melee» (разведка
-//! зафиксирована записью аудита «Zone skills: машинная разведка melee
-//! dash/flash/littleflash/rush (порция №5)», 26 сентября 2026, по точной паре
-//! `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` RSDS match).
+//! Flash/LittleFlash, плюс hub-швы семейства melee-рывков
+//! (dash/flash/littleflash/rush). Источник: точная пара
+//! `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
+//! appserver/skills/flash.cpp, littleflash.cpp и littleflash2.cpp;
+//! тела перенесены буквально.
 //!
 //! Путь и список поражённых целей принадлежат concrete владельцам и не
 //! копируются через callback атаки. Общая обработка пути сохраняет блоки
@@ -19,8 +16,8 @@
 //!
 //! Контакт использует общий оружейный расчёт с коэффициентом TARGET_DAMAGE_FACTOR.
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`, реализация
+//! Объявленные швы переноса (не расхождения): трейты ниже — фасады
+//! `CGame`/`CPlayer`/`CMoveShape` старого пакета, реализация
 //! остаётся у него в файле-делегате `appserver/skills/dash.rs`; имена членов
 //! сохраняют исходную операцию. Швы потребляются статически (generic),
 //! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
@@ -40,7 +37,7 @@
 //! `truncate(maximum)` до нуля — пустой путь остаётся безопасным отказом без
 //! выдуманной клетки назначения.
 //!
-//! Оставшиеся UNKNOWN/PARTIAL (по разведке порции): порядок геттеров X/Y
+//! Оставшиеся UNKNOWN/PARTIAL: порядок геттеров X/Y
 //! (сквозная согласованность подтверждена), место push в Attack-списке
 //! CFlash, потребители raw CAN `available`. Машинные статусы сверенных
 //! пунктов — в шапках `flash.rs`, `littleflash.rs` и `rush.rs`.
@@ -71,7 +68,7 @@ pub struct DashSkillPkPermissions {
     pub criminal: bool,
 }
 
-/// Игрок-источник рывка: переходный фасад старого `CPlayer`.
+/// Игрок-источник рывка: фасад старого `CPlayer`.
 pub trait DashSkillPlayer {
     /// Форма игрока (identity, клетки, direction).
     fn shape(&self) -> &CShape;
@@ -104,7 +101,7 @@ pub trait DashSkillPlayer {
     fn set_skill_moveable(&mut self, moveable: bool);
 }
 
-/// Живая фигура стороны рывка: переходный фасад старого `CMoveShape`.
+/// Живая фигура стороны рывка: фасад старого `CMoveShape`.
 pub trait DashSkillMoveShape {
     fn shape(&self) -> &CShape;
 
@@ -122,7 +119,7 @@ pub enum DashSkillExecutionOutcome {
     Completed,
 }
 
-/// Переходные фасады прежнего владельца `CGame`, открывающие семейству рывков
+/// Фасады `CGame` старого пакета, открывающие семейству рывков
 /// только прежние обращения; имена сохраняют исходную операцию.
 pub trait DashSkillGame {
     /// Hub-исполнение монстра записи навыка (`CMonster` старого пакета).

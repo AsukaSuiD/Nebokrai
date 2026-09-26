@@ -1,10 +1,9 @@
 //! Снаряд смертельного удара боевого духа `CFatalBlowPhalanx`.
 //!
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! исходный владелец `appserver/skills/fatalblowphalanx.cpp`. Прежний
-//! переходный владелец — `src/gameserver/appserver/skills/fatalblowphalanx.rs`;
-//! форма, тики, клиентский снимок и формула перенесены буквально порцией №6b
-//! «BF-ядро». Снаряд хранит снимок владельца, цель, уровень и коэффициент
+//! исходный владелец `appserver/skills/fatalblowphalanx.cpp`;
+//! форма, тики, клиентский снимок и формула перенесены буквально.
+//! Снаряд хранит снимок владельца, цель, уровень и коэффициент
 //! навыка. На первом AI-проходе после создания он пытается нанести физический
 //! удар; отсутствие master либо отказ IsAttackAble оставляют его до следующего
 //! прохода. Удаление следует после Attack, а строгий абсолютный wrapping-срок
@@ -171,16 +170,6 @@ impl CFatalBlowPhalanx {
     }
 }
 
-// Восстановление снаряда из массива байтов пока не достигнуто и сохранено RAW.
-// ============================================================================
-// FUNCTION: CFatalBlowPhalanx::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fatalblowphalanx.cpp:181
-// RVA: 0x001ED890
-// ADDRESS: 005ed890
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// UNKNOWN: восстановление снаряда из массива байтов пока не перенесено —
+// `CFatalBlowPhalanx::DecordFromByteArray` (RVA `0x001ED890`,
+// fatalblowphalanx.cpp:181, `bool __thiscall DecordFromByteArray(uchar*, long*, bool)`).

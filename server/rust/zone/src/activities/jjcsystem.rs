@@ -1,4 +1,4 @@
-//! Process-owned состояние `CJJcSystem` GameServer, перенесённое в Zone `activities/` (локальное исполнение арен).
+//! Process-owned состояние `CJJcSystem` GameServer в Zone `activities/` (локальное исполнение арен).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/jjcsystem.cpp`. Достигнутые World callbacks сохраняют две

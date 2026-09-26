@@ -1,4 +1,4 @@
-//! Владелец GameServer-снимка деревенских войн `CVillageWarSys`, перенесённый в Zone `activities/`.
+//! Владелец GameServer-снимка деревенских войн `CVillageWarSys` в Zone `activities/`.
 //!
 //! Snapshot/setup (`0x0005F320`), initial state (`0x0005E310`), faction update
 //! (`0x0005E480`) и фазовые callbacks `0x0005E5B0..0x0005E640`,

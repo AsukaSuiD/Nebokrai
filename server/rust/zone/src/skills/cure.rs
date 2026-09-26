@@ -5,11 +5,8 @@
 //! `0x1AD3A0`, собственное DoesTargetEffective `0x1AD590` (NULL S с
 //! fallback U), CastCure `0x1ADB10` (порядок обхода позиций и расход RNG
 //! на каждую подходящую), AI `0x1AE110`, CCureState 8-байтный codec fold
-//! (Serialize `0x1F51E0`, Unserialize `0x1E9AC0`). Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/cure.rs`; тела Check/AI,
-//! диагностика и обход состояний перенесены буквально порцией №6a
-//! (разведка — запись аудита «Zone skills: машинная разведка
-//! battlefairy-навыков (порция №6)», 26 сентября 2026).
+//! (Serialize `0x1F51E0`, Unserialize `0x1E9AC0`). Тела Check/AI,
+//! диагностика и обход состояний перенесены буквально.
 //!
 //! Общий stateskill владеет Begin, visual loop1 и полным End игрока и
 //! монстра; здесь выбор цели, MP, путь и CastCure. AI сохраняет участников

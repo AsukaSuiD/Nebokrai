@@ -1,11 +1,5 @@
-//! Visitor ремонта всех предметов GameServer, перенесённый в Zone `items/` —
-//! владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/listener/cgoodsrepairlistener.rs` (волна Z-C2c);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): `CGoods` — Zone `items/cgoods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b).
+//! Visitor ремонта всех предметов исторического GameServer: вызывает
+//! `CGoodsFactory::RepairEquipment` для каждого ремонтопригодного товара.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/listener/cgoodsrepairlistener.cpp`. `OnTraversingContainer`

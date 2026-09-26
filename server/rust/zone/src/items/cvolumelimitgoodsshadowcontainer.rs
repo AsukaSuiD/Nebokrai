@@ -1,14 +1,5 @@
-//! Позиционный слой goods shadow container исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cvolumelimitgoodsshadowcontainer.rs`
-//! (волна Z-C3); отличия — нормализация `pub(crate)`→`pub` на границе crate и
-//! швы переноса (не расхождения): count-limit слой и shadow core — Zone
-//! `items/camountlimitgoodsshadowcontainer.rs`/`items/cgoodsshadowcontainer.rs`,
-//! `CGoods` — Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared.
+//! Позиционный слой goods shadow container исторического GameServer:
+//! `Vec<Option<CGuid>>` ячеек поверх count-limit слоя и shadow core.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cvolumelimitgoodsshadowcontainer.cpp`.
@@ -19,7 +10,7 @@
 //! и synchronized `RemoveShadow` материализованы. Exact stack selection не
 //! сравнивает `GAP_PARTICULAR_ATTRIBUTE` и использует wrapping `u32` addition.
 //! Source player move, no-trade validation, add packet и clone target ниже
-//! остаются RAW до межконтейнерного dispatcher-а.
+//! ещё требуют реконструкции.
 
 use super::camountlimitgoodsshadowcontainer::CAmountLimitGoodsShadowContainer;
 use super::cgoods::CGoods;

@@ -1,4 +1,4 @@
-//! GameServer-владелец country-war side state `CountryWarSys`, перенесённый в Zone `activities/` (локальное исполнение войн).
+//! GameServer-владелец country-war side state `CountryWarSys` в Zone `activities/` (локальное исполнение войн).
 //!
 //! Восстановлены constructor, snapshot decoder, side queries, region
 //! lookup/init, `update_apply_war`, phase и victory chains; исходник

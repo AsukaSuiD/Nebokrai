@@ -1,19 +1,12 @@
-//! Общий реестр игровых сессий GameServer `CSessionFactory`, перенесённый в
-//! Zone `interactions/` (волна Z-C6).
+//! Общий реестр игровых сессий исторического GameServer `CSessionFactory`:
+//! неделимый ID-поток session/plug, typed-карты и порядок GC.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/session/csessionfactory.rs`; отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и пути переноса (не
-//! расхождения): отчёты и блоки shadow-контейнеров — Zone `items/` (волна
-//! Z-C3), `CGoods` — Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), session/plug типы — Zone
-//! `sessions/` (волна Z-C4), константы и агрегат рамки обмена — Zone
-//! `trade/ctrader.rs` (волна Z-C4). По карте realm-and-zone «общий ID-поток
-//! неделим» единый реестр держит `next_session_id/next_plug_id`, typed-карты
-//! и порядок GC для команд, сделок, лавок и операций экипировки вместе.
-//! MainLoop-стадии GC и отключение container-listener-ов по owner остаются у
-//! прежнего владельца `CGame`; старый файл держит обёртку владения для
-//! coherent-impl шва around-runtime неперенесённого слоя.
+//! По карте realm-and-zone «общий ID-поток неделим» единый реестр держит
+//! `next_session_id/next_plug_id`, typed-карты и порядок GC для команд,
+//! сделок, лавок и операций экипировки вместе. MainLoop-стадии GC и
+//! отключение container-listener-ов по owner остаются у прежнего владельца
+//! `CGame`; старый файл держит обёртку владения для coherent-impl шва
+//! around-runtime неперенесённого слоя.
 //!
 //! `QuerySession` RVA `0x000780C0` и `QueryPlug` RVA `0x00078190` подтверждены
 //! дизассемблированием точной пары `GameServer/gameserver.exe +

@@ -1,14 +1,9 @@
-//! Hub-швы и общие типы self/zone-кастов порции №6c: ослепление CBlind и
-//! общий lifecycle 8-байт lock-состояний (CBlindState...CBoaLockState),
-//! накопление энергии CEnergyHolding, боевой клич CRoar, стойка CPillar,
-//! закалки CCallosity/CCallosity2 и область зеркала душ CSoulMirror.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match). Прежний переходный владелец тел —
-//! `src/gameserver/appserver/skills/{blind,blindstate,energyholding,
-//! energyholdingstate,roar,roarstate,pillar,pillarstate,callosity,
-//! callosity2,callositystate,soulmirror}.rs`; тела перенесены буквально
-//! порцией №6c «self/zone-касты» (разведка — запись аудита «Zone skills:
-//! машинная разведка battlefairy-навыков (порция №6)», 26 сентября 2026).
+//! Hub-швы и общие типы self/zone-кастов: ослепление CBlind и общий
+//! lifecycle 8-байт lock-состояний (CBlindState...CBoaLockState), накопление
+//! энергии CEnergyHolding, боевой клич CRoar, стойка CPillar, закалки
+//! CCallosity/CCallosity2 и область зеркала душ CSoulMirror.
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match).
 //!
 //! Машинные якоря семьи (RVA той же точной пары): CBlind Begin `0x16DA30`,
 //! AddBlindState `0x16E500` → `new 0x3C` + ctor CRushState2 `0x5F12E0`
@@ -17,7 +12,7 @@
 //! Check `0x14A190`, AI `0x14A4A0`, state ctor `0x1EC410`, AddEnergy
 //! `0x1EC490`, GetRemainedTime `0x201200`, skill End(H) 3-fold `0x1502F0`.
 //! CRoar Begin `0x14A7D0`, AI `0x14B060` (окно `roar_bounds` VA
-//! `0x54B1CC..0x54B23E` подтверждено ранее); CRoarState Serialize 5-fold
+//! `0x54B1CC..0x54B23E`); CRoarState Serialize 5-fold
 //! `0x1F65F0` (с heal-квартетом). CPillar Begin `0x16FA00`, AI `0x170110`,
 //! state Begin `0x1F4B60`. CCallosity/CCallosity2 — собственные Check/AI,
 //! методы состояний почти полностью попарно folded (9 методов, Restart-fold
@@ -32,7 +27,7 @@
 //! реализация остаётся у него в файле-делегате
 //! `appserver/skills/selfcast.rs`; имена членов сохраняют исходную
 //! операцию. Швы потребляются статически (generic), dyn-совместимость и
-//! `Send`-контракт не вводятся (прецедент hub-паттерна порции №6a).
+//! `Send`-контракт не вводятся.
 //! Общие хелперы старого пакета переносятся не как тела, а объявляются
 //! швами: обвязка арены `states/state.rs` (`begin_base_applied_state`,
 //! `begin_applied_state_visual`, `update_applied_state_visual_base`,
@@ -40,7 +35,8 @@
 //! `resolve_applied_state_sufferer`, `remove_applied_state_from`,
 //! `end_and_destroy_state_at`), машина накопления `accumulatedstate`
 //! (`add_accumulated_state` и `update_accumulated_visual` — владелец
-//! поделён с SoulCollect и перенесётся его порцией), прямой элементный
+//! поделён с SoulCollect и пока остаётся у старого пакета), прямой
+//! элементный
 //! контакт `directelementattack::apply_direct_element_attack`, мастер
 //! источника `weaponattack::source_master`, PK-вход
 //! `player_on_first_skill_at_position` и lifecycle призванного существа из

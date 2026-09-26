@@ -7,8 +7,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp`.
-//! Свидетельства машинной базы зафиксированы разведкой линий D/E и прежней
-//! шапкой `appserver/ai/bossblue.rs`; тела перенесены буквально:
+//! Машинная сверка по этой паре:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -17,25 +16,23 @@
 //! | `SelectAttackSkill`: один исходный RNG-бросок runtime, пороговая ярость по фазе, повтор ниже 8% HP при отсутствии записанного fury-состояния; накопление `odds` намеренно учитывает доли исключённых ID `2` и `0x1f7`; исход — default-навык (в отличие от fallthrough без назначения у `CBossFiend`) | VA `0x0060A0E0` | [`select_boss_blue_attack_skill`], [`choose_boss_blue_attack_skill`] | `MATCH` |
 //! | `OnSearchEnemy`: общий проход игроков, затем питомцев с заменой цели при равной дистанции | подтверждён прежней шапкой владельца | [`select_boss_blue_enemy`] через [`super::lord::select_nearest_player_or_pet`] | `MATCH` |
 //!
-//! Граница порции E1 (не расхождения): общий monster tick hub — `Run`,
-//! `OnSchedule` (VA `0x00609FE0`), `OnIdle`, `OnMoving`, а также решение сна
-//! при отсутствии игроков (`Hibernate`, VA `0x006093B0`, слинковано ICF с
-//! общими телами) — остаются hub-владением и этой волной не затрагиваются.
+//! Остаются hub-владением: общий monster tick hub — `Run`, `OnSchedule`
+//! (VA `0x00609FE0`), `OnIdle`, `OnMoving`, а также решение сна при отсутствии
+//! игроков (`Hibernate`, VA `0x006093B0`, слинковано ICF с общими телами).
 //! `CMonster` создаёт и сбрасывает пороги после общего пробуждения, а
 //! применение выбранного навыка (`bossbluefury` и реестр исполнителей)
 //! остаётся у своих skill-owner-ов.
 //!
-//! Объявленные швы (не расхождения):
+//! Швы к hub-владельцам:
 //!
 //! - [`BossBlueDispatcherMonster`]/[`BossBlueDispatcherMoveShape`] — доступ к
 //!   состоянию восьми порогов на hub-владельце `CMonster` и признаку
-//!   записанного fury-состояния формы; сами пороги и тело выбора перенесены.
+//!   записанного fury-состояния формы.
 //! - Enemy-проход повторяет общий шов [`super::lord::EnemySearchDispatcherRegion`]/
 //!   [`super::lord::EnemySearchDispatcherPlayer`] и тот же nearest-проход
-//!   [`super::lord::select_nearest_player_or_pet`], что и владыка: разведка
-//!   линии E подтверждает поведенчески одинаковый проход (игроки перед
-//!   питомцами, равенство заменяет запись), единый дом — у `CLord` этой
-//!   порции до переноса общего `guardtarget` его волной.
+//!   [`super::lord::select_nearest_player_or_pet`], что и владыка (игроки
+//!   перед питомцами, равенство заменяет запись); единый дом прохода —
+//!   `ai/lord.rs`.
 
 use nebokrai_shared::resources::{MonsterProperties, MonsterSkill};
 

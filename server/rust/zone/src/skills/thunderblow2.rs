@@ -1,11 +1,8 @@
 //! Направленный громовой удар `CThunderBlow2` (`0x14D`) и его визуальный
 //! ресурс. Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), `appserver/skills/thunderblow2.cpp`.
-//! Прежние переходные владельцы — `src/gameserver/appserver/skills/thunderblow2.rs`
-//! и `thunderblow2visual.rs`; тела перенесены буквально порцией T3
-//! «ThunderBlow-пара». Решение волны: визуальный ресурс слит сюда, т.к.
-//! исходный `thunderblow2.cpp` — единственный владелец обеих частей (шапка
-//! прежнего `thunderblow2visual.rs` указывает тот же `.cpp`).
+//! Визуальный ресурс слит сюда: исходный `thunderblow2.cpp` — единственный
+//! владелец обеих частей.
 //!
 //! Зарегистрированный Attack Begin создаёт loop1-visual перед Check; отказ
 //! вызывает End(0) без дополнительного пакета. Check требует отдельную S,
@@ -27,7 +24,7 @@
 //! разрешает S либо использует точку базы, поэтому после отбрасывания
 //! получатель эффекта может отличаться от S текущего AI; personal-таблица
 //! ошибок 2/7/10/11/13/15 посылает пару [0, mode] только игроку (таблица и
-//! кадры — MATCH по общей wire-реконструкции режима `0xBFE01`). Базовый хвост
+//! кадры — по общей wire-реконструкции режима `0xBFE01`). Базовый хвост
 //! выполняется общим visual-owner также для отсутствующего U, завершённого
 //! ресурса и неизвестного mode.
 //!
@@ -48,9 +45,9 @@
 //! `skills/dash.rs`). Часы `now` — fn-шов делегата прежнего main-loop runtime
 //! (`game_tick_milliseconds`), как в `skills/littleflash.rs`. Потребление швов
 //! статическое (generic), dyn-совместимость и `Send`-контракт не вводятся
-//! (прецедент ADR-0013). Запись исполнения — прежняя
-//! `skills/execution/payload.rs` `ThunderBlow2Execution` (только
-//! `attacking_started`), поле missile не материализуется.
+//! (ADR-0013). Запись исполнения — `skills/execution/payload.rs`
+//! `ThunderBlow2Execution` (только `attacking_started`), поле missile не
+//! материализуется.
 
 use nebokrai_shared::runtime::get_line_direction;
 

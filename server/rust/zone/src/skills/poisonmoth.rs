@@ -5,19 +5,13 @@
 //! здесь не дублируются); оркестрация player-cast и общий End — hub
 //! `playercast`/`states/skill.rs`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/poisonmoth.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/poisonmoth.rs`; тела Check/AI перенесены
-//! буквально (кластер D полосы «трупная/ядовая state-линия», порция D6,
-//! карта — запись аудита «Zone skills: карта полосы Monster 0x19x — 5
-//! кластеров волн», 26 сентября 2026).
-//!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
-//! D8-poisonmoth.md`, тела `.local/recon-de/disasm/CPoisonMoth.txt`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Источник: `gameserver.exe` (SHA-256
+//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
+//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
+//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
+//! `appserver/skills/poisonmoth.cpp`. Машинный разбор тела —
+//! `.local/recon-de/notes/D8-poisonmoth.md` и
+//! `.local/recon-de/disasm/CPoisonMoth.txt`.
 //!
 //! - Check `0x58C4C0`: null U → 0; self-target (arg2==U) → visual(10) +
 //!   GS0286 (клей самонаведения здесь); затем семейный скелет
@@ -56,12 +50,12 @@
 //!   (`kind 5` записей общего хвоста; hit = −Query(20001) только у 0xCF,
 //!   element-добавка 0 вместо Query(20013), jns/jge-clamp, второй RNG крита
 //!   обязателен; f64-модель произведения факторов — принятая модель
-//!   combat.md). Эти семейные тела сверены ранее и здесь не переоткрываются.
+//!   combat.md). Эти семейные тела здесь не переоткрываются.
 //! - End `0x58C3A0`: сброс фазы/счётчиков/цели, освобождение пути до
 //!   свежего U Move1 и общего Attack End с исходным аргументом — payload
 //!   `PoisonMothExecutionState::clear_end_paths` (Zone `skills/execution/
-//!   payload.rs`, перенесён раньше) + hub-кадр End зарегистрированного
-//!   экземпляра прежнего пакета.
+//!   payload.rs`) + hub-кадр End зарегистрированного экземпляра прежнего
+//!   пакета.
 //!
 //! Объявленные швы переноса (не расхождения): трейты `PoisonMothGame`/
 //! `PoisonMothMoveShape` и `PoisonMothContact<Runtime>` ниже — фасады

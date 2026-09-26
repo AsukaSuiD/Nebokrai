@@ -1,21 +1,7 @@
 //! Позиционный storage-prefix `CBattleFairyContainer` исторического
-//! GameServer, перенесённый в Zone `items/` — владельца типов контейнеров и
-//! операций над ними.
+//! GameServer: 17 фиксированных ячеек боевой феи с positional add-фильтрами,
+//! check/execution combine и gear grow/upgrade операциями.
 //!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cbattlefairycontainer.rs` (волна
-//! Z-C2c), включая установленные порцией 7c правки execution combine D1/D2
-//! (порядок валидации goods-presence ×3 затем base-properties ×3 с notification
-//! `56/57/58` затем `56/57/60`; молчаливый execution no-match без `ZHGS0060`;
-//! сигнатура `Result<Option<BattleFairyCompose>, …>`); отличия — нормализация
-//! `pub(crate)`→`pub` на границе crate и швы переноса (не расхождения):
-//! amount/volume ядра — Zone `items/camountlimitgoodscontainer.rs` и
-//! `items/cvolumelimitgoodscontainer.rs`, `CGoods` — Zone `items/cgoods.rs`,
-//! конфигурация боевой феи (`BattleFairyCompose`,
-//! `BATTLE_FAIRY_GOODS_UPDATE_MESSAGE_TYPE`) — Zone
-//! `items/cbattlefairyproperty.rs`, GAP/goods-type константы — Zone
-//! `content/goods.rs`, реестр `CGoodsFactory` — Zone `content/goodsfactory.rs`
-//! (волна Z-G0b), `ShapeIdentity` — Zone `regions/` (re-export `identity`).
 //! Gear/property-логика Zone skills `battlefairygear` представляет ячейку
 //! позицией `u32`; enum `BattleFairyCell` и его positional валидация остаются
 //! здесь у владельца контейнера, сигнатуры не меняются.
@@ -52,7 +38,7 @@
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
 //! логичную ячейку из позднего C++-донора. Остальные ещё не подключённые
-//! player-integrated методы ещё требуют реконструкции; полный декомпилят хранится локально.
+//! player-integrated методы ещё требуют реконструкции.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,

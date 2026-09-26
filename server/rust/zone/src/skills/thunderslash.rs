@@ -2,10 +2,8 @@
 //! `CThunderSlashEffect` — один исходный `appserver/skills/thunderslash.cpp`.
 //! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match); исходные владельцы
-//! `appserver/skills/thunderslash.cpp/.h` (тело и visual — тот же cpp).
-//! Прежние переходные владельцы — `src/gameserver/appserver/skills/
-//! {thunderslash,thunderslashvisual}.rs`; тела перенесены буквально порцией
-//! T4 по прецеденту `skills/thunderblow2.rs` (visual слит в файл навыка).
+//! `appserver/skills/thunderslash.cpp/.h` (тело и visual — тот же cpp);
+//! visual слит в файл навыка, как и у `skills/thunderblow2.rs`.
 //!
 //! Машинные якоря (VA = RVA + 0x400000): ctor `0x57A240` (0x54 байта,
 //! фабричный индекс `0x42`), vtable `0x65A974`; Begin триада
@@ -58,8 +56,8 @@
 //!
 //! UNKNOWN/объявленная неполнота: запись CAN `0x2716` → `[+0x3C]` в
 //! исполнение player-kernel отдельно не материализуется — реконструкция
-//! только читает свойство; потребители поля +0x3C этой стороны в волне не
-//! устанавливались (конвенция summon-полосы).
+//! только читает свойство; потребители поля +0x3C этой стороны не
+//! установлены (конвенция summon-полосы).
 
 use nebokrai_shared::runtime::get_line_direction;
 

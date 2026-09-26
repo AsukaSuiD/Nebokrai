@@ -1,12 +1,8 @@
 //! Правила и исполнение CPromotion (0x142) — усиление.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/promotion.cpp/.h`; состояние принадлежит
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/promotion.cpp/.h`; состояние принадлежит
 //! `promotionstate.cpp/.h`. Машинные якоря семьи: CPromotion Begin
 //! `0x1686A0`, AI `0x169110`; Restart состояния — fold `0x1FD450`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/
-//! promotion.rs`; тела Check/AI перенесены буквально порцией №6a
-//! (разведка — запись аудита «Zone skills: машинная разведка
-//! battlefairy-навыков (порция №6)», 26 сентября 2026).
 //!
 //! Зарегистрированный Begin предшествует visual loop1 и CheckCast. Нулевая
 //! стоимость MP у игрока — тихий отказ CheckCast; положительная

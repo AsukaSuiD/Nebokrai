@@ -1,23 +1,10 @@
-//! Позиционное owning-ядро `CEquipmentContainer` исторического GameServer,
-//! перенесённое в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
+//! Позиционное owning-ядро `CEquipmentContainer` исторического GameServer:
+//! 17 колонок с add/remove/swap, timed/AI partial effects и ростом фей.
 //!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cequipmentcontainer.rs` (волна Z-C2b);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): listener handles — Zone `items/ccontainer.rs`, owner
-//! lifecycle — Zone `items/cgoodscontainer.rs`, goods-core и typed blocks —
-//! Zone `items/cgoods.rs`, GAP/equip-place константы и `GOODS_TYPE_EQUIPMENT` —
-//! Zone `content/goods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), свойства обычной феи — Zone
-//! `items/fairyproperties.rs` с параметризацией report-а швом
-//! `FairyGrowEffectSink` (generic `Effects` вместо прежнего
-//! `GameEffectJournal`), конфигурация боевой феи — Zone
-//! `items/cbattlefairyproperty.rs`, `ShapeIdentity` — Zone `regions/`
-//! (re-export `identity`), extend-id `2` — вариант `PlayerContainerKind::Equipment`
-//! каталога `items/playercontainers.rs` (волна Z-C1, прежняя константа
-//! `EQUIPMENT_CONTAINER_EXTEND_ID` не дублируется), `CGuid` и wire-кодеки —
-//! Shared.
+//! Report-ы роста феи параметризованы generic-швом `FairyGrowEffectSink`
+//! (см. `fairyproperties.rs`); extend-id `2` — вариант
+//! `PlayerContainerKind::Equipment` каталога `items/playercontainers.rs`
+//! (дизайн D4).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cequipmentcontainer.cpp`. Семнадцать

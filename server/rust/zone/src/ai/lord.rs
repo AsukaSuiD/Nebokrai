@@ -7,8 +7,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp`.
-//! Свидетельства машинной базы зафиксированы разведкой линий D/E и прежней
-//! шапкой `appserver/ai/lord.rs`; тела перенесены буквально:
+//! Машинная сверка по этой паре:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -23,16 +22,15 @@
 //! задержки и свежий timestamp после spatial-вызова. Этот общий MoveTo-контракт
 //! — дом `ai/monsterai.rs`, здесь он только вызывается.
 //!
-//! Граница порции E1 (не расхождения): тела общего monster tick hub — `Run`
+//! Остаются hub-владением: тела общего monster tick hub — `Run`
 //! (VA `0x0060E250` → `CMonsterAI::Run` RVA `0x0C7D10`), `OnSchedule`
 //! (VA `0x0060AF50` → thunk общего расписания), `OnIdle`, `OnMoving`
 //! `CMonsterAI`/`CBossBlue`/`CBossFiend`/`CLord` и `CRage::End` (RVA
-//! `0x59F790`) — остаются hub-владением и этой волной не затрагиваются. Там
-//! же — реальный путь `monsterbaseattack`, назначающий выбранный навык и
-//! ближайшую живую цель, и исполнители `lordfastattack`/
+//! `0x59F790`). Там же — реальный путь `monsterbaseattack`, назначающий
+//! выбранный навык и ближайшую живую цель, и исполнители `lordfastattack`/
 //! `lordwiderangingattack` конкретных стадий и эффектов.
 //!
-//! Объявленные швы (не расхождения):
+//! Швы к hub-владельцам:
 //!
 //! - [`LordDispatcherMonster`] — общая Defense-ветвь `when_been_hurted` и
 //!   назначение цели hub-владельца `CMonster` (state-машина AI и FIFO
@@ -43,10 +41,9 @@
 //! - [`EnemySearchDispatcherRegion`]/[`EnemySearchDispatcherPlayer`] — общий
 //!   проход кандидатов (players → pets) в исходном девяти-area порядке живого
 //!   региона с фильтром живых игроков этого региона и приручённых живых
-//!   питомцев; теми же швами пользуются `ai/bossblue.rs` и `ai/bossfiend.rs`
-//!   этой порции. Общий guard-target слой старого пакета (`guardtarget`)
-//!   переходит своей волной вместе с охранниками; до неё
-//!   [`select_nearest_player_or_pet`] — единый дом этого прохода для E1.
+//!   питомцев; теми же швами пользуются `ai/bossblue.rs` и `ai/bossfiend.rs`.
+//!   [`select_nearest_player_or_pet`] — единый дом этого прохода, а правило
+//!   минимальной дистанции навыка живёт отдельно в `ai/guardtarget.rs`.
 //! - Часы каждого события читаются отдельным вызовом `now` (closure/fn от
 //!   делегата старого main loop); точное значение равно
 //!   `game_tick_milliseconds` (`GameClockContext::now_milliseconds`).
@@ -95,8 +92,8 @@ pub trait LordDispatcherMonster: MonsterDispatcherMonster {
 }
 
 /// Владелец пространственного скана владыки: переходный фасад прежнего
-/// `CGame`. Сам figure-скан и выбор первой призванной формы — тело порции
-/// выше; фасад открывает только `GetShape` одной клетки и размеры области.
+/// `CGame`. Сам figure-скан и выбор первой призванной формы — тела выше;
+/// фасад открывает только `GetShape` одной клетки и размеры области.
 pub trait LordDispatcherGame: MonsterDispatcherGame {
     /// Общие размеры области `CGame` для figure-скана.
     fn area_dimensions(&self) -> (i32, i32);

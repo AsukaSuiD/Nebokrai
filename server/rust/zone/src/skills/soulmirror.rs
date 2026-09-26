@@ -5,12 +5,8 @@
 //! (точная пара, RSDS match). GetScope VA 0x005A40D0, GetLength/GetHeight VA
 //! 0x005A4120/0x005A4150, AI VA 0x005A4D10, CalculateAttackPower `0x1A4A30`,
 //! Attack `0x1A4BF0`; End(H) 13-fold `0x146090` — общий CStateSkill tail,
-//! здесь не дублируется (порядок clear+End исполняет прежний kernel).
-//! Прежний переходный владелец обхода — `src/gameserver/appserver/skills/
-//! soulmirror.rs`; тела `apply_soul_mirror_area`/`summon_empty_cell`
-//! перенесены буквально порцией №6c «self/zone-касты» (разведка — запись
-//! аудита «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026; appserver/skills/soulmirror.cpp/.h).
+//! здесь не дублируется (порядок clear+End исполняет прежний kernel);
+//! исходный владелец `appserver/skills/soulmirror.cpp/.h`.
 //!
 //! Общий ZonalCast хранит зарегистрированный Attack, его U/S, Check с
 //! Player-only MP/Move0, unsigned срок start+delay и общий End. После visual1
@@ -35,12 +31,12 @@
 //! `add_soul_mirror_summoned_creature` (property по picture id → owner →
 //! Add → возврат owner, в порядке прежнего тела).
 //!
-//! Порция T5 «zonalcast-хаб» увела общий Begin/Check/AI/End скелет зеркала
-//! и кадр его visual в `skills/zonalcast.rs`; вызов этого обхода оттуда —
-//! шов `ZonalCastContact::apply_soul_mirror_area`. Маска и scope области
-//! остаются этому файлу (соседям не делегируются). По визуалам: hub переносит
-//! только кадр `0xBFE01` скелета, а входные снимки порождённых зеркалом
-//! существ — wire-конверт `skills/summonshape.rs` (сноска по границе T5).
+//! Общий Begin/Check/AI/End скелет зеркала и кадр его visual живут в
+//! `skills/zonalcast.rs`; вызов этого обхода оттуда — шов
+//! `ZonalCastContact::apply_soul_mirror_area`. Маска и scope области
+//! остаются этому файлу (соседям не делегируются). По визуалам: hub
+//! публикует только кадр `0xBFE01` скелета, а входные снимки порождённых
+//! зеркалом существ — wire-конверт `skills/summonshape.rs`.
 
 use crate::content::CSkillBaseProperties;
 use crate::regions::ShapeIdentity;

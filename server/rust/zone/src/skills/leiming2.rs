@@ -2,30 +2,29 @@
 //! CThunder Check/AI (`skills/thunder.rs`) и собственный Summon.
 //!
 //! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
-//! `GameServer.pdb` (RSDS match), `appserver/skills/thunder2.cpp`. Адресная
-//! конвенция факт-листа волны: истинный RVA (pub off + 0x1000; VA = RVA +
-//! 0x400000). Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/thunder2.rs`; тело перенесено буквально
-//! порцией T1 «thunder/leiming2/tianhuo — BF-облака призыва».
+//! `GameServer.pdb` (RSDS match), `appserver/skills/thunder2.cpp`. Адреса —
+//! истинные RVA (pub off + 0x1000; VA = RVA + 0x400000); тело перенесено
+//! буквально.
 //!
-//! Машинный факт (MATCH по снятой доказательной базе): Check и AI общие с
+//! Машинный факт: Check и AI общие с
 //! CThunder (`0x121330`/`0x121940`, см. шапку `skills/thunder.rs`); доставка
 //! BF918 — `SendToAround(U-шейп, player)` в `CLeiming2::AI` `0x12080B`
-//! (VA `0x52080B`, fix №2 порции T1). Собственный Summon сохраняет порядок
+//! (VA `0x52080B`; установлено заново машинным чтением call site).
+//! Собственный Summon сохраняет порядок
 //! CCH → AddElementAtk → max → min → текущий level → lifetime: к вычисленному
 //! стихийному коэффициенту прибавляется AddElementAtk, частота и число целей
 //! не читаются. Clock конструктора предшествует ID; центр устанавливается до
 //! допуска региона (initialize-прохода RNG у Leiming2 нет). Отказ регистрации
 //! обрабатывает общий publisher области; AI в любом случае заканчивает попытку
-//! внешним End(1), без повторного visual или Begin. RVA тела Summon факт-лист
-//! волны не называет — новых утверждений нет, перенос прежнего тела буквально.
+//! внешним End(1), без повторного visual или Begin. RVA тела Summon в записи
+//! свидетельства не назван — новых утверждений нет, перенос тела буквально.
 //!
 //! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`;
 //! конструктор `CLeimingPhalanx2`, допуск региона и входное сообщение
-//! `0xBF502` выполняются прежним владельцем через callback `complete_summon`
-//! (`Leiming2Summon`); сам тип фаланги — zone `skills/thunder2phalanx`
-//! (порция T2), прежний владелец вызывает его конструктор фасадом. UNKNOWN
-//! списком: второй аргумент `SendToAround`; RVA тела Summon CLeiming2.
+//! `0xBF502` выполняются владельцем старого пакета через callback
+//! `complete_summon` (`Leiming2Summon`); сам тип фаланги — zone
+//! `skills/thunder2phalanx`, владелец вызывает его конструктор фасадом.
+//! UNKNOWN списком: второй аргумент `SendToAround`; RVA тела Summon CLeiming2.
 
 use crate::combat::MasterInfo;
 use crate::regions::ShapeIdentity;

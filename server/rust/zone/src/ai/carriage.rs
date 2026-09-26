@@ -8,7 +8,7 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp`.
-//! Тела дочитаны машинно волной Z-AI (расписания и lifecycle 4 из 4; ctor
+//! Машинная сверка: разобраны расписания и lifecycle (4 из 4); ctor
 //! `0x005066D0`/dtor `0x00506700` построчно не читались — их известный
 //! эффект, нулевые lifecycle-поля, зафиксирован владельцем состояния):
 //!
@@ -26,9 +26,9 @@
 //! `0x6020E`, пакеты `GS0007`/`GS0008`/`GS0009`, фактический `Evanish`
 //! (`CMonster::Evanish` `0x004E7A60` → `0x004CD700`) и привязка `m_nCarriageID`
 //! игрока выполняются hub-владеющим lifecycle-входом поверх планов ниже.
-//! Граница порции Z-AI (не расхождения): общий tick `Run` (`0x0060E250` →
-//! `CBaseAI::Run` `0x004C7D10`), очереди `CBaseAI` и выбранный hub-вход
-//! lifecycle повозки (`CGame`) остаются у своих порций.
+//! Остаются hub-владением: общий tick `Run` (`0x0060E250` → `CBaseAI::Run`
+//! `0x004C7D10`), очереди `CBaseAI` и выбранный hub-вход lifecycle повозки
+//! (`CGame`).
 //!
 //! Унаследованный `CPet::GetPetMaster` материализован общим pet-owner-ом;
 //! мост к pet-семье сведён к совместному владельцу `ai/pet.rs` (lifecycle FSM

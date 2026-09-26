@@ -1,5 +1,6 @@
-//! Audit-кадры семьи обмена и наземного перемещения GameServer, перенесённые
-//! в Zone `trade/` и изолированные от transport-шва.
+//! Audit-кадры семьи обмена и наземного перемещения исторического GameServer,
+//! изолированные от transport-шва: сборка кадра в исходном порядке полей без
+//! знания маршрута доставки.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/game.cpp` (пара журналов обмена после commit
@@ -11,21 +12,19 @@
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по wire-константам разведки «Zone
-//! player: машинная разведка trade/auction/bank/ground currency» от 26
-//! сентября 2026 (журналы `0x60201`/`0x60202`/`0x6020D`; состав `0x6020D` в
-//! том перечне отмечен UNKNOWN — Rust форма ниже соответствует прежнему
-//! владельцу, машинного переоткрытия его полей эта порция не выполняла):
+//! age 2). Машинный статус — `MATCH` по wire-константам журналов
+//! `0x60201`/`0x60202`/`0x6020D`; состав `0x6020D` машинно не переоткрывался —
+//! Rust форма ниже соответствует прежнему владельцу, статус честный
+//! `UNKNOWN`:
 //!
 //! | кадр | содержимое | здесь | статус |
 //! |---|---|---|---|
 //! | `0x60201` предмет обмена | byte 0, обе party-записи, GUID, price, amount, name, оба IPv4 | [`trade_goods_audit_frame`] | семья `MATCH` |
 //! | `0x60202` move-журнал | reason byte, actor-запись, GUID, price/amount rule, name, region/tile/IP | [`ground_goods_move_log_frame`] | семья `MATCH` |
-//! | `0x6020D` валюта обмена | kind byte, transaction, amount, текст, owner, balance | [`trade_currency_audit_frame`] | состав — честный `UNKNOWN` разведки, форма по прежнему owner |
+//! | `0x6020D` валюта обмена | kind byte, transaction, amount, текст, owner, balance | [`trade_currency_audit_frame`] | состав — `UNKNOWN`, форма по прежнему owner |
 //!
-//! Швы переноса: порядок полей перенесён буквально; C-строковый примитив
-//! shared с `trade/session.rs` (`append_legacy_c_string`), транспорт
-//! остаётся у caller-а.
+//! C-строковый примитив общий с `trade/session.rs`
+//! ([`append_legacy_c_string`]).
 
 use nebokrai_shared::values::CGuid;
 

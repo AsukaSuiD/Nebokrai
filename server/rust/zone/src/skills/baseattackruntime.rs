@@ -1,23 +1,19 @@
 //! Исполнение базовой атаки `CBaseAttack` (навык 1) игроком и монстром.
 //!
 //! Источник: gameserver.exe + GameServer.pdb, исходный владелец
-//! `appserver/skills/baseattack.cpp`. Прежние переходные места —
-//! `src/gameserver/appserver/skills/baseattackruntime.rs` (player Begin/AI/
-//! Attack/visual) и runtime-часть `src/gameserver/appserver/skills/baseattack.rs`
-//! (AI и Attack монстра, abort-формы, общий terminal End). Тела перенесены
-//! буквально; неизменными остались порядок стадий, чтения определений, выбор
-//! визуалов и обращения к общему потоку случайных чисел.
+//! `appserver/skills/baseattack.cpp`. Тела перенесены буквально; неизменными
+//! остались порядок стадий, чтения определений, выбор визуалов и обращения к
+//! общему потоку случайных чисел.
 //!
 //! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
 //! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
 //! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
 //! age 2; совпадение подтверждено `.local/evidence/symbols.py identity`).
+//! Класс снят машинно целиком: vtable `0x25CB0C`, AI `0x001B39B0`,
+//! Restart `0x00113E00`, свойства по ключам 5003/10001/10006/20001, часы
+//! `WINMM!timeGetTime`.
 //!
-//! Машинная разведка порции по этой паре (запись аудита «Zone skills:
-//! машинная разведка baseattackruntime», 26 сентября 2026) сняла класс
-//! целиком: vtable `0x25CB0C`, AI `0x001B39B0`, Restart `0x00113E00`, свойства
-//! по ключам 5003/10001/10006/20001, часы `WINMM!timeGetTime`. Сопоставление с
-//! перенесённым кодом — MATCH по всем пунктам:
+//! Контрактные инварианты:
 //!
 //! - `execute_stage`: гейт active → props → user → dead-check → Begin-стадия
 //!   ровно раз (direction/visual(0)/stage=1) → fall-through в тот же тик →
@@ -35,16 +31,15 @@
 //! - terminal/abort: End(1) изнашивает оружие только у игрока и фиксирует
 //!   reuse, End(0) не делает ни того, ни другого; OnChangeRegion — End(0).
 //!
-//! Объявленные швы переноса (не расхождения): kernel ведёт учёт стадий,
-//! определения перечитываются (данные уровня статичны), часы приходят от
-//! делегата старого main loop. Трейты ниже — переходные фасады прежнего
-//! владельца `CGame`, реализация остаётся у него в файле-делегате; швы
+//! Швы: kernel ведёт учёт стадий, определения перечитываются (данные уровня
+//! статичны), часы приходят от делегата старого main loop. Трейты ниже —
+//! фасады `CGame`, реализация остаётся у него в файле-делегате; швы
 //! потребляются статически (generic), dyn-совместимость и `Send`-контракт не
-//! вводятся (ADR-0013). Гейт приёмника `+0x2A` отложен порции приёмника.
+//! вводятся (ADR-0013). Гейт приёма `+0x2A` остаётся у владельца приёмника.
 //!
-//! Открытый UNKNOWN сохранён честно: достижимость отдельного `Restart`
-//! (`0x00113E00`) — диспетчер vtbl+0x20 не установлен; повторный Begin не
-//! считается его реализацией. Метаданные исследования — в конце файла.
+//! Открытый UNKNOWN: достижимость отдельного `Restart` (`0x00113E00`,
+//! baseattack.cpp:110, `void __thiscall Restart(void)`) — диспетчер vtbl+0x20
+//! не установлен; повторный Begin не считается его реализацией.
 
 use crate::app::game_message::CMessage;
 use crate::combat::{
@@ -97,7 +92,7 @@ pub struct BaseAttackPkPermissions {
     pub criminal: bool,
 }
 
-/// Игрок-источник базовой атаки: переходный фасад старого `CPlayer`.
+/// Игрок-источник базовой атаки: фасад `CPlayer` старого пакета.
 pub trait BaseAttackPlayer {
     /// Форма игрока (identity, клетки, direction).
     fn shape(&self) -> &CShape;
@@ -122,14 +117,14 @@ pub trait BaseAttackPlayer {
     fn pk_permissions(&self) -> BaseAttackPkPermissions;
 }
 
-/// Живая фигура стороны базовой атаки: переходный фасад старого `CMoveShape`.
+/// Живая фигура стороны базовой атаки: фасад `CMoveShape` старого пакета.
 pub trait BaseAttackMoveShape {
     fn shape(&self) -> &CShape;
 
     fn shape_mut(&mut self) -> &mut CShape;
 }
 
-/// Переходные фасады прежнего владельца `CGame`, открывающие исполнению
+/// Фасады `CGame` старого пакета, открывающие исполнению
 /// `CBaseAttack` только прежние обращения; имена сохраняют исходную операцию.
 pub trait BaseAttackGame {
     /// Hub-исполнение монстра записи навыка (`CMonster` старого пакета).
@@ -810,17 +805,3 @@ pub fn abort_player_base_attack_on_region_change<Game: BaseAttackGame>(
     }
     game.finish_registered_player_command(instance, player_ai, dispatch, SkillTermination::Cancelled)
 }
-
-// ============================================================================
-// FUNCTION: CBaseAttack::Restart
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:110
-// RVA: 0x00113E00
-// ADDRESS: 00513e00
-// PROTOTYPE: void __thiscall Restart(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//

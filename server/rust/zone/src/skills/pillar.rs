@@ -1,13 +1,9 @@
 //! Защитная стойка CPillar (0x74): Check/AI и параметры создаваемой стойки.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/pillar.cpp/.h`. Машинные якоря: Begin
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/pillar.cpp/.h`. Машинные якоря: Begin
 //! `0x16FA00`, AI `0x170110` (запросы factor→persist — VA
-//! 0x0057033C–0x0057039B, подтверждено ранее); состояние принадлежит
-//! `pillarstate.cpp/.h` (Begin `0x1F4B60`). Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/pillar.rs`; тела Check/AI перенесены
-//! буквально порцией №6c «self/zone-касты» (разведка — запись аудита
-//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026).
+//! 0x0057033C–0x0057039B); состояние принадлежит `pillarstate.cpp/.h`
+//! (Begin `0x1F4B60`).
 //!
 //! Зарегистрированный Attack Begin сохраняет исходного U, раннее время
 //! и visual loop1. Check проверяет только reuse и запрещает движение;

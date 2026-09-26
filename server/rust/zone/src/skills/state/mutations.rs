@@ -2,7 +2,7 @@
 //! GameServer.exe/GameServer.pdb (пара gameserver.exe SHA-256
 //! 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 //! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
-//! Перенесены из hub `appserver/moveshape.rs` (волна Z-M2b): тики item-часов
+//! Это бывшая мутирующая половина hub `appserver/moveshape.rs`: тики item-часов
 //! undead/extended, mut-проекция и append-семья automatic restore (хвост
 //! RestoreHpMp 0x00445643..0x00445901), take/begin boss blue fury, replace/take
 //! boss blue quake, remove/take/restore защитных щитов, replace/take spiderweb

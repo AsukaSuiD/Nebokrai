@@ -4,12 +4,9 @@
 //!
 //! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), `appserver/skills/tianhuo.cpp`. Адресная
-//! конвенция факт-листа волны: истинный RVA (pub off + 0x1000; VA = RVA +
-//! 0x400000). Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/tianhuo.rs`; тело перенесено буквально
-//! порцией T1 «thunder/leiming2/tianhuo — BF-облака призыва».
+//! конвенция: истинный RVA (pub off + 0x1000; VA = RVA + 0x400000).
 //!
-//! Машинный факт (MATCH по снятой доказательной базе):
+//! Машинные факты:
 //!
 //! - Check: часы читаются до свойства reuse (`reuse_clock_first`), препятствий
 //!   по клеткам нет, MP проверяется прямым vcall +0x5C по equipment[10]
@@ -17,7 +14,7 @@
 //!   изменяется.
 //! - AI `0x122DC0` (VA `0x522DC0`): MP списывается необратимо на первом AI;
 //!   `0xBF918` доставляется точечно `SendToPlayer` (`0x12300B`, VA `0x52300B`)
-//!   — решение C порции №6b здесь верно и сохраняется; затем поворот U
+//!   — точечная доставка здесь верна и сохраняется; затем поворот U
 //!   (GetLineDir + SetDirection +0x60) и повторная проверка длины пути
 //!   (visual 0xB + ZHGS0049). По абсолютному сроку сохранённая объектная S
 //!   проверяется на смерть и превращается в точку до visual1; visual1 →
@@ -32,16 +29,16 @@
 //!   Отказ самого Summon не меняет завершающий End(1); область живёт
 //!   независимо от навыка. Gameplay ID области — 0x21A, legacy ID режима
 //!   применения эффекта — 0x13A; wire и lifetime области принадлежат
-//!   CTianhuoPhalanx (zone `skills/tianhuophalanx`, порция T2).
+//!   CTianhuoPhalanx (zone `skills/tianhuophalanx`).
 //!
 //! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`
-//! (точечный кадр `0xBF918` собирает и доставляет готовый энкодер порции №6b
+//! (точечный кадр `0xBF918` собирает и доставляет энкодер
 //! `send_battle_fairy_goods_update`); поворот U — шов
 //! `set_summon_cloud_user_direction`; конструктор `CTianhuoPhalanx` и
 //! регистрация области выполняются прежним владельцем через callback
 //! `complete_summon` (`TianhuoSummon`). Часы `now` — шов делегата (прежний
 //! main-loop runtime). UNKNOWN списком: маппинг аргументов ctor
-//! CTianhuoPhalanx — PARTIAL по доказательной базе порции T2
+//! CTianhuoPhalanx — PARTIAL
 //! (`skills/tianhuophalanx.rs`: ctor `0x1E5890`, 6 аргументов без id/часов);
 //! ветка AI с не-player U читает CPlayer после RTTI без проверки — прежняя
 //! реконструкция возвращает отказ вместо разыменования (сохраняется).

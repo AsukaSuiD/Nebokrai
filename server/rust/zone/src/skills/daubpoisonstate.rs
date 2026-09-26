@@ -1,5 +1,5 @@
-//! Живые Begin/restart/update/End `CDaubPoisonState` (`0xDF`) в переходном
-//! Game. Данные, срок и сохраняемая запись — Zone `effects/daubpoison.rs`
+//! Живые Begin/restart/update/End `CDaubPoisonState` (`0xDF`).
+//! Данные, срок и сохраняемая запись — Zone `effects/daubpoison.rs`
 //! (ctor `0x5F17B0`, vtable `0x66047C`, кодек и правило срока уже там; здесь
 //! только обращения к живой арене, без дублирования данных и записи).
 //!
@@ -7,15 +7,12 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/daubpoisonstate.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/daubpoisonstate.rs`; тела Begin/restart/
-//! AI/End перенесены буквально (кластер D полосы «трупная/ядовая state-
-//! линия», порция D4, карта — запись аудита «Zone skills: карта полосы
-//! Monster 0x19x — 5 кластеров волн», 26 сентября 2026).
+//! `appserver/skills/daubpoisonstate.cpp/.h`; тела Begin/restart/AI/End
+//! перенесены буквально.
 //!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
-//! D4-daubpoison.md`, тела `.local/recon-de/disasm/CDaubPoisonState.txt`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
+//! D4-daubpoison.md`, тела `.local/recon-de/disasm/CDaubPoisonState.txt`)
+//! подтверждает:
 //!
 //! - Begin JJ/typed `0x5F18A0`/`0x5F1960` — `CState::Begin` (`0x5DBDD0`/
 //!   `0x5DBE20`) → GetSufferer → null: End `vcall+0x1C` → ret 0; ok →

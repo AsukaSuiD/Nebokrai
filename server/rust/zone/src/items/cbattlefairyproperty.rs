@@ -1,16 +1,9 @@
-//! Свойства и конфигурация battle fairy исторического GameServer,
-//! перенесённые в Zone `items/` — владельца ядра товаров.
+//! Свойства и конфигурация battle fairy исторического GameServer: selector
+//! `0x2D` decoder, constructor и signed `ExpUp/LevelUp` поверх addon
+//! storage `CGoods`.
 //!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/goods/cbattlefairyproperty.rs`; отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и объявленные швы
-//! переноса (не расхождения): GAP-константы — Zone `content/goods.rs`,
-//! `ShapeIdentity` — Zone `regions`, lookup реестра базовых свойств —
-//! trait-шов [`GoodsBasePropertiesLookup`] из `cgoods.rs` (реализация
-//! прежнего владельца — `CGoodsFactory` старого пакета до его собственной
-//! волны). Невостребованная приватная константа `LEGACY_STRING_SIZE`
-//! (мёртвая уже в старом пакете, где dead_code скрыт blanket-allow)
-//! не перенесена, чтобы Zone сохранял нуль предупреждений.
+//! Lookup реестра базовых свойств поступает trait-швом
+//! [`GoodsBasePropertiesLookup`] из `cgoods.rs`.
 //!
 //! Из точных `gameserver.exe + GameServer.pdb`; исходный owner
 //! `gameserver/appserver/goods/cbattlefairyproperty.h/.cpp`.

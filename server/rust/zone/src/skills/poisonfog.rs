@@ -1,16 +1,14 @@
 //! Данные живой области CPoisonFogPhalanx, её форма и тело Summon CPoisonFog.
-//! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! appserver/skills/poisonfogphalanx.cpp/.h и appserver/skills/poisonfog.cpp.
-//! Конструктор VA 0x005FBD90, AI VA 0x005FC040.
-//! Композит `CPoisonFogPhalanx` (CShape + область) и тело `summon_poison_fog`
-//! перенесены из старых адаптера и клея буквально порцией T5 «zonalcast-хаб»;
-//! новых машинных оснований композит не добавляет. Summon захватывает полный U,
-//! Master с country0 и уровень оружия Player либо 0, затем свежую таблицу:
-//! порядок запросов `ER_COEFF(224)`→`ER_LOSS(212)`→`DODGE_LOSS(210)`→
-//! `DEF_COEFF(223)`→`DEF_LOSS(209)`→`PERSIST(10002)`→уровень→`LIFETIME(30001)`
-//! предшествует конструктору с часами и ID; `MATCH` против `git show HEAD`.
-//! SetTile выполняется до свежего actual region U; перекрытие прежних C9,
-//! AddShape и encode/BF502 остаются прежними швами-фасадами
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/poisonfogphalanx.cpp/.h` и `appserver/skills/poisonfog.cpp`.
+//! Конструктор VA 0x005FBD90, AI VA 0x005FC040. Композит `CPoisonFogPhalanx`
+//! (CShape + область) следует старому адаптеру без новых машинных оснований.
+//! Summon захватывает полный U, Master с country0 и уровень оружия Player
+//! либо 0, затем свежую таблицу: порядок запросов `ER_COEFF(224)`→
+//! `ER_LOSS(212)`→`DODGE_LOSS(210)`→`DEF_COEFF(223)`→`DEF_LOSS(209)`→
+//! `PERSIST(10002)`→уровень→`LIFETIME(30001)` предшествует конструктору с
+//! часами и ID. SetTile выполняется до свежего actual region U; перекрытие
+//! прежних C9, AddShape и encode/BF502 остаются швами-фасадами
 //! (`ZonalCastContact` в `skills/zonalcast.rs`): они обязательны даже при
 //! отказе Add. Состояния области не принадлежат касту.
 

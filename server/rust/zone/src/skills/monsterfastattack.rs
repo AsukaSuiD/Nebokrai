@@ -1,9 +1,9 @@
 //! Двухударная быстрая атака `CMonsterFastAttack` (ID `0x2d1`): константы
 //! сроков, wire-кадр выпуска и машинная база исполнения. Монстр проходит
-//! через hub `execute_owned_monster_base_attack` прежнего пакета (его перенос
-//! — своя порция); player-dispatch, отмена и завершение используют общий
+//! через hub `execute_owned_monster_base_attack` старого пакета;
+//! player-dispatch, отмена и завершение используют общий
 //! двухударный owner `lordfastattack` с отдельными формулой, MP и cooldown
-//! (split player-ветви fast по `lordfastattack` не входит в волну A2 — связка
+//! (player-ветвь fast остаётся у `lordfastattack` — связка
 //! `SKILL_USAGE_FIRST_TIME`/`SKILL_USAGE_SECOND_TIME` сохранена здесь для
 //! будущего lord-владельца).
 //!
@@ -11,12 +11,10 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterfastattack.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/monsterfastattack.rs` (кластер A2 полосы
-//! Monster, 26 сентября 2026).
+//! `appserver/skills/monsterfastattack.cpp`; тела перенесены буквально.
 //!
 //! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
-//! сопоставление с исполнением hub прежнего пакета — MATCH по всем пунктам:
+//! исполнение hub старого пакета соответствует:
 //!
 //! - ctor (RVA `0x112910`): `[+4] = 0x2d1`, `[+0x4C] = [+0x50] = [+0x58] =
 //!   [+0x54] = 0`; фабричный QuerySkill 0x2D1 → этот класс.
@@ -54,7 +52,7 @@
 //!
 //! Объявленные швы переноса: состояние двух ударов (`MonsterFastAttackProgress`)
 //! живёт в `skills/execution`; wire-кадр ниже — зональный конструктор.
-//! Исполнение монстра и оркестрация hub остаются у прежнего владельца.
+//! Исполнение монстра и оркестрация hub остаются у владельца старого пакета.
 
 use crate::app::game_message::CMessage;
 

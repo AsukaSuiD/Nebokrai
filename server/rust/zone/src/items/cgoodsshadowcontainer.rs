@@ -1,19 +1,13 @@
-//! Metadata/query core `CGoodsShadowContainer` исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
+//! Metadata/query core `CGoodsShadowContainer` исторического GameServer:
+//! 40-байтовая metadata исходного player container с повторным разрешением
+//! живого source owner на каждом read.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cgoodsshadowcontainer.rs` (волна Z-C3);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): listener handles и `PreviousContainer` — Zone
-//! `items/ccontainer.rs`, `CGoodsContainer` — Zone `items/cgoodscontainer.rs`,
-//! `CGoods` — Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
-//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared. Extend-gate
-//! `is_supported_player_container` ({1, 2, 4, 5}) выражен вариантами
-//! `PlayerContainerKind::{Packet, Equipment, Wallet, YuanBao}` единого каталога
-//! `items/playercontainers.rs` (дизайн D4); resolver источника теней остаётся
-//! closure-параметром (`Resolve: FnMut(&GoodsShadow) -> Option<&CGoods>`),
-//! dyn/Send-обёртка не вводится.
+//! Extend-gate `is_supported_player_container` ({1, 2, 4, 5}) выражен
+//! вариантами `PlayerContainerKind::{Packet, Equipment, Wallet, YuanBao}`
+//! единого каталога `items/playercontainers.rs` (дизайн D4); resolver
+//! источника теней остаётся closure-параметром
+//! (`Resolve: FnMut(&GoodsShadow) -> Option<&CGoods>`), dyn/Send-обёртка не
+//! вводится.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cgoodsshadowcontainer.cpp`. Shadow не
@@ -27,7 +21,7 @@
 //! и typed reports для listener/message dispatcher-а материализованы. Реальная
 //! packet/equipment межконтейнерная move-транзакция и packet assembly замкнуты
 //! player/container-message owner-ами; wallet/yuanbao и прочие общие routes
-//! ещё требуют реконструкции; полный декомпилят хранится локально.
+//! ещё требуют реконструкции.
 
 use std::collections::BTreeMap;
 

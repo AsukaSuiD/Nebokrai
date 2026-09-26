@@ -2,24 +2,16 @@
 //! `CSpiderMistPhalanx`. Источник: точная пара `gameserver.exe`
 //! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходные владельцы
 //! `appserver/skills/spidermist.cpp` и `appserver/skills/spidermistphalanx.cpp/.h`.
-//! Прежние переходные владельцы —
-//! `src/gameserver/appserver/skills/spidermist.rs` (Check/AI/Summon навыка)
-//! и `src/gameserver/appserver/skills/spidermistphalanx.rs` (данные, маска и
-//! AI области); тела перенесены буквально (кластер C полосы Monster 0x19x,
-//! карта — запись аудита «Zone skills: карта полосы Monster 0x19x — 5
-//! кластеров волн», 26 сентября 2026).
 //!
-//! Машинная разведка кластера по этой паре (свежая MATCH-запись, 26 сентября
-//! 2026); сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Машинная разведка по этой паре:
 //!
 //! - CheckCastCondition `0x540F40`: целевая клетка читается в `[+0x24]/[+0x28]` и
 //!   хранится записью навыка, reuse-пакет, `GetTargetPath`, лимит
 //!   `Query(5003)` → отказ 0x0B, `BLOCK_UNFLY` → отказ 0x0F, `SetMoveable(0)`;
 //! - AI `0x5409B0`: `SetDir` направлением к клетке, `SetMoveable(1)` ПЕРЕД
 //!   выпуском, `Summon(user, x, y)`, End(1); End `0x540890` ≡ CPoisonFog
-//!   (ICF). Прежняя реконструкция ставила поворот в Begin-стадии игрока и в
-//!   Begin каста монстра — машинно поворота в Begin нет, поэтому он
-//!   перемещён в выпуск AI (см. путь ниже и примечание о семье в
+//!   (ICF). Машинно поворота в Begin нет: он исполняется в выпуске AI, а не
+//!   в Begin-стадии реконструкции (см. путь ниже и примечание о семье в
 //!   `skills/summoncreatureskill.rs`);
 //! - `CSpiderMistPhalanx` ctor `0x5EAEB0`; AI `0x5EB110`: deadline
 //!   `started + lifetime` строго ja → Expired; per-cell пропуски мастера,
@@ -27,14 +19,14 @@
 //!   аргументами из `(info&, +0xC0/+0xC4/+0xC8)`;
 //! - ReplaceAffectRegion: пустое тело `ret 0xC` `0x1FECA0` — ICF-склейка 15
 //!   имён пустых реализаций семьи CSummonShape; у CSpiderMistPhalanx
-//!   реальное тело `0x5EAC30` (уже перенесено ранее) — для этой группы не
-//!   критично, поведение не меняется;
+//!   реальное тело `0x5EAC30` (есть в Zone) — для этой группы не критично,
+//!   поведение не меняется;
 //! - `CSpiderMist::Summon` `0x541140` — единственный живой JJ-вариант мира
 //!   (J1/J2 = tile X/Y точки через SetTileXY слот `+0x88`);
 //! - RTTI `0x0066F16C` задаёт CSpiderMist→CSummonSkill→CSkill→CState, а не
 //!   CStateSkill; wire-кадр `0xBFE02`-потока не используется, визуал
 //!   `0x000BFE01` исходного формата (действия 1/2) и входной снимок области
-//!   `0x000BF502` (`include_child = true` — MATCH zone-конверту
+//!   `0x000BF502` (`include_child = true`, как у zone-конверта
 //!   `skills/summonshape.rs`, группа AddToByteArray `0x1E47A0`).
 //!
 //! PARTIAL/UNKNOWN (честно, без достройки): формальный состав аргументов

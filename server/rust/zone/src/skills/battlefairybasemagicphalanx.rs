@@ -1,10 +1,9 @@
 //! Снаряд базовой атаки боевой феи `CBFBaseAttackPhalanx` GameServer.
 //!
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! исходный владелец `appserver/skills/battlefairybasemagicphalanx.cpp`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/
-//! battlefairybasemagicphalanx.rs`; форма, тики, клиентский снимок и формула
-//! перенесены буквально порцией №6b «BF-ядро». Жизненный цикл и два
+//! исходный владелец `appserver/skills/battlefairybasemagicphalanx.cpp`;
+//! форма, тики, клиентский снимок и формула
+//! перенесены буквально. Жизненный цикл и два
 //! раздельных чтения часов совпадают с другими `CSummonShape`, но формула
 //! использует `GAP_BF_SPRITE`, единичный коэффициент оружия и реальную
 //! критическую ставку игрока. Формула, wrapping и два исходных вызова RNG

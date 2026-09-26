@@ -82,7 +82,7 @@
 //!
 //! source_property по типу владельца: PARTIAL (основание — vtable-контракты
 //! тел выше и уже сверенные `CMonster`-формулы `combat/monsterformula`;
-//! собственные тела getter-ов CPlayer этой порцией не пересверялись). Тип
+//! собственные тела getter-ов CPlayer отдельно не пересверялись). Тип
 //! 400 отдаёт боевые поля игрока; тип 600 — state-границы MIN/MAX и SOUL
 //! монстра, а Element и CCH всегда 0: исходный `GetAddElementAtk` монстра
 //! умножает pet factor на ноль, и даже нечисловой factor после native FISTP
@@ -90,8 +90,7 @@
 //! прочие типы не участвуют.
 //!
 //! Мёртвая сырая ветвь `PlayerWeaponRoll::Archery` прежнего пакета сюда не
-//! перенесена и удалена: callsites отсутствуют (аудит 2026-09 — «очистка
-//! отложена на оружейную волну»), живой Archery-roll (`max(max-min, 0)` БЕЗ
+//! перенесена: callsites отсутствовали; живой Archery-roll (`max(max-min, 0)` БЕЗ
 //! +1, два чтения MIN до RNG) уже находится в `skills/projectile.rs` со
 //! статусом VERIFIED_DISASSEMBLY. Отношение +1 по видам: RawRange и оба
 //! abs-вида прибавляют единицу к ширине, Archery — нет.
@@ -106,8 +105,8 @@ use super::{
 };
 
 /// Живые виды оружейного roll. Порядок чтений каждого вида и quirk-ширины —
-/// в шапке модуля; мёртвый `Archery` прежнего пакета удалён (живой
-/// перенос — `skills/projectile`).
+/// в шапке модуля; мёртвый `Archery` прежнего пакета здесь не представлен
+/// (живой roll — `skills/projectile`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerWeaponRoll {
     AbsoluteRange,

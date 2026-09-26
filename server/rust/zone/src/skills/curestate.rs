@@ -1,13 +1,12 @@
-//! Живые Begin, restart и End CCureState в переходном Game.
+//! Живые Begin, restart и End CCureState.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/curestate.cpp/.h`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/curestate.rs`; тела
-//! перенесены буквально порцией №6a. Данные, срок и 8-байтный codec fold
+//! RSDS match), `appserver/skills/curestate.cpp/.h`; тела перенесены
+//! буквально. Данные, срок и 8-байтный codec fold
 //! (Serialize `0x1F51E0`, Unserialize `0x1E9AC0`, AI fold `0x1D5BA0`)
 //! принадлежат Zone `effects/cure.rs`.
 //!
 //! Wire-тип Begin `0x000BFE03` общий с family ManaShield (его константа —
-//! отдельный владелец переходного пакета); поля кадра — исходные.
+//! отдельный владелец старого пакета); поля кадра — исходные.
 //! Объявленные швы переноса (не расхождения): hub
 //! `statecast::StateCastGame` реализован у прежнего владельца; общие
 //! хелперы обхода арены (`end_and_destroy_state_at`,
@@ -25,7 +24,7 @@ use super::statecast::{
 };
 
 /// Wire-тип Begin состояния: пакет тот же, что у family щитов
-/// (`MANA_SHIELD_STATE_BEGIN_MESSAGE` переходного `manashieldstate.rs`).
+/// (`MANA_SHIELD_STATE_BEGIN_MESSAGE` в `manashieldstate.rs` старого пакета).
 pub const CURE_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 
 /// Здесь Begin нового состояния предшествует поиску и End старого:

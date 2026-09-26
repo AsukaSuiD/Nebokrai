@@ -10,12 +10,12 @@
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
-//! | `WhenBeenHurted`: базовый hurt (`0x004C93E0`) всегда; `HasTarget != 0` → выход. Иначе `SearchEnemyGuildMember` (vt `+0x90`) и `SearchEnemyGuildPet` (vt `+0x94`), ближайший, игрок при равной дистанции, назначение через virtual `SetTarget`. `SearchEnemyGuildCarriage` (vt `+0x98`) hurt-путь **не вызывает** — прежний hub комбинировал и повозки, расхождение устранено волной Z-AI | VA `0x0060DA90`, vtable `0x00662BCC` | [`retarget_city_bow_guard_after_hurt`] | `MATCH` |
+//! | `WhenBeenHurted`: базовый hurt (`0x004C93E0`) всегда; `HasTarget != 0` → выход. Иначе `SearchEnemyGuildMember` (vt `+0x90`) и `SearchEnemyGuildPet` (vt `+0x94`), ближайший, игрок при равной дистанции, назначение через virtual `SetTarget`. `SearchEnemyGuildCarriage` (vt `+0x98`) hurt-путь **не вызывает** — прежний hub комбинировал и повозки (установленное расхождение hub, здесь исправлено) | VA `0x0060DA90`, vtable `0x00662BCC` | [`retarget_city_bow_guard_after_hurt`] | `MATCH` |
 //! | selector-пара совпадает с городским общим поиском `0x0060E290`/`0x0060DB10` (фильтры владельца города, минимальная дистанция навыка) | VA `0x0060DB90`/`0x0060DD50` (не перечитаны построчно; форма подтверждена телами sword-пары `0x0060E350`/`0x0060E510` и единым слотом vtable-пары) | [`super::cityguardwithsword::select_city_guard_enemy`] | `PARTIAL` ( bow-тела selector-ов предполагают sword-форму) |
 //! | минимальная дистанция текущего навыка: hub-форма выбирает запись setup с наибольшим уровнем среди совпадающих ID и читает `QueryProperty(5004)` | hub-контракт прежнего владельца (лифт `+0x70` навыка) | [`retarget_city_bow_guard_after_hurt`] | `PARTIAL` (маршрут через setup-уровень — прежний машинный вывод) |
 //!
-//! Граница порции Z-AI (не расхождения): разрешение текущего навыка реестром
-//! `CMoveShape`, базовые FIFO и применение цели остаются hub-владением.
+//! Разрешение текущего навыка реестром `CMoveShape`, базовые FIFO и применение
+//! цели остаются hub-владением.
 
 use nebokrai_shared::resources::MonsterProperties;
 

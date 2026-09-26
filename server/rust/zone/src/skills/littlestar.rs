@@ -1,15 +1,12 @@
 //! Малая звезда `CLittleStar` (`0x1A4`) для игроков и монстров. Источник:
 //! точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
 //! (RSDS match), исходный владелец `appserver/skills/littlestar.cpp`.
-//! Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/littlestar.rs` (кластер B полосы Monster
-//! 0x19x, карта — запись аудита «Zone skills: карта полосы Monster 0x19x —
-//! 5 кластеров волн», 26 сентября 2026). ICF-свёртки класса доказаны по RVA:
+//! ICF-свёртки класса доказаны по RVA:
 //! `CLittleStar::End` ≡ `CSevenShootingStar::End` `0x5345F0`,
 //! `CheckAttackPath` ≡ `CChainLightning` `0x534650`; базовые Begin —
-//! CAttackSkill `0x5DEB00…`. Payload исполнений вынесен раньше
-//! (`skills/execution/payload.rs` `PlayerLittleStarExecutionState`/
-//! `LittleStarProgress`, порция 5 волны moveshape).
+//! CAttackSkill `0x5DEB00…`. Payload исполнений —
+//! `skills/execution/payload.rs` `PlayerLittleStarExecutionState`/
+//! `LittleStarProgress`.
 //!
 //! Сюда перенесены буквально числовые правила, формулы, геометрия пути и
 //! wire-кадры visual `0x000BFE01` обеих ветвей (player/monster): после
@@ -32,7 +29,7 @@
 //! использует резервные координаты +0x24/+0x28; объектный Begin обнуляет их
 //! (`0x005DBDBA`), поэтому до построения пути fallback равен (0, 0), а не
 //! позиции источника. Player `End` и monster `End` (`0x005355F0`) сохраняют
-//! свой порядок у прежнего владельца.
+//! свой порядок у владельца старого пакета.
 
 use crate::app::game_message::CMessage;
 use crate::combat::truncate_original;

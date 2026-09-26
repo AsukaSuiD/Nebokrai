@@ -4,9 +4,7 @@
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
 //! `appserver/skills/wangsheng.cpp/.h` (конструктор ID и vtable VA
 //! 0x0051D4E0–0x0051D514, AI через слот +0x90 VA 0x0051DBD0, участок лечения
-//! VA 0x0051E01D–0x0051E043). Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/wangsheng.rs`; тела Check/AI перенесены
-//! буквально порцией №6b «BF-ядро». Подтверждённый State owner 0x221 этим
+//! VA 0x0051E01D–0x0051E043). Подтверждённый State owner 0x221 этим
 //! навыком не создаётся; живые callbacks сохранённого CWangshengState
 //! остаются hub-lifecycle прежнего `wangshengstate.rs`.
 //!
@@ -27,7 +25,7 @@
 //!
 //! Объявленные швы переноса (не расхождения): hub `battlefairyskill::
 //! BattleFairyGame`; доставка BF918 — точечный `send_battle_fairy_goods_update`
-//! (решение C, якоря в шапке координатора).
+//! (якоря в шапке координатора).
 
 use crate::content::CSkillBaseProperties;
 use crate::content::goods::GAP_BF_MP;

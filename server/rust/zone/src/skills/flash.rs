@@ -1,16 +1,13 @@
-//! Рывок CFlash (0x69). Источник: gameserver.exe/GameServer.pdb,
-//! appserver/skills/flash.cpp. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/flash.rs`; тела Check/AI, helpers и visual
-//! перенесены буквально порцией №5 «player melee» (разведка — запись аудита
-//! «Zone skills: машинная разведка melee dash/flash/littleflash/rush
-//! (порция №5)», 26 сентября 2026, по точной паре `gameserver.exe`
-//! `4F5C98E0…` + `GameServer.pdb` RSDS match: AI-стадии Flash — порядок
+//! Рывок CFlash (0x69). Источник: точная пара `gameserver.exe` `4F5C98E0…` +
+//! `GameServer.pdb` (RSDS match), appserver/skills/flash.cpp; тела Check/AI,
+//! helpers и visual перенесены буквально. Машинная сверка подтверждает:
+//! AI-стадии Flash — порядок
 //! GetTargetPath → direction → path → player-only weapon addon==2 → RageBreak
 //! id `0x6E` → MP → RP → OnChangeStates → teleport back → VE(1) → condition=1
 //! → attack-фаза `condition && !attacked` (region else — End(0) без VE) →
 //! tick ≤ started+10009 → pending; иначе SetMoveable(1) → VE(3) → End(1);
 //! visual — прямой 16-switch с `{0→1, 1→2, 3→3}` и personal-множеством
-//! `{2,4,7,8,10,11,13,14,15}`; GS-строки 0278/0288/0289/0301-0304 байт-сверены).
+//! `{2,4,7,8,10,11,13,14,15}`; GS-строки 0278/0288/0289/0301-0304 байт-сверены.
 //!
 //! Check не использует S: sword, signed MP/RP и отсутствие Pillar проверяются
 //! после reuse. AI требует разрешимую S, но не проверяет её здоровье; направление
@@ -26,8 +23,8 @@
 //! После strict unsigned срока start+interval идут Moveable1 и visual3;
 //! единственный End, очистка двух списков и AfterUse принадлежат общему входу.
 //!
-//! Объявленные швы — переходные фасады `DashSkillGame`/`DashSkillContact`
-//! (`skills/dash.rs`, реализация у прежнего владельца); find_state_position
+//! Объявленные швы — фасады `DashSkillGame`/`DashSkillContact`
+//! (`skills/dash.rs`, реализация у владельца старого пакета); find_state_position
 //! RageBreak свёрнут в `move_shape_state_position`, развёрнутый результат
 //! End состояния отбрасывается, как и раньше. Оставшийся UNKNOWN — место
 //! push в Attack-списке CFlash (низкий риск, зафиксирован разведкой).

@@ -1,9 +1,9 @@
-//! Достигнутая plug-list storage-часть GameServer `CSession`, перенесённая в Zone `sessions/`.
+//! Достигнутая plug-list storage-часть GameServer `CSession` в Zone `sessions/`.
 //!
 //! PDB `GameServer/GameServer.pdb` фиксирует `std::list<long> m_lPlugs` по
 //! `+0x64`; inline `GetPlugList` RVA `0x00070910` экспортирован из точного
-//! source-owner `server/gameserver/appserver/area.cpp` и материализован теперь
-//! здесь вместе с типом (ранее дополнительным impl в area.rs).
+//! source-owner `server/gameserver/appserver/area.cpp` и материализован здесь
+//! вместе с типом.
 //! `Vec<i32>` сохраняет порядок обхода. Normal equipment-session materializes
 //! constructor defaults, Start gate и InsertPlug capacity/state prefix;
 //! team create/restore и terminal lifecycle используют тот же storage.

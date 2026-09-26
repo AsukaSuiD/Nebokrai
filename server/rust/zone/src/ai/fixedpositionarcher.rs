@@ -8,8 +8,8 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
 //! VA − 0x400000). Исходный владелец PDB:
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp`.
-//! Тела дочитаны машинно волной Z-AI (4 из 4 методов класса, кроме ctor
-//! `0x0060F9D0`):
+//! Машинная сверка: разобраны все четыре метода класса, кроме ctor
+//! `0x0060F9D0`:
 //!
 //! | правило | якорь | здесь | статус |
 //! |---|---|---|---|
@@ -25,10 +25,9 @@
 //! по себе не наследует этот хвост `OnChangeSkill` — расширение ограничено
 //! точным набором {5, 23}.
 //!
-//! Граница порции Z-AI (не расхождения): реальный путь `monsterbaseattack`
-//! (выбор навыка и назначение цели) и общий monster tick hub остаются
-//! hub-владением своих порций; реестр навыков `CMoveShape` и его
-//! `GetRestoreTime` — hub-швы [`MonsterDispatcherMoveShape`].
+//! Остаются hub-владением: реальный путь `monsterbaseattack` (выбор навыка и
+//! назначение цели) и общий monster tick hub; реестр навыков `CMoveShape` и
+//! его `GetRestoreTime` — hub-швы [`MonsterDispatcherMoveShape`].
 
 use nebokrai_shared::resources::MonsterProperties;
 

@@ -1,4 +1,6 @@
-//! Скалярное ядро оркестрации обмена `CGame`, перенесённое в Zone `trade/`.
+//! Скалярное ядро оркестрации обмена `CGame` исторического GameServer:
+//! порядок условий `CheckTradeCondition`, Billing-вилка YuanBao и кадр
+//! запроса `0xEF203`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/game.cpp`: двухфазная `CheckTradeCondition`,
@@ -10,9 +12,8 @@
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемейству trade разведки «Zone
-//! player: машинная разведка trade/auction/bank/ground currency» от 26
-//! сентября 2026:
+//! age 2). Машинный статус — `MATCH` по подсемейству trade дизассембла тел
+//! точной пары:
 //!
 //! | правило | машинный факт | здесь | статус |
 //! |---|---|---|---|
@@ -22,20 +23,18 @@
 //! | Billing-вилка | signed разность YuanBao → payer/receiver/amount | [`trade_yuan_billing_decision`] | семья `MATCH` |
 //! | запрос `0xEF203` | кадр type 2 + SendToBS (вызов `0x001BB036` → `0x00013BE0`) | [`TradeBillingRequest`], [`build_trade_billing_request_frame`] | семья `MATCH`, кадр по caller-у прежнего owner |
 //!
-//! Риск-нота Billing-complete (разведка порции T): завершение обмена по
+//! Риск-нота Billing-complete: завершение обмена по
 //! ответу Billing (`OnUniBillMessage`) исполняет commit БЕЗ повторной
 //! дистанционной проверки участников — оригинал доверяет уже зафиксированной
 //! рамке. Гейты сверх исходного («улучшающие») в этот путь сознательно не
 //! добавляются; существующий owner достаточно сохраняет свои прежние отказы.
 //!
-//! Швы переноса: скалярные предикаты и таблица уведомлений перенесены
-//! буквально; simulation packet-а, веса `CGoods`, журналирование и отправка
-//! остаются у прежнего owner, который вызывает правила ниже в исходном
-//! порядке. Кадр `0xEF203` собирается здесь, а его транспортный выбор
-//! (`SendToBS`, не World) — у caller-а вместе с комментарием-маршрутом.
-//! C-строковый wire-примитив [`append_legacy_c_string`] — основное место
-//! соглашения «prefix байт + NUL» семьи; его использует и соседний
-//! `trade/audit.rs`.
+//! Simulation packet-а, веса `CGoods`, журналирование и отправка остаются у
+//! прежнего owner, который вызывает правила ниже в исходном порядке. Кадр
+//! `0xEF203` собирается здесь, а его транспортный выбор (`SendToBS`, не
+//! World) — у caller-а вместе с комментарием-маршрутом. C-строковый
+//! wire-примитив [`append_legacy_c_string`] — основное место соглашения
+//! «prefix байт + NUL» семьи; его использует и соседний `trade/audit.rs`.
 
 use nebokrai_shared::network::CBaseMessage;
 use nebokrai_shared::values::CGuid;

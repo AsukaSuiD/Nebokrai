@@ -1,12 +1,5 @@
-//! Visitor поиска товаров по catalog index GameServer, перенесённый в Zone
-//! `items/` — владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/listener/cseekgoodslistener.rs` (волна Z-C2c);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): `CGoods` — Zone `items/cgoods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `CGuid` —
-//! Shared.
+//! Visitor поиска товаров по catalog index исторического GameServer: собирает
+//! GUID всех `CGoods` с равным base-properties index.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/listener/cseekgoodslistener.cpp`. Новый listener имеет target `0`

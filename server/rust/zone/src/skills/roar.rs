@@ -1,13 +1,9 @@
 //! Боевой клич CRoar (0x83): Check/AI, обход клеток и границы окна.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/roar.cpp/.h`. Машинные якоря: Begin
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/roar.cpp/.h`. Машинные якоря: Begin
 //! `0x14A7D0`, AI `0x14B060`; окно обхода `roar_bounds` —
-//! CRoar::AI VA 0x0054B1CC–0x0054B23E (подтверждено ранее); состояние
-//! принадлежит `roarstate.cpp/.h` (Serialize 5-fold `0x1F65F0`).
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/roar.rs`;
-//! тела Check/AI и клеточного обхода перенесены буквально порцией №6c
-//! «self/zone-касты» (разведка — запись аудита «Zone skills: машинная
-//! разведка battlefairy-навыков (порция №6)», 26 сентября 2026).
+//! CRoar::AI VA 0x0054B1CC–0x0054B23E; состояние принадлежит
+//! `roarstate.cpp/.h` (Serialize 5-fold `0x1F65F0`).
 //!
 //! Общий Attack Begin сохраняет раннее время и visual loop1. Check получает
 //! исходного игрока, проверяет reuse, оружие категории 1 и signed MP;

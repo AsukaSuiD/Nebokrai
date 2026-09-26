@@ -1,16 +1,8 @@
-//! Однослотовое currency/storage core `CWallet` исторического GameServer,
-//! перенесённый в Zone `items/` — владельца типов контейнеров и операций над
-//! ними.
+//! Однослотовое currency/storage core `CWallet` исторического GameServer:
+//! владеет одним `CGoods` catalog `MONEY`, а не числовым balance; generic
+//! core также обслуживает `CYuanBao` и `CJiFen`.
 //!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cwallet.rs` (волна Z-C1); отличия —
-//! нормализация `pub(crate)`→`pub` на границе crate и швы переноса (не
-//! расхождения): listener handles и goods-mode — Zone
-//! `items/ccontainer.rs`/`items/cgoodscontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константа — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `ShapeIdentity` —
-//! Zone `regions/` (re-export `identity`), `CGuid` — Shared. Player-владелец
-//! публикует этот контейнер под extend-id
+//! Player-владелец публикует этот контейнер под extend-id
 //! [`PlayerContainerKind::Wallet`][crate::items::playercontainers::PlayerContainerKind]
 //! единого каталога (дизайн D4).
 //!

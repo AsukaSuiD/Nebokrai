@@ -1,12 +1,8 @@
-//! Печать `CSeal` (`0x138`) для Player и Monster. Источник: точная пара
-//! `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match),
-//! исходный владелец `appserver/skills/seal.cpp`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/seal.rs`; тела Check/Attack,
-//! гейты и формула keep-time перенесены буквально (кластер B полосы Monster
-//! 0x19x, карта — запись аудита «Zone skills: карта полосы Monster 0x19x —
-//! 5 кластеров волн», 26 сентября 2026). Полёт прицельного снаряда —
-//! общий TargetedProjectile (`targetedprojectile.cpp`, payload
-//! `TargetedProjectileProgress` уже в `skills/execution`), он остаётся
+//! Печать `CSeal` (`0x138`) для Player и Monster. Источник: `gameserver.exe`
+//! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходный владелец
+//! `appserver/skills/seal.cpp`. Полёт прицельного снаряда — общий
+//! TargetedProjectile (`targetedprojectile.cpp`, payload
+//! `TargetedProjectileProgress` в `skills/execution`), он остаётся
 //! hub-владением и сюда не переносится.
 //!
 //! Общий TargetedProjectile хранит зарегистрированные U/S, первую проверку,

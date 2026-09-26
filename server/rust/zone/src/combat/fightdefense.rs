@@ -33,8 +33,7 @@
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинные статусы по дизассемблу тел точной пары (разведка порции,
-//! запись аудита «Zone combat: машинная разведка fightdefense»):
+//! age 2). Машинные статусы по дизассемблу тел точной пары:
 //!
 //! | функция | RVA | статус |
 //! |---|---|---|
@@ -51,12 +50,11 @@
 //! float, критический множитель `−0.5f32`, один FISTP уклонения и PvP factor
 //! после clamp без повторного clamp. Safe/city-war гейты — у caller
 //! (`received_defense_allowed`, `game/periodicattack.rs` старого пакета),
-//! маркер city-war совпадает. Установленное разведкой расхождение
-//! f32-округления mp-фактора касается Zone `effects/{shieldabsorption,
-//! lifeshield}` и закрывается отдельной fix-порцией; формулы этого файла оно
-//! не затрагивает.
+//! маркер city-war совпадает. Установленное расхождение f32-округления
+//! mp-фактора закрыто в Zone `effects/{shieldabsorption, lifeshield}`;
+//! формулы этого файла оно не затрагивает.
 //!
-//! Швы переноса: RNG-состояние и `random(int)` остаются у владельца (параметр
+//! Швы к владельцам старого пакета: RNG-состояние и `random(int)` остаются у владельца (параметр
 //! `&mut dyn FnMut(i32) -> i32` передаётся дословно); снимок
 //! `PlayerCombatProperties` производит hub `CPlayer` (`combat_properties()`),
 //! прежний путь типа в `appserver/player.rs` сохраняется re-export-переходником;

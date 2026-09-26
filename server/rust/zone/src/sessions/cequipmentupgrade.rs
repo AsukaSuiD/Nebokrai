@@ -1,12 +1,11 @@
-//! Equipment-upgrade plug GameServer, перенесённый в Zone `sessions/`.
+//! Equipment-upgrade plug GameServer в Zone `sessions/`: пятислотовый shadow
+//! и сессионный lifecycle upgrade-сессии.
 //!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/session/cequipmentupgrade.rs` (волна Z-C4);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): shadow-контейнер — Zone
+//! Прежняя форма: `src/gameserver/appserver/session/cequipmentupgrade.rs`.
+//! Типы подключаются из других zone-владельцев: shadow-контейнер — Zone
 //! `items/cequipmentupgradeshadowcontainer.rs`, `CGoods` — Zone
 //! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b),
+//! `CGoodsFactory` — Zone `content/goodsfactory.rs`,
 //! `UpgradePriceListener` — Zone `items/cupgradepricelistener.rs`,
 //! `ShapeIdentity` — Zone `regions/identity.rs`, `CGuid` — Shared.
 //!

@@ -7,11 +7,8 @@
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходные владельцы PDB:
 //! `appserver/skills/monsterattack.cpp` (общий контакт) и
-//! `appserver/monster.cpp` (`CMonster::IsAttackAble`). Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/monsterattack.rs`; тела
-//! перенесены буквально поверх hub-трейтов ниже (кластер A2 полосы Monster,
-//! карта — запись аудита «Zone skills: карта полосы Monster 0x19x — 5
-//! кластеров волн», 26 сентября 2026).
+//! `appserver/monster.cpp` (`CMonster::IsAttackAble`). Тела перенесены
+//! буквально поверх hub-трейтов ниже.
 //!
 //! Статусы по этой паре:
 //!
@@ -36,9 +33,9 @@
 //!   истинен независимо от action — снимок цели держит этот факт здесь, а не
 //!   в навыках (контракт прежнего владельца, не изменён переносом).
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CPlayer`/`CServerRegion`/
-//! `ServerRegionOwner`; реализация остаётся у делегата старого пакета
+//! Объявленные швы переноса (не расхождения): трейты ниже — фасады
+//! `CGame`/`CPlayer`/`CServerRegion`/`ServerRegionOwner` старого пакета;
+//! реализация остаётся у делегата старого пакета
 //! (`appserver/skills/monsterattack.rs`). Потребление статическое
 //! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
 //! `QuerySkillBaseProperties` (skillfactory), `GetShapes`/региональный
@@ -134,7 +131,7 @@ pub struct MonsterTamingTarget {
     pub tamable: bool,
 }
 
-/// Игрок боевого входа семьи: переходный фасад прежнего `CPlayer`.
+/// Игрок боевого входа семьи: фасад `CPlayer` старого пакета.
 pub trait MonsterCombatPlayer {
     /// Форма игрока (identity, клетки, direction).
     fn shape(&self) -> &CShape;
@@ -180,7 +177,7 @@ pub trait MonsterCombatPlayer {
     fn add_active_pet(&mut self, object_type: i32, id: i32, figure: i32);
 }
 
-/// Переходные фасады прежнего владельца `CGame`, открывающие боевому
+/// Фасады `CGame` старого пакета, открывающие боевому
 /// семейству только прежние обращения; имена сохраняют исходную операцию.
 pub trait MonsterCombatGame {
     type Player: MonsterCombatPlayer;
@@ -393,7 +390,7 @@ pub trait MonsterCombatGame {
 
     /// Общий расчёт player-удара базовой/быстрой атаки монстров
     /// (`lordfastattack::calculate_attack` прежнего пакета, включая личный
-    /// критический множитель); split владельца — порция lord-полосы.
+    /// критический множитель); владелец расчёта — старый пакет.
     fn monster_combat_calculate_attack(
         &mut self,
         player_id: i32,

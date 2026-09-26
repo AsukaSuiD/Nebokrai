@@ -4,19 +4,13 @@
 //! публикация visual) остаётся hub прежнего пакета; состояния принадлежат
 //! аренам получателей, а не исполнению навыка.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/spiderpoison.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/spiderpoison.rs`; тела Check/AI/Attack/
-//! Calculate/apply_poison перенесены буквально (кластер D полосы Monster
-//! 0x19x «трупная/ядовая state-линия», карта — запись аудита «Zone skills:
-//! карта полосы Monster 0x19x — 5 кластеров волн», 26 сентября 2026).
-//!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
-//! D5-spiderpoison.md`, тела `.local/recon-de/disasm/CSpiderPoison.txt`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Источник: `gameserver.exe` (SHA-256
+//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
+//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
+//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
+//! `appserver/skills/spiderpoison.cpp`. Машинный разбор тела —
+//! `.local/recon-de/notes/D5-spiderpoison.md` и
+//! `.local/recon-de/disasm/CSpiderPoison.txt`.
 //!
 //! - vtable эффекта `0x65B188`, класса `0x25B0F4`: Begin-скелет трёх форм
 //!   (`0x5853E0`/`0x5854B0`/`0x5855B0`) = форвард `CAttackSkill::Begin` →
@@ -54,7 +48,7 @@
 //!   `vcall+0x10(1)` → slot = 0 → `Begin(U, S)` → тот же слот, иначе append.
 //!
 //! Payload состояния — `CSpiderPoisonState`: кодек `zone/effects/poison.rs`
-//! (VERIFIED раньше), живой AI/фабрика — hub `states/poison.rs` и
+//! (VERIFIED), живой AI/фабрика — hub `states/poison.rs` и
 //! `statefactory` (оба вне этого файла). `spiderpoisonstate.rs` прежнего
 //! пакета остаётся тонким alias.
 //!
@@ -67,9 +61,9 @@
 //! (generic), dyn-совместимость и `Send`-контракт не вводятся (ADR-0013).
 //! Последний вариант замены — abort при неразрешимой позиции слота
 //! (внутренний отказ арены: запись найдена, а локализация офсета нет) —
-//! семантика прежнего sibling-кастa `corpseptomaine` сохранена для обеих
-//! ветвей вместо прежнего D1-append двойника; машинной ветви этому отказу
-//! не соответствует, она возникает только при несогласованности арены Rust.
+//! для обеих ветвей принята семантика sibling-каста `corpseptomaine` вместо
+//! безусловного append; машинной ветви этому отказу не соответствует, она
+//! возникает только при несогласованности арены Rust.
 
 use nebokrai_shared::runtime::get_line_direction;
 

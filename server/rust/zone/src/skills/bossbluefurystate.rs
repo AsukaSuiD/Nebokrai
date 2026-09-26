@@ -2,10 +2,9 @@
 //! `CBossBlueFuryState` (`0x1F7`), а также установочный Begin для навыка.
 //! Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/bossbluefurystate.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/bossbluefurystate.rs`; тела перенесены
-//! кластером E3 полосы D/E (сверка — разведка `.local/recon-de/notes/
-//! E4-bossbluefury.md`, тела `.local/recon-de/disasm/CBossBlueFuryState.txt`).
+//! `appserver/skills/bossbluefurystate.cpp/.h`; тела перенесены буквально
+//! (сверка — разведка `.local/recon-de/notes/E4-bossbluefury.md`, тела
+//! `.local/recon-de/disasm/CBossBlueFuryState.txt`).
 //! Данные, срок, формула процента и 12-байтный codec — Zone
 //! `effects/bossbluefury.rs` (подтверждены побайтно; здесь не дублируются).
 //!
@@ -38,9 +37,9 @@
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
 //! (арена, property/end visual, удаление `RemoveState(pointer)`) реализован у
-//! прежнего владельца; `fightable` открыт новым методом `StateCastMoveShape`
-//! этой порцией (до неё hub открывал только `moveable`). Монстровый пересчёт
-//! OnUpdateProperties — фасад `BossBlueFuryStateGame` (реализация у делегата
+//! владельца старого пакета; `fightable` открыт методом `StateCastMoveShape`
+//! (помимо `moveable`). Монстровый пересчёт OnUpdateProperties — фасад
+//! `BossBlueFuryStateGame` (реализация у делегата
 //! `appserver/skills/bossbluefurystate.rs`); live-getter порядок maximum →
 //! minimum сохранён двум отдельными прибавками.
 
@@ -55,7 +54,7 @@ use super::statecast::{
     StateCastGame, StateCastMoveShape, StateCastPropertyTarget, state_cast_storage_participant,
 };
 
-/// Переходные фасады прежнего владельца `CGame` для монстрового пересчёта
+/// Фасады `CGame` старого пакета для монстрового пересчёта
 /// `CBossBlueFuryState::OnUpdateProperties` (`0x5E8DC0`): origin-name снимок,
 /// живые границы после каждой прибавки и два wrapping-add в модификаторы.
 pub trait BossBlueFuryStateGame: StateCastGame {

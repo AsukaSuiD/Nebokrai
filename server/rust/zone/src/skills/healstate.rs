@@ -1,10 +1,9 @@
-//! Живые Begin/restart/AI/End периодического лечения в переходном Game:
+//! Живые Begin/restart/AI/End периодического лечения:
 //! CHealState/CHeal2State и CSuperHealState/CSuperHeal2State.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
 //! RSDS match), `appserver/skills/{healstate,healstate2,superhealstate,
-//! superhealstate2}.cpp` и первичные `heal*.cpp`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/healstate.rs`; тела
-//! перенесены буквально порцией №6a. Данные, кодек и правило тика
+//! superhealstate2}.cpp` и первичные `heal*.cpp`; тела перенесены буквально.
+//! Данные, кодек и правило тика
 //! принадлежат Zone `effects/heal.rs` (там же адреса vtable).
 //!
 //! Machine-факты state-квартета: AI/End/Unserialize fold
@@ -36,7 +35,7 @@
 //! не имитируется.
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у прежнего владельца; `end_and_destroy_state_at` арены
+//! реализован у владельца старого пакета; `end_and_destroy_state_at` арены
 //! остаётся у `states/state.rs` и объявлен швом.
 
 use crate::combat::truncate_original;

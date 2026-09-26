@@ -37,7 +37,7 @@
 //! `CShape::AddToByteArray` (RVA `0x5B250`). Исходная функция пробрасывает
 //! флаг `include_child` (второй аргумент) в базовый `CShape`; перенесённый
 //! клиентский снимок фиксирует `true` — поведение прежнего адаптера
-//! сохранено, пересмотр остаётся за per-phalanx порциями владельцев.
+//! сохранено.
 //!
 //! Семейство тел `AddToByteArray@C*Phalanx` (S_PUB32 PDB). Линкер частично
 //! сфолдовал 29 имён в 11 уникальных тел: внутри группы машинный код
@@ -58,10 +58,10 @@
 //!   Расширенный хвост до `CShape`, см. ниже: счётчик
 //!   `n = ([esi+0xB0] / [esi+0xC4]) * [esi+0xDC]` (беззнаковое деление).
 //!   Пятипольный префикс совпадает, расширение к zone-конверту не
-//!   перенесено — частичное соответствие, полный перенос отложен.
+//!   перенесено — частичное соответствие.
 //! - RVA `0x1F54D0` (VA `0x5F54D0`): `CWeakPhalanx`,
 //!   `CGodPunishmentPhalanx`, `CThunderBlowPhalanx`, `CTianhuoPhalanx`;
-//!   уровень `[esi+0xC8]`. Соответствует (базовый спотчек ранней порции).
+//!   уровень `[esi+0xC8]`. Соответствует (базовый спотчек).
 //! - RVA `0x1F76A0` (VA `0x5F76A0`): `CThunderSlashPhalanx`; уровень
 //!   `[esi+0xE4]`. Соответствует.
 //! - RVA `0x1F8ED0` (VA `0x5F8ED0`): `CSnowStormPhalanx`; уровень
@@ -83,7 +83,7 @@
 //! - RVA `0x1FBD20` (VA `0x5FBD20`): `CFireBoltPhalanx`,
 //!   `CFireBallPhalanx`, `CFireWallPhalanx`, `CPoisonFogPhalanx`,
 //!   `CThunderFirePhalanx`; уровень `[esi+0xD4]`. Соответствует (базовый
-//!   спотчек ранней порции).
+//!   спотчек).
 //! - RVA `0x1FECB0` (VA `0x5FECB0`): `CChaosSpherePhalanx`; уровень
 //!   `[esi+0xD8]`. Соответствует.
 //!
@@ -126,10 +126,9 @@
 //!
 //! Ветви диспетчера живых форм `SummonedSkillShape` для ChaosSphere,
 //! GodThunder, MaskedElement (FireWall и YinYang), FireBall и GodPunishment
-//! порцией замыкания оканчиваются в владельцах `chaossphere`, `godthunder`,
-//! `masked_area` и `projectile`: живые композиты перенесены туда буквально.
-//! Сам enum и правило счётчика ID остаются у прежнего владельца `CGame` до
-//! последней per-phalanx порции.
+//! оканчиваются во владельцах `chaossphere`, `godthunder`, `masked_area` и
+//! `projectile` — живые композиты там. Сам enum и правило счётчика ID
+//! остаются у прежнего владельца `CGame`.
 
 use crate::regions::shape::CShape;
 use nebokrai_shared::protocol::LegacyWriter;

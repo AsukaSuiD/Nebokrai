@@ -1,15 +1,6 @@
-//! Восьмислотовая DaKong shadow-сессия GameServer, перенесённая в Zone
-//! `items/` — владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cequipmentdakongcontainer.rs` (волна
-//! Z-C3); отличия — нормализация `pub(crate)`→`pub` на границе crate и швы
-//! переноса (не расхождения): count-limit слой и shadow core — Zone
-//! `items/camountlimitgoodsshadowcontainer.rs`/`items/cgoodsshadowcontainer.rs`,
-//! `PreviousContainer` — Zone `items/ccontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `CGuid` —
-//! Shared.
+//! Восьмислотовая DaKong shadow-сессия исторического GameServer: слот `0`
+//! под equipment с `GAP_DAKONG_1`, слоты `1..7` под gems с
+//! `GAP_BAOSHI_COLOR`, positional projection и consumption ledger.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cequipmentdakongcontainer.cpp`.

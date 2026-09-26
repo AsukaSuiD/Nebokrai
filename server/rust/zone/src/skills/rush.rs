@@ -1,21 +1,17 @@
 //! Прямые рывки Rush/Rush2 и их оглушающие состояния (0x73/0x7C).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/rush.cpp и общий
-//! предметный контракт rush2.cpp. Прежние переходные владельцы —
-//! `src/gameserver/appserver/skills/rush.rs`, `rush2.rs`, `rushstate.rs` и
-//! `rushstate2.rs`; тела перенесены буквально порцией №5 «player melee»
-//! (разведка — запись аудита «Zone skills: машинная разведка melee
-//! dash/flash/littleflash/rush (порция №5)», 26 сентября 2026, по точной паре
-//! `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` RSDS match: Rush — MP до RP
-//! с частичным расходом, weapon category 1 (GS0287), GetTargetPathWithLength,
-//! distance-гейты `> max` Rush / `>= max` Rush2, snapshot типов
-//! `{400,600,601,602}`, first-attack контроллер только у Rush, уровни movzx →
-//! scaled keep (query 10002 / линейный scale с clamp), AddRushState общий
-//! (prev по ID → End + освобождение слота → Begin → append → knockback);
-//! Rush2 — безусловный virtual `OnBeenAttacked(false)` хвост после состояния
-//! и отбрасывания; visual Rush/Rush2 — вторая remap-таблица байт
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/rush.cpp` и общий предметный контракт
+//! `rush2.cpp`. Машинно установлено: Rush — MP до RP с частичным расходом,
+//! weapon category 1 (GS0287), GetTargetPathWithLength, distance-гейты
+//! `> max` Rush / `>= max` Rush2, snapshot типов `{400,600,601,602}`,
+//! first-attack контроллер только у Rush, уровни movzx → scaled keep
+//! (query 10002 / линейный scale с clamp), AddRushState общий (prev по
+//! ID → End + освобождение слота → Begin → append → knockback); Rush2 —
+//! безусловный virtual `OnBeenAttacked(false)` хвост после состояния и
+//! отбрасывания; visual Rush/Rush2 — вторая remap-таблица байт
 //! `{0→act1+dir, 1→act2, 2/7/8/13/14 персональные}`, GS-строки
-//! 0278/0287/0288/0289/0302 байт-сверены; RushState/RushState2 тела —
-//! разделяемый алиас `BlindState<ID>`, payload 8 байт ✓).
+//! 0278/0287/0288/0289/0302 байт-сверены; тела RushState/RushState2 —
+//! разделяемый алиас `BlindState<ID>`, payload 8 байт.
 //!
 //! Вход CPlayer проверяет меч, signed MP/RP и Pillar; AI повторно списывает
 //! MP перед RP, сохраняет частичный расход и вызывает OnChangeStates до

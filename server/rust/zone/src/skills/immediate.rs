@@ -4,9 +4,8 @@
 //! `4F5C98E0…`, RSDS match), `appserver/skills/{taiji,origin,enlargefullmiss,
 //! enlargemaxhp,enlargemaxmp,swordship,swordship2,swordship3,swordship4,wuxing*}.cpp`.
 //!
-//! MATCH по машинной разведке порции №4 (запись в docs/status/audit.md
-//! 26.09.2026): общий Begin-цикл пятнадцати навыков выполняет Check чтением
-//! `[skill+0x64]`, при отказе — End(0), при успехе — phase=1; reuse, MP,
+//! Машинная сверка подтверждает: общий Begin-цикл пятнадцати навыков
+//! выполняет Check чтением `[skill+0x64]`, при отказе — End(0), при успехе — phase=1; reuse, MP,
 //! visual и Move в цикле отсутствуют. AI читает свойства до GetU и допускает
 //! при NULL U подстановку GetS, кроме Swordship, которому нужен именно U.
 //! `CTaiJi::AI` VA `0x005AF770` и `COrigin::AI` VA `0x005AEA70`: создание и
@@ -20,7 +19,7 @@
 //! Serialize/Unserialize состояний (шапки данных — zone/effects).
 //!
 //! Живой обход Game (поиск участников, арена состояний, публикация, часы
-//! машины) остаётся за переходным `appserver/skills/immediatestate*.rs`;
+//! машины) остаётся за старым `appserver/skills/immediatestate*.rs`;
 //! здесь ID-карта семьи, подстановка S, ветка установки, End-политика и
 //! подготовка payload по таблице свойств. Swordship читает MIN перед MAX —
 //! порядок подтверждён property callback и writer состояний.

@@ -1,11 +1,12 @@
 //! Арена экземпляров `CMoveShape::m_vStates` из GameServer.exe/GameServer.pdb
 //! (пара gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 //! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
+//! Contract: docs/gameplay/attributes-and-states.md.
 //! Перенесена из переходного Game: хранилище — бывший
 //! `appserver/moveshape/state_storage.rs`, `CanonicalStateStorage` и
-//! `LegacyStateCodec` — бывший `appserver/moveshape.rs` (шаг B moveshape п3).
+//! `LegacyStateCodec` — бывший `appserver/moveshape.rs`.
 //! Сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20): append/remove/insert
-//! записей — соседний `mutations` (волна Z-M2b),
+//! записей — соседний `mutations`,
 //! AddExStatesToByteArray (0x004D10F0) — `serialization`,
 //! общий UpdateAbnormality (0x004CFD00) остаётся у владельца hub moveshape
 //! в его states/state.rs.

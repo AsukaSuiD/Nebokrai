@@ -182,14 +182,14 @@
 //! endpoint клиентскому encoder-у не нужен.
 //! Точные имена полей PDB не фиксировались.
 //!
-//! Живые композиты `CFireBallPhalanx` и `CGodPunishmentPhalanx` перенесены
-//! сюда из старого адаптера буквально порцией замыкания: flight
-//! `BaseProjectileFlight` + элементный снимок `ElementProjectileAttack`
-//! (у FireBall — с движением `FireBallPath` и усилителем душами из cast-а,
-//! у GodPunishment — без CScope и без усилителя). Состав полей и порядок
-//! записей новыми машинными основаниями не дополнялись, статусы — выше по
-//! шапке. Live-разрешение полей источника и доставка контакта остаются у
-//! владельца `CGame` (обёртка `elementprojectileattack` старого пакета).
+//! Живые композиты `CFireBallPhalanx` и `CGodPunishmentPhalanx` следуют
+//! старому адаптеру: flight `BaseProjectileFlight` + элементный снимок
+//! `ElementProjectileAttack` (у FireBall — с движением `FireBallPath` и
+//! усилителем душами из cast-а, у GodPunishment — без CScope и без
+//! усилителя). Состав полей и порядок записей без новых машинных оснований,
+//! статусы — выше по шапке. Live-разрешение полей источника и доставка
+//! контакта остаются у владельца `CGame` (обёртка `elementprojectileattack`
+//! старого пакета).
 
 use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo, truncate_original};

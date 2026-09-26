@@ -3,12 +3,10 @@
 //! `GameServer/GameServer.pdb`, `appserver/skills/poisonfogstate.cpp` и
 //! `poisonfogstate.h`. Данные, запись и расчёт потерь находятся в
 //! `effects/poisonfog.rs`; здесь — участники, visual, поиск фигуры и
-//! запись рассчитанных свойств. Тела перенесены буквально из прежнего
-//! переходного владельца `src/gameserver/appserver/skills/poisonfogstate.rs`
-//! порцией T5 «zonalcast-хаб»; `MATCH` против `git show HEAD`.
+//! запись рассчитанных свойств.
 //! Для координатного Begin (0x00607E30) и typed Begin (0x00607EC0)
-//! вызывающие цепочки не установлены; основной путь использует объектный
-//! Begin.
+//! вызывающие цепочки не установлены (UNKNOWN); основной путь использует
+//! объектный Begin.
 
 use nebokrai_shared::values::CGuid;
 

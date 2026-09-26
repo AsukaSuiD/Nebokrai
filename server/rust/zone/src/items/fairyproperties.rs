@@ -1,14 +1,11 @@
-//! Свойства обычной феи исторического GameServer, перенесённые в Zone
-//! `items/` — владельца ядра товаров.
+//! Свойства обычной феи исторического GameServer: constructor, `ExpUp` и
+//! `LevelUp` с main-ability формулами поверх addon storage `CGoods`.
 //!
-//! Тела перенесены буквально из прежнего `src/gameserver/appserver/goods/fairyproperties.rs`:
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и единственный
-//! объявленный шов переноса: упорядоченный журнал эффектов роста. Прежнее поле
-//! `effects: GameEffectJournal` параметризовано как принято у BF-gear: report
-//! [`FairyExpReport`] и накопление в `exp_up/level_up` типизированы trait-швом
-//! [`FairyGrowEffectSink`], реализация прежнего владельца — `GameEffectJournal`
-//! старого пакета, конверт `FairyGrowLog → GameEffect` и alias report-а с
-//! прежним журналом остаются у него (потребители старого пакета без правок).
+//! Упорядоченный журнал эффектов роста параметризован trait-швом
+//! [`FairyGrowEffectSink`]: report [`FairyExpReport`] и накопление в
+//! `exp_up/level_up` получают generic `Effects` вместо конкретного журнала;
+//! конверт в прежний журнал и его alias остаются у старого пакета в точке
+//! доставки эффектов.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/goods/fairyproperties.cpp`. Constructor и

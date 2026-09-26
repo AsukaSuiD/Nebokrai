@@ -1,13 +1,9 @@
 //! Живая установка, visual и End подавления атаки CRoarState в Zone.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/roarstate.cpp/.h`. Машинные якоря:
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/roarstate.cpp/.h`. Машинные якоря:
 //! конструктор `0x1EC7E0`, Serialize 5-fold `0x1F65F0` (с heal-квартетом),
 //! Unserialize `0x1ECC60`, AI `0x1EC9A0`, OnUpdateProperties `0x1ECAA0`;
-//! данные и числовое подавление — `effects/roar.rs`. Прежний переходный
-//! владелец — `src/gameserver/appserver/skills/roarstate.rs`; тела замены,
-//! restart, AI и End перенесены буквально порцией №6c «self/zone-касты»
-//! (разведка — запись аудита «Zone skills: машинная разведка
-//! battlefairy-навыков (порция №6)», 26 сентября 2026).
+//! данные и числовое подавление — `effects/roar.rs`.
 //!
 //! Замена завершает прежний ID до чтения параметров нового. Restart не
 //! обновляет часы, а End ищет фактического Sufferer перед удалением записи.

@@ -3,11 +3,7 @@
 //! RSDS match), `appserver/skills/callositystate.cpp/.h` и
 //! `callositystate2.cpp/.h`; машинно методы пары почти полностью folded
 //! (9 методов, Restart-fold с CPromotionState `0x1FD450`). Данные, срок,
-//! запись и формула — `effects/callosity.rs`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/callositystate.rs`; тела перенесены
-//! буквально порцией №6c «self/zone-касты» (разведка — запись аудита
-//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026).
+//! запись и формула — `effects/callosity.rs`. Тела перенесены буквально.
 //!
 //! Здесь замена первого состояния семейства, участники, visual, restart/End
 //! и вызов общего пересчёта. Begin берёт часы до публикации visual;

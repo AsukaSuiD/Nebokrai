@@ -8,20 +8,15 @@
 //! Источник: точная пара `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Прежний переходный владелец — `src/gameserver/appserver/player.rs`
-//! (`appserver/player.cpp/.h`). Тела перенесены буквально: построчная сверка
-//! со старым файлом MATCH после нормализации `pub(crate)`→`pub` и путей
-//! типов швов. Доказательная база — разведка BF-семьи `player.rs` (порция
-//! №7, MATCH по представителям); дизассембл-спотчеки этой порцией выполнены
-//! на том же образе.
+//! age 2), `appserver/player.cpp/.h` (тела перенесены буквально).
 //!
 //! | представитель | RVA | статус |
 //! |---|---|---|
-//! | `CPlayer::SetWarSoulStaus` | `0x2E190` | MATCH (разведка порции): исходное `state==1` публикует around `0xBF930 {400,id}`; нормализация `value==1?{1,1}:{0,0}`; прямая пара raw-записей summoned+state сохранена |
-//! | `CPlayer::ComputeWarSoulXY` | `0x30930` | MATCH (разведка порции; спотчек дизассембла этой волной) |
-//! | `CPlayer::SetWarSoulXY` | `0x2DF50` | VERIFIED_DISASSEMBLY (порция №1 `regions/serverregion/areagrid`); спотчек: 3×`call GetArea` `0x7BB60` |
+//! | `CPlayer::SetWarSoulStaus` | `0x2E190` | MATCH (разведка): исходное `state==1` публикует around `0xBF930 {400,id}`; нормализация `value==1?{1,1}:{0,0}`; прямая пара raw-записей summoned+state сохранена |
+//! | `CPlayer::ComputeWarSoulXY` | `0x30930` | MATCH (разведка + спотчек дизассембла) |
+//! | `CPlayer::SetWarSoulXY` | `0x2DF50` | VERIFIED_DISASSEMBLY; спотчек: 3×`call GetArea` `0x7BB60` |
 //! | `CPlayer::TellClientMove` | `0x2D4D0` | PARTIAL: xrefs из summon-flow `0x2E3E0/0x2E418` (+`0x52E73/0x918AD/0xB7DA7`); из тел `0x30930`/`0x2DF50` прямого вызова нет |
-//! | wires `0xBF930`/`0xBF92E` | — | MATCH по разведке порции №6b (cbattlefairycontainer pubs/effector: refusal `0xBF930` around, summon `0xBF92E`) |
+//! | wires `0xBF930`/`0xBF92E` | — | MATCH по разведке cbattlefairycontainer pubs/effector: refusal `0xBF930` around, summon `0xBF92E` |
 //!
 //! Сверенное у `ComputeWarSoulXY` `0x30930`: pre-gate `GetSkill(current)`+
 //! виртуальный +0x28 (на Rust-шве — входной `current_war_soul_skill_restored`),
@@ -35,13 +30,13 @@
 //! указывала цель `0x2CF50` — по образу прямая цель `0x2DF50` (исправлено
 //! при переносе).
 //!
-//! Честные UNKNOWN, порцией не закрываются: pub-имя `ReviveBattleFairy` не
+//! Честные UNKNOWN: pub-имя `ReviveBattleFairy` не
 //! резолвится (inline в CGame-handler; однозначное xref-основание по
 //! `GAP_BF_HP`/153 и `GAP_BF_MAX_HP`/185 недостижимо — машинное вхождение
 //! UNKNOWN, поведение остаётся снятой моделью); порядок тела refresh внутри
 //! periodic `CPlayer::AI` — pub префикса не резолвится, зафиксирован PARTIAL;
-//! полный tail `SummonBF` за player-частью — за отдельной контейнерной
-//! порцией (map/vector/статика `CBattleFairyContainer`).
+//! полный tail `SummonBF` за player-частью остаётся у владельца контейнера
+//! (map/vector/статика `CBattleFairyContainer`).
 //!
 //! Объявленные швы переноса (не расхождения). Живые поля прежнего `CPlayer`
 //! приходят view `BattleFairyWarSoul` (summoned/state/recall/died/visual
@@ -56,9 +51,9 @@
 //! в `GameEffect` и упорядочивающий `GameEffectJournal` вместе с
 //! report/plan-структурами остаются у прежнего владельца
 //! (`appserver/player.rs`, `appserver/gameeffectjournal.rs`), concrete wire
-//! сериализация — транспортная волна. Spatial map mutation
+//! сериализация — транспортный владелец. Spatial map mutation
 //! (`set/delete/has war-soul area`) уже живёт в Zone
-//! `regions/serverregion/areagrid.rs` (порция №1); player-side spatial tails
+//! `regions/serverregion/areagrid.rs`; player-side spatial tails
 //! держатся здесь, потому что action/effect/outcome типы общие и владелец
 //! полей один (`CPlayer`) — граница зафиксирована этим файлом.
 

@@ -7,9 +7,9 @@
 //! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0,
 //! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).
 //! Композит `CGodThunderPhalanx` (CShape + область) перенесён из старого
-//! адаптера буквально порцией замыкания; новых машинных оснований он не
+//! адаптера буквально; новых машинных оснований он не
 //! добавляет. Тело `summon_god_thunder` перенесено из старого клея буквально
-//! порцией T5 «zonalcast-хаб» (VA 0x00573840/0x00553A80 уже сверены ниже):
+//! (VA 0x00573840/0x00553A80 уже сверены ниже):
 //! Master(country0)/Player EM→свежая таблица→usage20015/FISTP; порядок
 //! дальнейших живых чтений — в `GodThunderSummonParameters::read`; SetTile→
 //! Initialize/RNG предшествуют повторному чтению actual region captured U;
@@ -259,8 +259,7 @@ impl CGodThunderPhalanx {
 /// таблица→usage20015/FISTP), затем порядок живых чтений
 /// `GodThunderSummonParameters::read` с выбором исходного skill ID от
 /// диспетчера; SetTile→Initialize/RNG до повторного чтения actual region U.
-/// Перенесено буквально порцией T5 «zonalcast-хаб»; `MATCH` против
-/// `git show HEAD`.
+/// Тело перенесено буквально.
 pub fn summon_god_thunder<Game, Runtime>(
     game: &mut Game,
     instance: Game::SkillAddress,

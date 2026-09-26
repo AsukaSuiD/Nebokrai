@@ -1,4 +1,4 @@
-//! Buyer plug personal shop GameServer, перенесённый в Zone `sessions/`.
+//! Buyer plug personal shop GameServer в Zone `sessions/`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/session/cpersonalshopbuyer.cpp`. Buyer хранит owner/session/plug,

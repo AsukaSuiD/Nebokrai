@@ -3,19 +3,17 @@
 //! appserver/skills/weakphalanx.cpp/.h и appserver/skills/weak.cpp.
 //! Конструктор области: VA 0x600730; обход: 0x600840; AI: 0x600a70;
 //! расчёт срока призыва: 0x5AF41B–0x5AF48C.
-//! Композит `CWeakPhalanx` (CShape + область) и тело `summon_weak`
-//! перенесены из старого адаптера буквально порцией T5 «zonalcast-хаб»;
-//! новых машинных оснований композит не добавляет. Summon сначала
-//! сохраняет actual region U и отвергает `GetSecurity == SAFE`, не GetBlock;
+//! Композит `CWeakPhalanx` (CShape + область) и тело `summon_weak` следуют
+//! старому адаптеру без новых машинных оснований. Summon сначала сохраняет
+//! actual region U и отвергает `GetSecurity == SAFE`, не GetBlock;
 //! MASTER(country0)/Player EM либо 0 предшествуют свежей таблице; порядок
 //! запросов (коэффициент `20010` → срок `30001` через машинную формулу
 //! `weak_lifetime` → потеря attack `205` → живой уровень → часы → ID)
-//! сверен с Summon VA 0x005AF41B–0x005AF48C в части расчёта срока; весь
-//! порядок тела — `MATCH` против `git show HEAD`. SetTile центра, проход
-//! перекрытия старых областей, регистрация AddShape и encode/BF502 остаются
-//! прежними швами-фасадами (`ZonalCastContact` в `skills/zonalcast.rs`):
-//! входной регион читается до Add, отказ Add не отменяет сериализацию,
-//! отказ Summon не меняет End(1) навыка.
+//! сверен с Summon VA 0x005AF41B–0x005AF48C в части расчёта срока. SetTile
+//! центра, проход перекрытия старых областей, регистрация AddShape и
+//! encode/BF502 остаются швами-фасадами (`ZonalCastContact` в
+//! `skills/zonalcast.rs`): входной регион читается до Add, отказ Add не
+//! отменяет сериализацию, отказ Summon не меняет End(1) навыка.
 
 use nebokrai_shared::values::CGuid;
 use crate::combat::{MasterInfo, truncate_original};

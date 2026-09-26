@@ -1,6 +1,7 @@
 //! DB Save/Load-кодек применённых состояний `CMoveShape` из GameServer.exe/GameServer.pdb
 //! (пара gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 //! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
+//! Contract: docs/gameplay/attributes-and-states.md.
 //! Перенесён из hub `appserver/moveshape.rs`: Save/Load-семья (`serialize_ex_states_for_save`,
 //! `serialized_ex_states`, общий обход записей, `replace_ex_states`,
 //! `clear_persisted_runtime_state`) вместе с примитивами кодека. Арена записей —
@@ -11,8 +12,8 @@
 //! GameSave соответствует этому проходу и UpdateAbnormality (0x004CFD00).
 //! Порядок записей Serialize-cache, над которым работает этот кодек, задают
 //! сохранённые RAW RemoveState (0x004CDAB0, 0x004CDB20): append/remove/insert
-//! записей и владение этим порядком — соседний `mutations` (волна Z-M2b,
-//! сохранённые свидетельства также в шапке `storage`).
+//! записей и владение этим порядком — соседний `mutations` (сохранённые
+//! свидетельства также в шапке `storage`).
 //!
 //! Нормализация при переносе (тела буквальные): методы переходного CMoveShape
 //! преобразованы в свободные функции над заимствованными `LegacyStateCodec` и
@@ -22,7 +23,7 @@
 //! `clear_persisted_runtime_state` сбрасывает реестр навыков generic-сваркой
 //! `SkillIdentityAccess`, codec, арену и скаляры запрета боя в исходном порядке.
 //! Бинарные примитивы read/write объявлены `pub`: ими пользуются сохранённые
-//! RAW-операции hub moveshape до их переноса следующими порциями.
+//! RAW-операции hub moveshape.
 
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 

@@ -1,17 +1,13 @@
 //! Малые рывки сквозь строй: LittleFlash и LittleFlash2.
 //!
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/littleflash.cpp
-//! и littleflash2.cpp. Прежние переходные владельцы —
-//! `src/gameserver/appserver/skills/littleflash.rs` и `littleflash2.rs`;
-//! тела перенесены буквально порцией №5 «player melee» (разведка — запись
-//! аудита «Zone skills: машинная разведка melee dash/flash/littleflash/rush
-//! (порция №5)», 26 сентября 2026, по точной паре `gameserver.exe`
-//! `4F5C98E0…` + `GameServer.pdb` RSDS match: LF — MP→OnChangeStates до
+//! Источник: точная пара `gameserver.exe` `4F5C98E0…` + `GameServer.pdb`
+//! (RSDS match), appserver/skills/littleflash.cpp и littleflash2.cpp; тела
+//! перенесены буквально. Машинная сверка подтверждает: LF — MP→OnChangeStates до
 //! повторного weapon (GS0292), CAN=raw, delay → VE(1) до SetTileXY(back),
 //! финал delay+10009; LF2 — sufferer опционален, gate assigned region,
 //! не требует занятую клетку и очищает одиночный закрытый выход
 //! (`clear_single_blocked`); GS-строки 0278/0288/0290/0292/0302/0309
-//! байт-сверены).
+//! байт-сверены.
 //!
 //! Независимые регистрации используют общий lifecycle, но только первый
 //! вариант требует S и занятую клетку на пути. Второй может двигаться к
@@ -22,8 +18,8 @@
 //! у зарегистрированного экземпляра и видны синхронному End. Его пролог
 //! освобождает путь перед списком целей; общий Attack-End владеет AfterUse.
 //!
-//! Объявленные швы — переходные фасады `DashSkillGame`/`DashSkillContact`
-//! (`skills/dash.rs`, реализация у прежнего владельца); проверка меча —
+//! Объявленные швы — фасады `DashSkillGame`/`DashSkillContact`
+//! (`skills/dash.rs`, реализация у владельца старого пакета); проверка меча —
 //! общий предикат `flash::weapon_is_valid` (category 2), как в старом
 //! пакете. `SKILL_USAGE_CAN_BE_BREAKED` — usage `10006`, локальная константа
 //! по конвенции per-owner файлов старого пакета (единая таблица — World

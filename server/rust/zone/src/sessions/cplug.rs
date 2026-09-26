@@ -1,4 +1,4 @@
-//! Достигнутая owner-часть GameServer `CPlug`, перенесённая в Zone `sessions/`.
+//! Достигнутая owner-часть GameServer `CPlug` в Zone `sessions/`.
 //!
 //! Constructor/`SetOwner`/`GetOwner` RVA
 //! `0x0007B0F0/0x0007B130/0x0007B280` имеют статус `IMPLEMENTED,
@@ -10,7 +10,7 @@
 //! signed owner ID.
 //!
 //! Base object и пять достигнутых scalar-полей выражены safe Rust storage;
-//! signed ended-dword сохраняется без нормализации на wire,
+//! signed ended-dword сохраняется без нормализации на wire.
 //! Обратный вызов разрешения owner заменяет исходный nullable `CMoveShape*`:
 //! тип возврата принадлежит владеющему resolver-у, гейт type `400` и signed
 //! owner ID сохранены здесь. Terminal `Exit` проверяет живую session через

@@ -1,22 +1,18 @@
 //! Смазка оружия ядом `CDaubPoison` (`0xDF`): ID навыка, правило срока нового
 //! состояния и тело применения после visual(1) с семейной заменой первого
 //! непустого 0xDF-слота. Скелет Begin/Check/AI принадлежит hub `selfstatecast`
-//! прежнего пакета (общий для пяти усилений; граница волны D его не
-//! переносит), обвязка состояния — `skills/daubpoisonstate.rs` рядом.
+//! старого пакета (общий для пяти усилений), обвязка состояния —
+//! `skills/daubpoisonstate.rs` рядом.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/daubpoison.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/daubpoison.rs`; тело apply перенесено
-//! буквально (кластер D полосы «трупная/ядовая state-линия», порция D4,
-//! карта — запись аудита «Zone skills: карта полосы Monster 0x19x — 5
-//! кластеров волн», 26 сентября 2026).
+//! `appserver/skills/daubpoison.cpp`; тело apply перенесено буквально.
 //!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
-//! D4-daubpoison.md`, тела `.local/recon-de/disasm/CDaubPoison.txt`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
+//! D4-daubpoison.md`, тела `.local/recon-de/disasm/CDaubPoison.txt`)
+//! подтверждает всё:
 //!
 //! - vtable `0x259B74` (VA `0x00659B74`): Begin-скелет трёх форм
 //!   `0x565FE0`/`0x565F10`/`0x5660D0` (форвард `CAttackSkill::Begin` → new
@@ -38,17 +34,17 @@
 //!   push_back append, false: deleting-dtor нового; затем End(1). Проверки
 //!   результата установки нет — отказ Begin не отменяет завершение навыка.
 //!
-//! **Сознательное отклонение hub (подтверждено владельцем, не чинится):**
+//! **Сознательное отклонение hub (подтверждено, не чинится):**
 //! hub `selfstatecast` отклоняет источник не типа Player в Begin-стадии AI
 //! (`Rejected`), тогда как нативная фаза 0 читает MP `[U+0x284]` без
-//! RTTI-гейта (небезопасный доступ для монстра). Разведка D4 подтвердила
+//! RTTI-гейта (небезопасный доступ для монстра). Разведка подтвердила
 //! отклонение осознанным (шапка hub, «deliberate»); zone-файл здесь
 //! воспроизводит только машинно достижимый путь, не изменяя поведение hub.
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
 //! (арена `find_state_position`/`end_and_destroy_state_at`) и соседний
 //! `daubpoisonstate::begin_primary_daub_poison_state`; драйвер
-//! `selfstatecast.rs` прежнего пакета не меняется (граница D). Потребление
+//! `selfstatecast.rs` старого пакета не меняется. Потребление
 //! статическое (generic), dyn-совместимость и `Send`-контракт не вводятся
 //! (ADR-0013).
 

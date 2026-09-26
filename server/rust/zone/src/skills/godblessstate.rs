@@ -1,14 +1,13 @@
 //! Живые callbacks CGodBlessState/CGodBlessState2.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/godblessstate{,2}.cpp/.h`. Прежний
-//! переходный владелец — `src/gameserver/appserver/skills/godblessstate.rs`;
-//! тела перенесены буквально порцией №6a. Данные, срок, codec и числовые
+//! RSDS match), `appserver/skills/godblessstate{,2}.cpp/.h`; тела перенесены
+//! буквально. Данные, срок, codec и числовые
 //! правила — Zone `effects/godbless.rs` (Serialize `0x005EE310`,
 //! Unserialize `0x00601830`, GetRemainedTime `0x00601480`, AI
 //! `0x00601640`, OnUpdateProperties `0x00601690`).
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у прежнего владельца; прибавки живого монстра разрешаются
+//! реализован у владельца старого пакета; прибавки живого монстра разрешаются
 //! у владельца одним швом (`god_bless_monster_gains`), чужой layout не
 //! имитируется; visual/property и End ветки остаются у `states/state.rs`
 //! и объявлены швами.

@@ -3,12 +3,9 @@
 //! `GameServer.pdb` (RSDS match), исходный владелец
 //! `appserver/skills/fury.cpp/.h`; CFury::AI VA `0x536C43`–`0x536CCE`,
 //! разделяемые с CRageBreak Check/AI (`0x59FF10`/`0x5A00F0`) исходят из
-//! `appserver/skills/{fury,ragebreak}.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/fury.rs`; RP-хелперы перенесены
-//! буквально порцией T4 «ThunderSlash + RageBreak + ThunderFirePhalanx»,
-//! потому что с приездом CRageBreak хелпер стал разделяемым (тело Check и
-//! подготовка AI нужны сразу двум владельцам, а Zone не зависит от старого
-//! пакета). Сам CFury этой порцией не переносится.
+//! `appserver/skills/{fury,ragebreak}.cpp`. RP-хелперы перенесены буквально:
+//! тело Check и подготовка AI нужны сразу двум владельцам, а Zone не зависит
+//! от старого пакета. Сам CFury остаётся у прежнего владельца.
 //!
 //! Check (`0x59FF10`): абсолютный срок reuse (`0x2715`), затем игрок-RTTI;
 //! стоимость RP проверяется ДО чтения RP — нулевая стоимость у RageBreak
@@ -18,7 +15,7 @@
 //! задержка — абсолютная `start + 0x2711` по unsigned-сравнению.
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
-//! реализован у прежнего владельца; RP-операции `CPlayer` объявлены
+//! реализован у владельца старого пакета; RP-операции `CPlayer` объявлены
 //! собственным швом `RageCastPlayer` (реализация у делегата старого пакета).
 //! Исход делегата `End(0/1)` моделируется `StateCastExecutionOutcome`:
 //! точки прежнего `end_state_skill(...)` помечаются EndRejected/EndCompleted.

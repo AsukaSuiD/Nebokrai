@@ -6,15 +6,12 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/corpsecandleblasting.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/corpsecandleblasting.rs`; тела
-//! execute_owned, wire-кадры и формула перенесены буквально (кластер D полосы
-//! Monster 0x19x, карта — запись аудита «Zone skills: карта полосы Monster
-//! 0x19x — 5 кластеров волн», 26 сентября 2026).
+//! `appserver/skills/corpsecandleblasting.cpp`; тела
+//! execute_owned, wire-кадры и формула перенесены буквально.
 //!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
+//! Машинная сверка по этой паре (запись `.local/recon-de/notes/
 //! D2-corpsecandleblasting.md`, тела `.local/recon-de/disasm/
-//! CCorpseCandleBlasting.txt`) — MATCH по всем пунктам, кроме FIX F1 ниже:
+//! CCorpseCandleBlasting.txt`) подтверждает всё, кроме исправленного FIX F1:
 //!
 //! - vtable `0x25AEF4`: Check `0x582600` — ICF-фолд со `CSporeBlasting`
 //!   (null S → 0; reuse 10005 → visual(13); срок — SetMoveable(0), ret 1);
@@ -54,7 +51,7 @@
 //! `query_property == 0`, машинная форма чтений не меняется.
 //!
 //! Объявленные швы переноса (не расхождения): hub-трейты `monsterattack`
-//! кластера A2 (`monster_combat_facts`, `monster_attack_cell_candidates`,
+//! (`monster_combat_facts`, `monster_attack_cell_candidates`,
 //! снимок цели, применение попадания, зарегистрированный цикл каста),
 //! подход/расписание — `ai::monsterai` через контакт; `ServerRegionOwner`
 //! переиспользуется до синхронной смерти, продолжение заново получает

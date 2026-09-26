@@ -1,25 +1,12 @@
-//! Owner `CFairyContainer` исторического GameServer, перенесённый в Zone
-//! `items/` — владельца типов контейнеров и операций над ними.
+//! Owner `CFairyContainer` исторического GameServer: ordinary-fairy товары
+//! поверх volume-контейнера — hatch timer-ы, state transition, рост и
+//! синкретизация с positional add-правилами.
 //!
-//! Тела перенесены буквально из прежнего
-//! `src/gameserver/appserver/container/cfairycontainer.rs` (волна Z-C2c);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): amount/volume ядра — Zone
-//! `items/camountlimitgoodscontainer.rs` и `items/cvolumelimitgoodscontainer.rs`,
-//! listener handles — Zone `items/ccontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP/equip-place константы — Zone `content/goods.rs`,
-//! реестр `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b),
-//! свойства обычной феи — Zone `items/fairyproperties.rs` с продолжением
-//! generic-шва `FairyGrowEffectSink` (волны Z-G0a/Z-C2b): report-типы путей
-//! опыта [`FairyContainerExpEntry`], [`FairyContainerExpFailure`] и
-//! [`FairyImplantReport`] параметризованы `Effects` вместо подстановки
-//! прежнего `GameEffectJournal` — Zone не зависит от старых владельцев;
-//! старый пакет выводит подстановку журнала в точке доставки эффектов,
-//! потребители без правок. Extend-id `11` — вариант
-//! `PlayerContainerKind::Fairy` каталога `items/playercontainers.rs` (дизайн
-//! D4 волны Z-C1; прежняя приватная константа `0x0b` не дублируется),
-//! `ShapeIdentity` — Zone `regions/` (re-export `identity`), `CGuid` и
-//! wire-кодеки — Shared.
+//! Report-типы путей опыта [`FairyContainerExpEntry`],
+//! [`FairyContainerExpFailure`] и [`FairyImplantReport`] параметризованы
+//! `Effects` швом `FairyGrowEffectSink` (см. `fairyproperties.rs`). Extend-id
+//! `11` — вариант `PlayerContainerKind::Fairy` каталога
+//! `items/playercontainers.rs` (дизайн D4).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cfairycontainer.cpp`. Контейнер

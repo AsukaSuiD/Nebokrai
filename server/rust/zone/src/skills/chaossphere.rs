@@ -4,10 +4,10 @@
 //! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
 //! Summon VA 0x005A8290, ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0,
 //! AI VA 0x005FF270 (appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h).
-//! Композит `CChaosSpherePhalanx` (CShape + область) перенесён из старого
-//! адаптера буквально порцией замыкания; новых машинных оснований он не
-//! добавляет. Тело `summon_chaos_sphere` перенесено из старого клея буквально
-//! порцией T5 «zonalcast-хаб» (ветви и порядок запросов сверены ниже и в
+//! Композит `CChaosSpherePhalanx` (CShape + область) перенесён буквально из
+//! старого адаптера; новых машинных оснований он не добавляет. Тело
+//! `summon_chaos_sphere` тоже перенесено буквально
+//! (ветви и порядок запросов сверены ниже и в
 //! `docs/gameplay/skills.md`): `chaos_sphere_path_length` после свежей
 //! таблицы; исходный пустой путь прекращает Summon, обрезанный по BLOCK2
 //! до пустого всё ещё допускает форму; затем Master(country0)/Player EM→
@@ -208,8 +208,7 @@ impl CChaosSpherePhalanx {
 /// Master(country0)/Player EM (отсутствие игрока прерывает, как и раньше)
 /// и параметры `ChaosSphereSummonParameters::read`; ctor с часами и ID;
 /// SetTile — path[0] или свежие Y/X captured U; Add→encode/BF502 — швами.
-/// Перенесено буквально порцией T5 «zonalcast-хаб»; `MATCH` против
-/// `git show HEAD`.
+/// Тело перенесено буквально.
 pub fn summon_chaos_sphere<Game, Runtime>(
     game: &mut Game,
     instance: Game::SkillAddress,

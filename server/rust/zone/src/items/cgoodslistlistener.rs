@@ -1,10 +1,5 @@
-//! Visitor списка GUID товаров GameServer, перенесённый в Zone `items/` —
-//! владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/listener/cgoodslistlistener.rs` (волна Z-C2c);
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и швы переноса
-//! (не расхождения): `CGoods` — Zone `items/cgoods.rs`, `CGuid` — Shared.
+//! Visitor списка GUID товаров исторического GameServer: собирает GUID
+//! каждого встреченного `CGoods` в ordered vector.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/listener/cgoodslistlistener.cpp`. Новый listener имеет пустой

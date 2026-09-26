@@ -3,10 +3,8 @@
 //! `appserver/skills/weakstate.cpp/.h`. Запись, прямоугольник, срок и
 //! player/monster-формулы находятся в `effects/weak.rs`; здесь — разрешение
 //! участников S/U, visual, применение результата, restart, ветви AI и End.
-//! Тела перенесены буквально из прежнего переходного владельца
-//! `src/gameserver/appserver/skills/weakstate.rs` порцией T5 «zonalcast-хаб»;
-//! `MATCH` против `git show HEAD`. Арена и визуализация остаются
-//! прежними швами `ZonalCastGame` (`skills/zonalcast.rs`).
+//! Арена и визуализация остаются швами `ZonalCastGame`
+//! (`skills/zonalcast.rs`).
 //! Begin требует S; при NULL U не обновляет часы. AI типа 2 читает
 //! положение живой цели, а смена региона завершает это состояние.
 //! Запись Player-свойств и монстровых модификаторов цели — прежние операции

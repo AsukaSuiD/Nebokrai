@@ -1,9 +1,7 @@
 //! Живой Begin/restart усиления `CPromotionState` (`0x142`) в переходном Game.
-//! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/promotionstate.cpp/.h`. Прежний
-//! переходный владелец — `src/gameserver/appserver/skills/promotionstate.rs`;
-//! тело перенесено буквально порцией №6a. Данные, срок и сохраняемая
-//! запись принадлежат Zone `effects/promotion.rs` (там же адреса
+//! Источник: `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
+//! (RSDS match), `appserver/skills/promotionstate.cpp/.h`. Данные, срок и
+//! сохраняемая запись принадлежат Zone `effects/promotion.rs` (там же адреса
 //! конструкторов, vtable, Serialize/Unserialize и Restart-fold `0x005FD450`).
 //!
 //! Состояние остаётся в упорядоченной ветви `CFightDefense::PreDefense`:

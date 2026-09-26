@@ -5,8 +5,7 @@
 //! CScope::SetInScope VA 0x005E9990. AI FireWall VA 0x006003E0,
 //! YinYang VA 0x005FE9A0 и YinYang2 VA 0x005F28C0.
 //! Композит `MaskedElementPhalanx` (CShape + снимок атаки + маска) перенесён
-//! из старого адаптера буквально порцией замыкания; новых машинных оснований
-//! он не добавляет.
+//! из старого адаптера буквально; новых машинных оснований он не добавляет.
 
 use nebokrai_shared::values::CGuid;
 use crate::combat::MasterInfo;

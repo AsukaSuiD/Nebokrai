@@ -1,4 +1,4 @@
-//! GameServer startup-owner войны четырёх стран `CFourNationWarSys`, перенесённый в Zone `activities/`.
+//! GameServer startup-owner войны четырёх стран `CFourNationWarSys` в Zone `activities/`.
 //!
 //! Wire и startup side effects подтверждены точными
 //! `gameserver.exe + GameServer.pdb` и `worldserver.exe + worldserver.pdb`;

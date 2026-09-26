@@ -14,7 +14,7 @@
 //! наследуемый `CPet::OnAttackingSchedule`/`OnStayingSchedule` (RVA
 //! `0x0E9A20`/`0x0E9650`).
 //!
-//! Машинная база кластера A1 (VERIFIED по этой паре):
+//! Машинная база (VERIFIED по этой паре):
 //!
 //! - `OnChangeSkill`: `SelectAttackSkill` → уже выбранный concrete skill
 //!   проверяется `IsRestored` (vt `+0x80`: `QueryProperty(10005) + [+0x40] <
@@ -36,21 +36,22 @@
 //!
 //! - Сам реестр исполнителей `owned_registered_cast_executor` НЕ переносится:
 //!   он остаётся владением старого `appserver/skills/monsterbaseattack.rs`
-//!   (его отображение ID → concrete executor — отдельные порции владельцев).
+//!   (его отображение ID → concrete executor складывается по мере переноса
+//!   владельцев).
 //!   Сюда перенесён только диспетчерский костяк: continue-решение
 //!   `OnFighting`, выбор и смена навыка. Реестр и продолжение общей базовой
 //!   атаки приходят hub-швами `execute_registered_cast` /
 //!   `continue_common_base_attack`; специфические selector-ы боссов, владыки и
-//!   стационарных лучников — швами своих полос (`bossblue`, `bossfiend`,
-//!   `lord`, `fixedpositionarcher`).
+//!   стационарных лучников — швами своих групп владельцев (`bossblue`,
+//!   `bossfiend`, `lord`, `fixedpositionarcher`).
 //! - Hub-фасады семейства `MonsterDispatcher*` (`ai/monsterai.rs`) открывают
 //!   state-машину `CMonster`, текущий навык через фабрику и reuse timestamp.
 //! - Часы проверки restore читаются отдельным вызовом `now_milliseconds`
 //!   (fn-параметр делегата старого main loop).
 //!
 //! Честные UNKNOWN: состав и порядок обхода массивов default-ID по
-//! категориям `GetDefaultAttackSkillID` (0x004CE240) раскрывается порцией
-//! реестра `moveshape`; поле `tdI[2]` связанного setup здесь не участвует.
+//! категориям `GetDefaultAttackSkillID` (0x004CE240) — у владельца реестра
+//! `moveshape`; поле `tdI[2]` связанного setup здесь не участвует.
 
 use nebokrai_shared::resources::MonsterProperties;
 
@@ -67,7 +68,7 @@ use super::baseattackruntime::SKILL_USAGE_REUSE_DELAY_TIME;
 /// `OnFighting` dispatcher-а. Реестр исполнителей и делегат общей
 /// `CBaseAttack` остаются старым пакетом через швы ниже.
 pub trait MonsterBaseDispatchGame: MonsterDispatcherGame {
-    // Selector-полосы владельцев производных AI (их перенос — свои порции).
+    // Selector-группы владельцев производных AI (реализация у старого пакета).
     /// Пороговый выбор BossBlue (AI103) по здоровью и зарегистрированному Fury.
     fn choose_boss_blue_attack_skill(
         &mut self,

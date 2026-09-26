@@ -8,9 +8,7 @@
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monstertaming.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/monstertaming.rs` (кластер A2 полосы
-//! Monster, 26 сентября 2026).
+//! `appserver/skills/monstertaming.cpp`; тела перенесены буквально.
 //!
 //! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`);
 //! исправления расхождений DIFF-T1/DIFF-T2 выполнены в этом же участке:
@@ -63,8 +61,8 @@
 //!   той же строкой setup (`MonsterProperties.figure`), — Rust живой record
 //!   держит тем же скаляром. Поэтому снимок `property.figure` в `AddPet`
 //!   эквивалентен живому байту на момент read (diff-вопрос UNKNOWN#3 закрыт
-//!   так: доказаний расхождения нет; посещаемость заполнения спавна —
-//!   владение региона вне A2). Кадр имени — legacy-C-строка (обрезка по NUL).
+//!   так: доказаний расхождения нет; заполнение спавна — владение региона).
+//!   Кадр имени — legacy-C-строка (обрезка по NUL).
 //!
 //! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; часы —
 //! fn-параметр `now_milliseconds` делегата старого main loop; абсолютный

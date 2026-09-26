@@ -1,15 +1,11 @@
 //! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`). Источник:
 //! точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) + `GameServer.pdb`
 //! (RSDS match), исходный владелец `appserver/skills/yunshenglightning.cpp`.
-//! Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/yunshenglightning.rs` (кластер B полосы
-//! Monster 0x19x, карта — запись аудита «Zone skills: карта полосы Monster
-//! 0x19x — 5 кластеров волн», 26 сентября 2026). Payload исполнений вынесен
-//! раньше (`skills/execution/payload.rs` `PlayerYunShengLightningExecutionState`/
-//! `YunShengLightningProgress`, порция 5 волны moveshape); общий End
-//! `0x0057B810` (ICF со SpiderWeb) зафиксирован в шапке прежнего файла.
+//! Payload исполнений — `skills/execution/payload.rs`
+//! (`PlayerYunShengLightningExecutionState`/`YunShengLightningProgress`);
+//! общий End `0x0057B810` (ICF со SpiderWeb).
 //!
-//! Сюда перенесены буквально числовые правила, формулы и wire-кадры visual
+//! Числовые правила, формулы и wire-кадры visual
 //! `0x000BFE01` обеих ветвей (player/monster): постоянное время полёта, один
 //! RNG-вызов elemental-формулы, x87-прибавка игрока с f32-константой и
 //! усечением к нулю, нулевой `base_element` монстра (Windows

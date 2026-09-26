@@ -2,20 +2,16 @@
 //! (0xD3/0xE3/0xD9/0xE4) — периодическое лечение.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
 //! RSDS match), `appserver/skills/heal{,2}.cpp` и `superheal{,2}.cpp`.
-//! Прежний переходный владелец — `src/gameserver/appserver/skills/heal.rs`
-//! (и мелкие `heal2`/`superheal`/`superheal2` с ID); тела Check/AI
-//! перенесены буквально порцией №6a (разведка — запись аудита «Zone
-//! skills: машинная разведка battlefairy-навыков (порция №6)»,
-//! 26 сентября 2026). Машинные якоря: CHeal Check — reuse(0x2715)+tick
+//! Тела Check/AI перенесены буквально. Машинные якоря: CHeal Check — reuse(0x2715)+tick
 //! visual13/GS0278 → GetTargetPath безусловно → distance-пара → MP
 //! (cost>0 signed-diff, Move0 только при успехе; cost0 → visual7/GS0288);
 //! AI: MP→OnChangeStates→CAN→направление→visual0→delay→visual1→формула
 //! `coeff*weapon_level*0.01+const` (FISTP) → QueryProperty(6001) затем
 //! QueryProperty(10002) → ctor state(J,J) → Begin(U,S).
 //!
-//! **Fix той же порцией:** `TARGET_AFFECT_FREQUENCY` — машинно `6001`
+//! **Установленный FIX:** `TARGET_AFFECT_FREQUENCY` — машинно `6001`
 //! (во всех четырёх AI, якорь CHeal `0x581861`: прямое `QueryProperty(6001)`
-//! перед `10002`), не `5002`, как держал прежний файл переходного пакета.
+//! перед `10002`), не `5002`, как держала прежняя реконструкция.
 //!
 //! Зарегистрированный экземпляр игрока или монстра хранит единственную
 //! базу и фазу; отдельного payload и снимка цели нет. Объектный Begin
@@ -48,9 +44,9 @@
 //! native STL/указатели.
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::*`
-//! реализован у прежнего владельца; Check-скелет `rangedweaponcast`
+//! реализован у владельца старого пакета; Check-скелет `rangedweaponcast`
 //! (`check_skill_path` ветки Ignore и MP-контракт) и материализация
-//! исполнения остаются в переходном пакете и объявлены швами.
+//! исполнения остаются в старом пакете и объявлены швами.
 
 use nebokrai_shared::runtime::get_line_direction;
 

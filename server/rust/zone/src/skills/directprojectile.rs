@@ -1,15 +1,12 @@
 //! Общий прямой снаряд `CChuckStone` (`0x19D`) и `CSkeletonArchery`
 //! (`0x1A1`). Источник: точная пара `gameserver.exe` (SHA-256 `4F5C98E0…`) +
 //! `GameServer.pdb` (RSDS match), исходные владельцы `chuckstone.cpp` и
-//! `skeletonarchery.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/directprojectile.rs`; тела Check/AI и
-//! helpers перенесены буквально (кластер B полосы Monster 0x19x, карта
-//! полосы — запись аудита «Zone skills: карта полосы Monster 0x19x — 5
-//! кластеров волн», 26 сентября 2026). ICF-свёртка классов доказана по RVA:
+//! `skeletonarchery.cpp`; тела Check/AI и helpers перенесены буквально.
+//! ICF-свёртка классов доказана по RVA:
 //! ChuckStone ≡ SkeletonArchery 4 тела `0x5377A0/0x53BF10/0x53BF30/0x569330`;
 //! базовые Begin — CAttackSkill `0x5DEB00…`; общий End обоих владельцев
 //! `0x0056A330` зафиксирован у payload `DirectProjectileProgress`
-//! (`skills/execution/payload.rs`, порция 5 волны moveshape).
+//! (`skills/execution/payload.rs`).
 //!
 //! Все Begin создают effect до Check. Check требует только U, таблицу,
 //! исходный GetTargetPath/MAX и для игрока оружие категории 3 или 4;
@@ -30,9 +27,9 @@
 //! `m_bAutoRestart` конструируется ложным, не меняется, а унаследованный
 //! Restart пуст.
 //!
-//! Объявленные швы переноса (не расхождения): трейты ниже — переходные
-//! фасады прежнего владельца `CGame`/`CMoveShape`, реализация остаётся у
-//! делегата старого пакета (`appserver/skills/directprojectile.rs`); имена
+//! Объявленные швы переноса (не расхождения): трейты ниже — фасады
+//! `CGame`/`CMoveShape` старого пакета, реализация остаётся у
+//! делегата (`appserver/skills/directprojectile.rs`); имена
 //! членов сохраняют исходную операцию, швы потребляются статически (generic),
 //! dyn-совместимость и `Send`-контракт не вводятся (ADR-0013). Первичный гейт
 //! существования региона первого объекта клетки сохранён у шва
@@ -73,7 +70,7 @@ pub enum DirectProjectileOutcome {
     Completed,
 }
 
-/// Живая фигура стороны прямого снаряда: переходный фасад старого `CMoveShape`.
+/// Живая фигура стороны прямого снаряда: фасад старого `CMoveShape`.
 pub trait DirectProjectileMoveShape {
     fn shape(&self) -> &CShape;
 
@@ -82,7 +79,7 @@ pub trait DirectProjectileMoveShape {
     fn set_moveable(&mut self, moveable: bool);
 }
 
-/// Переходные фасады прежнего владельца `CGame`, открывающие прямому снаряду
+/// Фасады `CGame` старого пакета, открывающие прямому снаряду
 /// только прежние обращения; имена сохраняют исходную операцию.
 pub trait DirectProjectileGame {
     /// Hub-исполнение монстра записи навыка (`CMonster` старого пакета).

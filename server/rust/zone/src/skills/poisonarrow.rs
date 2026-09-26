@@ -3,26 +3,20 @@
 //! `execute_periodic_battle_fairy_arrow`, позднее наложение периодического
 //! яда `CPoisonArrowState`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/poisonarrow.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/poisonarrow.rs`; тела Check/AI/apply и
-//! обёртка перенесены буквально (кластер D полосы «трупная/ядовая state-
-//! линия», порция D5, карта — запись аудита «Zone skills: карта полосы
-//! Monster 0x19x — 5 кластеров волн», 26 сентября 2026).
-//!
-//! Машинная разведка порции по этой паре (запись `.local/recon-de/notes/
-//! D6-poisonarrow.md`, тела `.local/recon-de/disasm/CPoisonArrow.txt`);
-//! сопоставление с перенесённым кодом — MATCH по всем пунктам:
+//! Источник: `gameserver.exe` (SHA-256
+//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`; RVA
+//! истинные `off pub + 0x1000`) + `GameServer.pdb` (RSDS
+//! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match), исходный владелец
+//! `appserver/skills/poisonarrow.cpp`. Машинный разбор тела —
+//! `.local/recon-de/notes/D6-poisonarrow.md` и
+//! `.local/recon-de/disasm/CPoisonArrow.txt`.
 //!
 //! - Check `0x519750` (U,S): null S/props → 0; null-target/self (U==S) →
 //!   visual(10) + ZHGS0045; конфликт сканируется **по позиции** исходного
 //!   вектора состояний S: первый id из `{0x192 → ZHGS0046, 0xD2 → ZHGS0047,
 //!   0x67 → ZHGS0046}` → системное сообщение игроку, ret 0 (тело hub
-//!   `battlefairyskill::check_battle_fairy_target_states`, сверено
-//!   порцией №6b); reuse(10005) → visual(13) + ZHGS0048; путь
+//!   `battlefairyskill::check_battle_fairy_target_states`);
+//!   reuse(10005) → visual(13) + ZHGS0048; путь
 //!   `vcall+0x58`: Query(5003)!=0 и cells > max (jbe проход) → visual(11) +
 //!   ZHGS0049; клетка third==2 → visual(15) + ZHGS0051 (SSO-имя цели);
 //!   Query(2) == 0 (GENESIS MP0) → **ret 1**; GetWarSoulGoods null →
@@ -34,8 +28,8 @@
 //!   GetWarSoulGoods null → **тихий выход без End (Pending)**; нехватка MP
 //!   → visual(7) + ZHGS0052 → End(0); иначе SetAddon(1,0x9A,остаток)
 //!   signed → SerializeForOldClient → кадр `0xBF918` (long player, guid,
-//!   count, payload; доставка — объявленный шов `send_goods_update`
-//!   порции №6b с решением C, якоря в шапке `skills/battlefairyskill.rs`);
+//!   count, payload; доставка — объявленный шов `send_goods_update`, якоря
+//!   в шапке `skills/battlefairyskill.rs`);
 //!   CAN(10006) → visual(0) → `[+0x50]=1`; delay 10001 unsigned → out;
 //!   повторный путь: дальность → visual(11) + ZHGS0049 → End(0), клетка 2 →
 //!   visual(15) + ZHGS0051 → End(0); visual(1); MasterInfo живого U с
@@ -59,10 +53,9 @@
 //! (объявленный шов `PoisonArrowStateArena` ниже, zone-код здесь их не
 //! дублирует).
 //!
-//! Решение порции зафиксировано заранее: общая обёртка
-//! `execute_periodic_battle_fairy_arrow` переносится в Zone целиком;
-//! `CBloodLoss` до своей волны вызывает её через hub-делегат прежнего
-//! пакета (`appserver/skills/poisonarrow.rs`) без правок.
+//! Общая обёртка `execute_periodic_battle_fairy_arrow` живёт в Zone
+//! целиком; `CBloodLoss` вызывает её через hub-делегат старого пакета
+//! (`appserver/skills/poisonarrow.rs`) без правок.
 //!
 //! Объявленные швы переноса (не расхождения): hub
 //! `battlefairyskill::BattleFairyGame` (реестр, WarSoul/equipment,
@@ -93,7 +86,8 @@ use super::state::StateKey;
 pub const POISON_ARROW_SKILL_ID: u32 = 0x21e;
 
 /// Payload `CPoisonArrowState` семейного периодического яда (данные и кодек
-/// Zone `effects/poison.rs`, VERIFIED раньше; живая обвязка — шов арены).
+/// Zone `effects/poison.rs`, VERIFIED четырёхсторонний; живая обвязка — шов
+/// арены).
 pub type PoisonArrowState = PoisonState<POISON_ARROW_SKILL_ID>;
 
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;

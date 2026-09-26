@@ -2,7 +2,7 @@
 //! GameServer.exe/GameServer.pdb (пара gameserver.exe SHA-256
 //! 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 //! ↔ GameServer.pdb RSDS 5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53 age 2, совпадают).
-//! Перенесены из hub `appserver/moveshape.rs` (волна Z-M2a): queries семейств
+//! Это бывшие query-методы hub `appserver/moveshape.rs`: queries семейств
 //! ride/automatic restore, проекции particular/team/swordship/wuxing/taiji/
 //! enlarge/origin, boss blue fury, promotion и защитные щиты, итераторы
 //! energy holding/pillar, порядок curable/blind, battle fairy attribute,
@@ -17,8 +17,8 @@
 //! Проекции ChangeBody соответствуют GetCHBYState (0x004CEC40), который не
 //! вызывает callbacks. Мутирующие операции этих же семейств — splice замены,
 //! append/take/remove записей, span-сдвиги и tick с item-часами
-//! undead/extended — перенесены в соседний `mutations` (волна Z-M2b);
-//! у семейств spiderweb и boss blue quake читающей половины в hub нет.
+//! undead/extended — соседний `mutations`; у семейств spiderweb и
+//! boss blue quake читающей половины в hub нет.
 
 use crate::effects::{
     AutomaticRestoreState, BattleFairyAttributeState, BossBlueFuryState, CTeamState,

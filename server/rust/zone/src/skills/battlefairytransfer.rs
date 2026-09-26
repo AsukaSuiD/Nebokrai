@@ -1,9 +1,7 @@
 //! Передача ресурсов CHuoxieshu/CLingzhishu: Check/AI.
 //!
 //! Источник: `gameserver.exe` `4F5C98E0…` + `GameServer.pdb` (RSDS match),
-//! `appserver/skills/{huoxieshu,lingzhishu}.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/battlefairytransfer.rs`; тела перенесены
-//! буквально порцией №6b «BF-ядро».
+//! `appserver/skills/{huoxieshu,lingzhishu}.cpp`; тела перенесены буквально.
 //!
 //! Общий registered-вход сохраняет base Begin, visual loop1 и исходные часы;
 //! Check требует CPlayer и ненулевой GetS, но не предмет или регион. Нулевая
@@ -23,7 +21,7 @@
 //! Восстановление читает current → поздний gain из таблицы начала AI → max,
 //! при превышении максимума повторяет GetMax, затем пишет один раз.
 //! Общий setter перезагружает уже существующие fairy-проекции до Serialize.
-//! BF918 отправляется и при отказе Serialize — точечно, решение C порции №6b
+//! BF918 отправляется и при отказе Serialize — точечно, решение C
 //! (якоря `0x501BDE..0x501C61`/`0x51F249`, шапка координатора
 //! `skills/battlefairyskill.rs`). Собственный End(bool) с visual3 принадлежит
 //! координатору, не дублируется внешним End(int).

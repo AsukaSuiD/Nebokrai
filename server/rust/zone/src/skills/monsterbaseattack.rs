@@ -2,16 +2,15 @@
 //! player-путь (reuse/гейты/дистанция/failure 2) и машинная база общих
 //! AI/Calculate/Attack/End семьи. Монстр-вход исполнения остаётся hub у
 //! `execute_owned_monster_base_attack` прежнего пакета через трейты
-//! прецедента `MonsterBaseDispatch` (перенос hub — своя порция).
+//! прецедента `MonsterBaseDispatch` (hub остаётся у старого пакета).
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
 //! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
 //! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
 //! `off pub + 0x1000`). Исходный владелец PDB:
-//! `appserver/skills/monsterbaseattack.cpp`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/monsterbaseattack.rs` (кластер A2 полосы
-//! Monster, 26 сентября 2026); в нём остаются hub диспетчера расписания,
-//! реестр исполнителей и общий монстр-драйвер кадров.
+//! `appserver/skills/monsterbaseattack.cpp`. Hub диспетчера расписания,
+//! реестр исполнителей и общий монстр-драйвер кадров остаются у старого
+//! пакета (`appserver/skills/monsterbaseattack.rs`).
 //!
 //! Машинная база по этой паре (VERIFIED, тела `.local/recon-a2/out/`):
 //!
@@ -28,9 +27,9 @@
 //!   dyn-cast источника в CPlayer.
 //! - AI (RVA `0x114820`): `[+0x4C] == 0` → выход; props null → `End(0)`;
 //!   U null → `End(0)`; **мёртвая S → кадр failure 2 (mode 2, только player
-//!   источнику) + `End(1)` со штампом reuse** — DIFF-B1 исправлен в
-//!   hub-владельце той же порции: мёртвая цель mid-cast завершается машинным
-//!   `End(1)` со штампом reuse вместо прежнего снятия cast без reuse;
+//!   источнику) + `End(1)` со штампом reuse** — DIFF-B1 исправлен:
+//! мёртвая цель mid-cast завершается машинным `End(1)` со штампом reuse
+//! вместо прежнего снятия cast без reuse;
 //!   первая фаза: `RealDistance` беззнаково против `QueryProperty(5003)`,
 //!   превышение — `{0, 0xb}` + `End(0)`; SetDir(GetLineDir(U→S)) и старт-кадр
 //!   (mode 0, `[+0x3C] = QueryProperty(10006)`); delay — абсолютный
@@ -63,9 +62,9 @@
 //! Player-путь ниже соответствует тем же телам (для player-источника;
 //! монстр-кейсы отмечены у hub). Coordinator игрока и queue-финализация
 //! остаются у планировщика старого пакета; формула расчёта player-удара —
-//! шов `monster_combat_calculate_attack` до порции lord-владельца (общее
-//! тело `lordfastattack::calculate_attack` прежнего пакета используется
-//! также `0x2bd`-ветвью, включая личный критический множитель).
+//! шов `monster_combat_calculate_attack` владельца lord (общее тело
+//! `lordfastattack::calculate_attack` старого пакета используется также
+//! `0x2bd`-ветвью, включая личный критический множитель).
 //!
 //! Объявленные швы переноса: hub-трейты `skills/monsterattack.rs`; часы —
 //! fn-параметр `now_milliseconds` делегата старого main loop.
@@ -326,7 +325,7 @@ where
     {
         if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE | 1_100 | 1_200) {
             // Машинный Calculate не замещает конструкторские UNKNOWN/уровень 1
-            // seed tagAttackInformation (формула владельца lord до его порции).
+            // seed tagAttackInformation (формула — владелец lord, старый пакет).
             attack.skill_id = crate::combat::UNKNOWN_SKILL_ID;
             attack.skill_level = 1;
             game.with_published_player_ai(player_id, player_ai, |game| {

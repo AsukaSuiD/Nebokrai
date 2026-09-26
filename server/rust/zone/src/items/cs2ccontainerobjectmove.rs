@@ -1,12 +1,11 @@
-//! Клиентский container-move `0xC0101` GameServer, перенесённый в Zone
-//! `items/` — владельца типов контейнеров и wire их изменений (волна Z-C5).
+//! Клиентский container-move `0xC0101` GameServer: подкоды `SetOperation`,
+//! self-move normalization и build-only кодек кадра.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` (SHA-256 EXE
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS
 //! `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2), исходный owner
 //! `appserver/message packaging/cs2ccontainerobjectmove.cpp`. Кодековая форма
-//! сверена прежними порциями; перенесены буквально (нормализация видимости
-//! `pub(crate)`→`pub` на границе crate): enum операции — он же подкод
+//! перенесена буквально: enum операции — он же подкод
 //! `SetOperation` первого байта (`RollBack` 0, `MoveObject` 1, `NewObject` 2,
 //! `DeleteObject` 3, `SwitchObject` 4), self-move normalization перед
 //! публикацией и объектный кодек с разным tail по операции: rollback-кадр

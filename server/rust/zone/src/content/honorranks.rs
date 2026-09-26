@@ -1,4 +1,5 @@
-//! Startup snapshot `CHonorRanks` исторического GameServer, перенесённый в Zone `content/`.
+//! Startup snapshot `CHonorRanks` исторического GameServer: 4 rank types ×
+//! 4 country lists с record decode и honor-запросами snapshot-а.
 //!
 //! `DecordFromByteArray` RVA `0x0000D390` подтверждает 4 rank types × 4
 //! country lists. Для country `-1` списки очищаются и декодируются по порядку;

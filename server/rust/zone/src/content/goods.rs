@@ -1,4 +1,4 @@
-//! Базовые свойства товара GameServer и их startup wire-decoder, перенесённые в Zone `content/`.
+//! Базовые свойства товара GameServer и их startup wire-decoder.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/goods/cgoodsbaseproperties.cpp`. Парный

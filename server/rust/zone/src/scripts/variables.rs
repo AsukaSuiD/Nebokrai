@@ -2,9 +2,8 @@
 //! Экземпляры списка по-прежнему принадлежат игроку или копии общих значений Game;
 //! объявления разбирает Shared scripting/variablelist.rs.
 //!
-//! Перенесено из старого Game-модуля по исходному владельцу
-//! `server/gameserver/appserver/script/variablelist.cpp`; основание — точная пара
-//! `gameserver.exe + GameServer.pdb`. Startup сначала
+//! Исходный владелец PDB: `server/gameserver/appserver/script/variablelist.cpp`;
+//! основание — точная пара `gameserver.exe + GameServer.pdb`. Startup сначала
 //! загружает объявления из полученного ресурса `VariableList`, затем
 //! `DecordFromByteArray` применяет World snapshot: signed count, ignored
 //! длину payload, C-string имени, знаковый tag и значения scalar/string/array.

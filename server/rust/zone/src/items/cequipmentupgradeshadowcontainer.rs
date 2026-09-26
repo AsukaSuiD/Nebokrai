@@ -1,15 +1,6 @@
-//! Пятислотовая shadow-сессия улучшения снаряжения GameServer, перенесённая в
-//! Zone `items/` — владельца типов контейнеров и операций над ними.
-//!
-//! Тело перенесено буквально из прежнего
-//! `src/gameserver/appserver/container/cequipmentupgradeshadowcontainer.rs`
-//! (волна Z-C3); отличия — нормализация `pub(crate)`→`pub` на границе crate и
-//! швы переноса (не расхождения): count-limit слой и shadow core — Zone
-//! `items/camountlimitgoodsshadowcontainer.rs`/`items/cgoodsshadowcontainer.rs`,
-//! `PreviousContainer` — Zone `items/ccontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs` (волна Z-G0b), `CGuid` —
-//! Shared.
+//! Пятислотовая shadow-сессия улучшения снаряжения исторического GameServer:
+//! equipment в слоте `0`, base gem в слоте `1`, до трёх gems в `2..4`,
+//! поверх count-limit слоя и shadow core.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cequipmentupgradeshadowcontainer.cpp`.

@@ -1,17 +1,12 @@
-//! Достигнутый object/addon core `CGoods` исторического GameServer,
-//! перенесённый в Zone `items/` — владельца ядра товаров.
+//! Object/addon core `CGoods` исторического GameServer: shape identity,
+//! base-properties index, amount/price/ticket, ordered addon storage,
+//! stacking, upgrade eligibility и persistence-wire кодек.
 //!
-//! Тела перенесены буквально из прежнего `src/gameserver/appserver/goods/cgoods.rs`;
-//! отличия — нормализация `pub(crate)`→`pub` на границе crate и объявленные
-//! швы переноса (не расхождения): `CShape` живого типа — Zone `regions/shape.rs`,
-//! GAP-константы и `CGoodsBaseProperties` — Zone `content/goods.rs`, lookup
-//! реестра базовых свойств типизирован trait-швом [`GoodsBasePropertiesLookup`]
-//! ниже (реализация владельца реестра — `CGoodsFactory` Zone
-//! `content/goodsfactory.rs`, волна Z-G0b), журнал эффектов `fairy_exp_up` —
-//! шов `FairyGrowEffectSink`,
-//! см. `fairyproperties.rs`. Невостребованный приватный реликт переходной
-//! реконструкции `read_goods_wire` (мёртвый уже в старом пакете, где dead_code
-//! скрыт blanket-allow) не перенесён, чтобы Zone сохранял нуль предупреждений.
+//! Contract: docs/gameplay/items.md.
+//!
+//! Lookup реестра базовых свойств типизирован trait-швом
+//! [`GoodsBasePropertiesLookup`] ниже; журнал эффектов роста феи — шов
+//! `FairyGrowEffectSink`, см. `fairyproperties.rs`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходные owners
 //! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
@@ -40,8 +35,9 @@
 //! после записи, без отката, вместо исходного чтения через NULL.
 //! Script durability getter/setter теперь сохраняют exact base-value storage,
 //! включая запись `-1` без client update. Constructor/release, остальные
-//! time-поля, обратный codec и прочая gameplay mutation ещё требуют реконструкции; полный декомпилят хранится локально:
-//! достигнутый core не выдаётся за весь 0xCC-byte legacy object.
+//! time-поля, обратный codec и прочая gameplay mutation ещё требуют
+//! реконструкции: достигнутый core не выдаётся за весь 0xCC-byte legacy
+//! object.
 
 use super::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,
@@ -70,9 +66,9 @@ use crate::regions::ShapeIdentity;
 use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
-/// Шов переноса: lookup реестра базовых свойств товара. Реализация владельца
-/// реестра — `CGoodsFactory` Zone `content/goodsfactory.rs` (волна Z-G0b);
-/// имя операции сохраняет исходный `QueryGoodsBaseProperties`.
+/// Lookup реестра базовых свойств товара у его владельца. Реализация —
+/// `CGoodsFactory` Zone `content/goodsfactory.rs`; имя операции сохраняет
+/// исходный `QueryGoodsBaseProperties`.
 pub trait GoodsBasePropertiesLookup {
     fn query_goods_base_properties(&self, goods_id: u32) -> Option<&CGoodsBaseProperties>;
 }

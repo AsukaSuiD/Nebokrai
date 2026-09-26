@@ -1,4 +1,4 @@
-//! Сеанс команды `CTeam` в GameServer, перенесённый в Zone `sessions/`.
+//! Сеанс команды `CTeam` GameServer в Zone `sessions/`.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец —
 //! `appserver/session/cteam.cpp`. Материализованы локальные создание и

@@ -5,26 +5,23 @@
 //! `0x5F12E0` (VERIFIED разведкой — создаётся состояние второго рывка, а не
 //! CBlindState); codec семейства 8-байтный ✓ `effects/blind.rs`; End(H)
 //! 13-fold `0x146090` — общий CStateSkill tail, здесь не дублируется
-//! (порядок clear+End исполняет прежний kernel). Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/blind.rs`; тела перенесены буквально
-//! порцией №6c «self/zone-касты» (разведка — запись аудита «Zone skills:
-//! машинная разведка battlefairy-навыков (порция №6)», 26 сентября 2026).
+//! (порядок clear+End исполняет kernel). Тела перенесены буквально.
 //!
 //! Подготовка и visual принадлежат зарегистрированному навыку; AddBlindState
 //! создаёт CRushState2 (0x7C), а не CBlindState. Его запреты принадлежат цели.
 //!
 //! Объявленные швы переноса (не расхождения): hub `selfcast::{SelfCastGame,
-//! SelfCastContact, SelfCastPlayer, SelfCastMoveShape}` реализован у прежнего
-//! владельца; `SkillExecutionKernel` и Begin состояния — прежние общие
+//! SelfCastContact, SelfCastPlayer, SelfCastMoveShape}` реализован у владельца
+//! hub-делегата; `SkillExecutionKernel` и Begin состояния — общие
 //! (`lifecycle`, `blindstate`). Тип `Rush2State` (алиас `BlindState<0x7C>`,
 //! ctor `0x5F12E0` VERIFIED) и формула scaled keep (query 10002, линейный
 //! scale с clamp — movzx-уровни, `FISTP`-усечение через `truncate_original`)
-//! объявлены здесь самодостаточно по машинному свидетельству той же
-//! разведки; состояние второго рывка уже описано в `effects/blind.rs`, а
-//! полноценный владелец Rush/Rush2 переносится его порцией (co-location
-//! помечена, дублирование снять при её приземлении). Вызовы visual с
-//! mode 10/11/15 существуют, но CBlindEffect их не публикует: общий visual
-//! tail всё равно выполняется, а текст ошибки отправляет caller.
+//! объявлены здесь самодостаточно по машинному свидетельству; состояние
+//! второго рывка уже описано в `effects/blind.rs`, а полноценный владелец
+//! Rush/Rush2 — `rush.rs` (co-located объявление остаётся здесь до снятия
+//! дублирования). Вызовы visual с mode 10/11/15 существуют, но CBlindEffect
+//! их не публикует: общий visual tail всё равно выполняется, а текст ошибки
+//! отправляет caller.
 
 use nebokrai_shared::runtime::get_line_direction;
 
@@ -59,7 +56,7 @@ pub const RUSH_2_STATE_ID: u32 = 0x7c;
 pub type Rush2State = BlindState<RUSH_2_STATE_ID>;
 
 /// Scaled keep AddBlindState: movzx-уровни, линейный scale с clamp и
-/// `FISTP`-усечение; переносится к владельцу Rush вместе с его порцией.
+/// `FISTP`-усечение; владелец полного семейства Rush — `rush.rs`.
 pub fn scaled_state_time(source_level: u8, target_level: u8, base_time: u32) -> u32 {
     if u32::from(source_level) + 5 >= u32::from(target_level) { return base_time; }
     let difference = i32::from(target_level) - i32::from(source_level) - 5;

@@ -1,5 +1,6 @@
-//! Player-side состояние и правила аукциона живого игрока GameServer,
-//! перенесённые в Zone `trade/`.
+//! Player-side состояние и правила аукциона живого игрока исторического
+//! GameServer: флаг окна, поисковый фильтр/страница, timestamp-гейты, плата
+//! за выставление, ожидающие узлы и правила допуска товара и возврата денег.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/player.cpp`. Здесь живёт вложенное в игрока
@@ -16,10 +17,7 @@
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
 //! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинные статусы по дизассемблу тел точной пары (разведка
-//! trade/auction/bank/ground currency, запись аудита «Zone player: машинная
-//! разведка trade/auction/bank/ground currency — MATCH по подсемействам»
-//! от 26 сентября 2026):
+//! age 2). Машинные статусы по дизассемблу тел точной пары:
 //!
 //! | функция | RVA | здесь | статус |
 //! |---|---|---|---|
@@ -36,12 +34,12 @@
 //! Соседние владельцы, не вошедшие в этот файл: `ModifyAuctionSpace`
 //! `0x0003F7A0`, `GetAuctionMoney` `0x0002EEF0` (tail-jmp amount `[+0x8F0]`)
 //! и `SetAuctionMoney` `0x00030E60` — wallet/container мутации, остаются в
-//! фасаде `CPlayer` до порции Game-контейнеров; `TellClietAuctionOK`
+//! фасаде `CPlayer`; `TellClietAuctionOK`
 //! `0x0003ED50` (`0xC0701`, `Unserialize → SerializeForOldClient → Add`),
 //! `WriteBuyAuctionLog` `0x00036370` (`0x60214`), `SendToGSBaiTan`
 //! `0x0002F1C0` / `NoticyWS_BaiTan_Over` `0x0002F140` (`0x60811`/`0x60812`) —
 //! message runtime caller-ы прежних обработчиков. fee-формулы
-//! `GetOptMoneyJin/Yuan` (x87) не переносятся — отдельная buy-порция.
+//! `GetOptMoneyJin/Yuan` (x87) здесь не реализованы.
 //!
 //! UNKNOWN: `IsGoodAllowedInAuction` `0x0002EA50` — линейный скан 256 dword
 //! таблицы `0xEF4AC8`; таблица в образе нулевая, её заполнение — `INFERRED`.
@@ -50,9 +48,9 @@
 //! поведенчески совпадает при заполненном конфиге; сама проверка живёт вне
 //! этого файла у setup-снимка.
 //!
-//! Швы переноса: `CGoodsNode` принадлежит Realm `auction/auctionnode.rs`, а
-//! Zone не импортирует владельцев другой роли, поэтому состояние
-//! параметризовано типом узла `Node`; мгновенный владелец — `CPlayer`
+//! `CGoodsNode` принадлежит Realm `auction/auctionnode.rs`, а Zone не
+//! импортирует владельцев другой роли, поэтому состояние параметризовано
+//! типом узла `Node`; мгновенный владелец — `CPlayer`
 //! (`PlayerAuction<CGoodsNode>`). `LegacyReader/Writer` и wire-кадры здесь не
 //! появляются: сборка и разбор сообщений — за message runtime caller-ами.
 

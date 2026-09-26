@@ -1,10 +1,9 @@
 //! Ярость синего босса `CBossBlueFury` (`0x1F7`): Check, AI, порядок
 //! состояний и монстровый owned-вход. Источник: точная пара `gameserver.exe`
 //! (SHA-256 `4F5C98E0…`) + `GameServer.pdb` (RSDS match), исходный владелец
-//! `appserver/skills/bossbluefury.cpp/.h`. Прежний переходный владелец —
-//! `src/gameserver/appserver/skills/bossbluefury.rs`; тела перенесены
-//! кластером E3 полосы D/E (сверка — разведка `.local/recon-de/notes/
-//! E4-bossbluefury.md`, тела `.local/recon-de/disasm/CBossBlueFury.txt`).
+//! `appserver/skills/bossbluefury.cpp/.h`; тела перенесены буквально
+//! (сверка — разведка `.local/recon-de/notes/E4-bossbluefury.md`, тела
+//! `.local/recon-de/disasm/CBossBlueFury.txt`).
 //! Данные и codec состояния — Zone `effects/bossbluefury.rs`, живые callbacks
 //! состояния — соседний `skills/bossbluefurystate.rs`.
 //!
@@ -65,8 +64,8 @@
 //!
 //! Объявленные швы переноса (не расхождения): hub `statecast::StateCastGame`
 //! и RP-подготовка `skills/fury.rs` (check/фаза 0 AI, свип-примитив
-//! `end_and_destroy_state_at`) реализованы у прежнего владельца; hub
-//! `monsterattack` кластера A2 — подход/регион/cast-машина монстрового входа
+//! `end_and_destroy_state_at`) реализованы у владельца старого пакета; hub
+//! `monsterattack` — подход/регион/cast-машина монстрового входа
 //! (подпись делегата с `properties`/`now_ms` сохранена, часы — `fn()` от
 //! делегата). MasterInfo конца (движение USER) и AfterUse/reuse — реестр
 //! исполнения зарегистрированного навыка (`skillfactory`: State, USER,
@@ -243,7 +242,7 @@ fn boss_blue_fury_fire_message(skill_level: u16, source_identity: ShapeIdentity,
 /// каста target=self и visual старта; после задержки — visual исполнения,
 /// продув прежних `0x1F7` и установка нового состояния над опубликованным
 /// регионом, UpdateProperty и живой End(1) с часами. Подпись делегата с
-/// внешними `properties`/`now_ms` сохранена (hub `monsterattack` кластера A2).
+/// внешними `properties`/`now_ms` сохранена (hub `monsterattack`).
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт исходного навыка")]
 pub fn execute_owned_boss_blue_fury<Game, Runtime>(
     game: &mut Game,
