@@ -20,4 +20,5 @@ pub use nebokrai_realm::app::organsysmessage::*;
 /// Session-runtime владелец слит с realm [`WorldOrganizingSessionRuntimeOwner`]:
 /// прежнее имя сохраняет импорты main-loop runtime; очереди едины — это тот
 /// же самый `Arc`-state, type-алиас расхождения не создаёт.
+#[allow(unused_imports, reason = "потребитель (process owner) перенесён в Realm волной C5-D; shim умирает с пакетом")]
 pub(crate) use nebokrai_realm::app::organsysmessage::WorldOrganizingSessionRuntimeOwner as WorldUnionApplicationRuntimeOwner;

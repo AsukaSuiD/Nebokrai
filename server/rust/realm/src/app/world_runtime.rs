@@ -15,16 +15,15 @@
 //! Fatal `_exit(1)` и typed safe-blocks возвращают live game-owner, поэтому
 //! Rust не приписывает им исходно отсутствовавший Release/DeleteGame.
 //!
-//! Сам `CGame` пока остаётся у process-owner-а: тип игры входит в generic-трейт
-//! [`WorldGameThreadRuntime`] ассоциированным `type Game`, а его создание
-//! отсечено фабричным параметром `fn() -> Box<Game>` у edge-оболочки
-//! `process/worldserver.rs`. Тела реализаций context-ов живут у владельца
-//! `worldserver/worldserver/runtime.rs`: он реализует этот трейт напрямую с
-//! `type Game = CGame` и старый пакет держит переходный реэкспорт плюс alias
-//! бывшего двухпараметрического отчёта. `WorldGameInitContext` переехал в
+//! Тип игры входит в generic-трейт [`WorldGameThreadRuntime`] ассоциированным
+//! `type Game`, а его создание отсечено фабричным параметром `fn() -> Box<Game>`
+//! у edge-оболочки `process/worldserver.rs`. Волной C5-C сам `CGame` переехал
+//! в [`crate::app::world_game`], волной C5-D в `crate::app::world_process*`
+//! переехали process owners с реализациями этого трейта напрямую с
+//! `type Game = CGame`. `WorldGameInitContext` переехал в
 //! [`crate::app::world_init_context`] волной C5-B (шов `&mut dyn
 //! RegionParameterLoadTarget` вместо CGame-typed `load_region_parameters`); его
-//! impl остаётся у process-owner-а до дорожки C5-DB.
+//! impl — в [`crate::app::world_process_init`] (волна C5-D).
 
 use std::error::Error;
 use std::fmt;

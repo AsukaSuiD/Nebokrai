@@ -22,8 +22,9 @@
 //! `WorldLeiTingWorkerContext`) из `worldserver/worldserver/game.rs` и
 //! process-impl этих швов из `runtime.rs` — все одной волной: после переезда
 //! самих process-контекстов прежняя посадка impl дала бы orphan-нарушение.
-//! Мосты конструируются старым пакетом через `new`; glue-строки impl перенесены
-//! без изменений (JjcLogEvent-подход наблюдаемости исходно принят).
+//! Мосты конструируются владельцем хода (`world_main_loop`) через `new`;
+//! glue-строки impl перенесены без изменений (JjcLogEvent-подход
+//! наблюдаемости исходно принят).
 
 use std::error::Error;
 use std::fmt;
@@ -315,7 +316,7 @@ pub trait WorldJjcRuntimeContext: JjcRunContext {
 
 /// Узкий adapter, связывающий подтверждённый `CJJcSystem::Run` с одним
 /// `WorldJjcWeekClearWorker`, не передавая mutable game-owner в поток.
-/// Конструируется старым пакетом через `new`; поля остаются приватными.
+/// Конструируется владельцем хода через `new`; поля остаются приватными.
 pub struct WorldJjcWorkerContext<'a, Context> {
     context: &'a mut Context,
     worker: &'a WorldJjcWeekClearWorker,
@@ -512,7 +513,7 @@ pub trait WorldLeiTingRuntimeContext: LeiTingContext {
 
 /// Узкий adapter, связывающий подтверждённый `CLeiTing::Run` с одним
 /// `WorldLeiTingResetWorker`, не передавая mutable game-owner в поток.
-/// Конструируется старым пакетом через `new`; поля остаются приватными.
+/// Конструируется владельцем хода через `new`; поля остаются приватными.
 pub struct WorldLeiTingWorkerContext<'a, Context> {
     context: &'a mut Context,
     worker: &'a WorldLeiTingResetWorker,

@@ -7,23 +7,20 @@
 //! привязка семейства post-init, тела DB-owner-ов подтверждаются их
 //! собственными модулями в `persistence/` и `organizations/`).
 //!
-//! Сам держатель `WorldProcessInitContext` пока остаётся у старого пакета:
-//! пять его owner-полей (`TiberiusDbCountry`, `TiberiusRsFaction`,
-//! `TiberiusRsPlayer`, `TiberiusRsUnion`, `TiberiusLargess`) — concrete
-//! реализации старого пакета, чьи трейты и data-семьи уже в Realm. Здесь живёт
-//! realm-shaped состав этого Init-context: snapshot player-load, reloadable
-//! конфигурация `DbMiscContext`, сборка самого контекста двенадцати DB-stage
-//! и typed-доставка его событий. Seller-fee `get_opt_money_jin` остаётся
-//! static-методом старого `CGame` и подставляется callback-ом, поэтому этот
-//! файл не тянет игровой владелец и сохраняет reload-aware чтение Globe
-//! snapshot.
+//! Сам держатель `WorldProcessInitContext` и impl контракта перенесены в
+//! [`crate::app::world_process_init`] волной C5-D вместе с остальными process
+//! owners. Здесь живёт realm-shaped состав этого Init-context: snapshot
+//! player-load, reloadable конфигурация `DbMiscContext`, сборка самого
+//! контекста двенадцати DB-stage и typed-доставка его событий. Seller-fee
+//! `get_opt_money_jin` остаётся static-методом `CGame` (волной C5-C он в
+//! [`crate::app::world_game`]) и подставляется callback-ом, поэтому этот файл
+//! не тянет игровой владелец и сохраняет reload-aware чтение Globe snapshot.
 //!
 //! Волной C5-B сюда перенесён и сам контракт [`WorldGameInitContext`] из
 //! `worldserver/worldserver/game.rs`. Единственный CGame-типизированный метод
 //! исходной формы, `load_region_parameters`, получил готовый шов `&mut dyn
 //! RegionParameterLoadTarget` (`regions/rsregion.rs`): process owner пробрасывает
 //! target напрямую в `RsRegionOwner::load_region_parameters`, не зная типа игры.
-//! Impl контракта остаётся у старого владельца (`runtime.rs`) до дорожки C5-DB.
 
 use std::io;
 use std::sync::Arc;
@@ -216,8 +213,8 @@ pub fn report_db_misc_runtime_event(event: TiberiusDbMiscRuntimeEvent<'_>) {
 ///
 /// Перенесён из `worldserver/worldserver/game.rs` волной C5-B. CGame-typed
 /// параметр `load_region_parameters` исходной формы заменён готовым швом
-/// `&mut dyn RegionParameterLoadTarget`; impl остаётся у старого process
-/// owner-а (`runtime.rs`) до дорожки C5-DB.
+/// `&mut dyn RegionParameterLoadTarget`; impl — у process-owner-а Realm
+/// (`crate::app::world_process_init`) с волны C5-D.
 #[allow(
     async_fn_in_trait,
     reason = "буквальный перенос pub(crate)-контракта init-стадий: единственные \

@@ -3,15 +3,16 @@
 //! Оболочка связывает SIGINT/SIGTERM с единственным процессным runtime и
 //! публикует итог `CreateGame -> Init -> MainLoop -> Release`, не открывая
 //! второй module graph и не повторяя process boilerplate в бинарнике.
+//! Процессные owners и драйвер потока игры живут в Realm `app/world_process*`
+//! и `app/world_runtime` (волна C5-D); эта оболочка пользуется ими напрямую.
 
 use std::error::Error;
 
-use crate::worldserver::worldserver::game::{
-    WorldGameThreadReport, game_thread_func,
-};
-use crate::worldserver::worldserver::runtime::{
+use nebokrai_realm::app::world_game::CGame;
+use nebokrai_realm::app::world_process::{
     WorldProcessMainLoopBlock, WorldProcessRuntime,
 };
+use nebokrai_realm::app::world_runtime::{WorldGameThreadReport, game_thread_func};
 
 use super::{process_shutdown, run_process};
 
@@ -28,7 +29,7 @@ async fn run_world_server(runtime_directory: std::path::PathBuf) -> Result<bool,
         runtime_directory.display()
     );
 
-    let game_thread = game_thread_func(&mut runtime);
+    let game_thread = game_thread_func(&mut runtime, new_world_game);
     tokio::pin!(game_thread);
     let report = tokio::select! {
         report = &mut game_thread => report,
@@ -40,8 +41,12 @@ async fn run_world_server(runtime_directory: std::path::PathBuf) -> Result<bool,
     Ok(report_world_result(report))
 }
 
+fn new_world_game() -> Box<CGame> {
+    Box::new(CGame::new())
+}
+
 fn report_world_result(
-    report: WorldGameThreadReport<std::convert::Infallible, WorldProcessMainLoopBlock>,
+    report: WorldGameThreadReport<CGame, std::convert::Infallible, WorldProcessMainLoopBlock>,
 ) -> bool {
     match report {
         WorldGameThreadReport::Complete {

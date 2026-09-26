@@ -53,6 +53,11 @@ pub mod world_main_loop_data; // данные хода MainLoop World: stage-о�
 pub mod world_main_loop; // MainLoop и stage-функции хода CGame: ai, process_message, timer/faction-war/lei-ting/db-misc/net-session/ping/minute/bai-tan/tail/refresh/maintenance стадии, largess/profile (волна C5-C).
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view; // узкие organizing-view мировых диспетчеров.
+pub mod world_process; // process owners исторического WorldServer: domain owners + initialize_game, состояние MainLoop, network-обвязка хода, post-init DB-контексты и WorldProcessRuntime (волна C5-D)
+pub mod world_process_init; // Init-контекст процесса World: 12 Option DB-owner-ов + Largess Arc + instance guard, impl WorldGameInitContext и player-load БД (волна C5-D)
+pub mod world_process_release; // Release-контекст процесса World и impl-ы драйвера world_runtime для WorldProcessRuntime, включая Game = CGame (волна C5-D)
+pub mod world_process_resources; // ресурсный держатель World (registries + WorldReloadContext); transition-посадка: целевое место content/, пока в app/ (волна C5-D)
+pub mod world_process_save; // save-worker процесса World: launch строит 12 Tiberius save-DB owner-ов и зовёт save_thread_func; save-runtime и trigger-guard (волна C5-D)
 pub mod world_reload_profiles; // refresh/reload-контракт хода World: snapshot-gate, atomic reload-flags с таблицей профилей, resource snapshot, maintenance ranks и profile-init helpers (волна C5-A).
 pub mod world_reload; // ReLoad CGame и reload-стадии: war-семейство, string-table, initial configuration, reload profiles/reload_conf_log (PARTIAL, волна C5-C).
 pub mod world_runtime; // драйвер потока игры World: CreateGame→Init→turn→Release→DeleteGame + init/release data-bundle; CGame входит assoc-типом и фабрикой, context-impl у process-owner-а

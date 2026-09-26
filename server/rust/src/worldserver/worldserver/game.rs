@@ -6,9 +6,10 @@
 //! `world_dispatch`, save-семья — в `nebokrai_realm::persistence::world_db_data_collect`.
 //!
 //! Ниже glob-реэкспорт владельца и точечные реэкспорты realm-данных для
-//! остающихся потребителей: process-owner `runtime.rs`, обвязка
-//! `writelogmessage.rs` и `process/worldserver.rs`. `game_thread_func` и
-//! фабрика `new_world_game` остаются здесь до волны C5-D.
+//! остающихся потребителей пакета (обвязка `writelogmessage.rs` и соседние
+//! модули). Волной C5-D process owners переехали в Realm `app/world_process*`,
+//! а `process/worldserver.rs` пользуется realm-входом
+//! `app::world_runtime::game_thread_func` напрямую.
 
 // Тип `CGame`, его адаптер загрузки и pub-типы владельца приходят glob-ом;
 // иначе потребовались бы ручные alias-строки на сотни имён.
@@ -23,8 +24,9 @@ pub(crate) use nebokrai_realm::app::world_main_loop::*;
 pub(crate) use nebokrai_realm::app::world_reload::*;
 // Драйвер потока игры World (`GameThreadFunc` со связкой init/release
 // data-типов) живёт в Realm `app::world_runtime`; волной C5-C туда же
-// переехал сам `CGame`, а process-owner (`runtime.rs`) реализует только
-// context-трейты драйвера. Ниже переходный реэкспорт для старого пакета.
+// переехал сам `CGame`, волной C5-D — impl context-трейтов драйвера у
+// process-owners `app/world_process*`. Ниже переходный реэкспорт для
+// старого пакета.
 #[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-C; shim умирает с пакетом в C5-D")]
 pub(crate) use nebokrai_realm::app::world_runtime::{
     PlayerRanksStatRunBlock, PlayerRanksStatRunReport, WorldClientInitialization, WorldClientInitializationError, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitBlock, WorldGameInitBlockReason, WorldGameInitBooleanOwner, WorldGameInitEvent, WorldGameInitOperatorNotice, WorldGameInitReport, WorldGameInitResult, WorldGameInitVoidOwner, WorldGameInitWorkerKind, WorldGameReleaseBlock, WorldGameReleaseContext, WorldGameReleaseDatabaseOwner, WorldGameReleaseEvent, WorldGameReleaseLiveList, WorldGameReleaseOptionalOwner, WorldGameReleaseReport, WorldGameReleaseResult, WorldGameReleaseVoidOwner, WorldNetworkInitializationError, WorldRegionOwner, WorldSaveCityRegionBlock, WorldServerSetupLoadReport, WorldSetupLoadReport, WorldSetupOpenError, WorldSetupSource, WorldStringTableEncodingBlock,
@@ -49,23 +51,10 @@ pub(crate) use nebokrai_realm::app::world_hub_data::{
 // Init-контракт хода перенесён в Realm `app/world_init_context` волной C5-B:
 // CGame-типизированный параметр `load_region_parameters` заменён там готовым
 // швом `&mut dyn RegionParameterLoadTarget` (`regions/rsregion.rs`), impl
-// остаётся у process-owner-а (`runtime.rs`) до дорожки C5-DB. Здесь реэкспорт
+// перенесён в Realm `app/world_process_init` волной C5-D. Здесь реэкспорт
 // для generic-связок init-стадий пакета.
 #[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-C; shim умирает с пакетом в C5-D")]
 pub(crate) use nebokrai_realm::app::world_init_context::WorldGameInitContext;
-
-// Alias бывшего двухпараметрического отчёта над generic-формой Realm
-// `app::world_runtime`; специализация `Game = CGame` снимается вместе с
-// волной самого `CGame`.
-pub(crate) type WorldGameThreadReport<InitBlock, MainLoopBlock> =
-    nebokrai_realm::app::world_runtime::WorldGameThreadReport<CGame, InitBlock, MainLoopBlock>;
-
-// Runtime-контракт потока игры Realm `app::world_runtime` теперь реализуется
-// process-owner-ом напрямую с `type Game = CGame` (foreign-трейт + локальный
-// тип легальны): CGame-типизированный локальный дубликат и его адаптер сняты
-// волной C5-B. Здесь переходный реэкспорт для impl в `runtime.rs` и обёртки
-// `game_thread_func` ниже.
-pub(crate) use nebokrai_realm::app::world_runtime::WorldGameThreadRuntime;
 
 // Контракты reconnect-семейства LoginServer (итог попытки, snapshot endpoint,
 // итог worker-а и restart-итоги) вместе с ошибкой попытки перенесены в Realm
@@ -196,6 +185,7 @@ pub(crate) use nebokrai_realm::app::world_reload_profiles::{
     WORLD_RELOAD_ACTIONS, WorldAuctionBangMaintenanceDisposition, WorldHonorRanksMaintenanceBlock, WorldHonorRanksMaintenanceDisposition, WorldMainLoopLargessGateReport, WorldMainLoopMaintenanceBlock, WorldMainLoopMaintenanceReport, WorldMainLoopProfileReport, WorldMainLoopProfileSnapshot, WorldMainLoopRefreshDisposition, WorldMainLoopRefreshStageReport, WorldMainLoopResourceContext, WorldMainLoopResourceSnapshot, WorldPlayerRanksMaintenanceDisposition, WorldPlayerRanksRequestState, WorldProcessMessageError, WorldProcessMessageStageReport, WorldRefreshSnapshotBlock, WorldRegionLoadSpec, WorldReloadActionKind, WorldReloadConfLogBlock, WorldReloadConfLogDisposition, WorldReloadOneScriptBlock, WorldReloadOneScriptResult, WorldReloadProfile, WorldReloadProfileEvent, WorldReloadProfileFlags, WorldReloadProfilesReport, WorldReloadRegionSetupBlock, WorldScriptLoadContext, initialize_main_loop_profile_if_needed, initialize_main_loop_refresh_if_needed, initialize_main_loop_save_if_needed, initialize_main_loop_tail_clocks, legacy_refresh_count, start_main_loop_profile_stage, update_main_loop_current_tick,
 };
 
+#[allow(unused_imports, reason = "потребитель (process owner) перенесён в Realm волной C5-D; shim умирает с пакетом")]
 pub(crate) use nebokrai_realm::app::worldserver::WorldReloadContext;
 
 // `tagSaveCountry`-снимок country-параметров (`current_country_save_limits`)
@@ -313,28 +303,14 @@ pub(crate) use nebokrai_realm::app::worldserver::{WorldGenerateDbDataBlock, Worl
 // Frozen-вход системного `SaveThreadFunc` перенесён в Realm
 // persistence/savedb вместе с цитируемым им `SaveDataLifecycleState`;
 // здесь реэкспорт для save-trigger-а, worker-сборки и worker-связи.
+#[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-D; shim умирает с пакетом")]
 pub(crate) use nebokrai_realm::persistence::savedb::WorldSaveThreadJob;
-
-/// Выполняет `CreateGame -> Init -> MainLoop -> Release -> DeleteGame`.
-///
-/// Fatal `_exit(1)` и typed safe-blocks возвращают live `Box<CGame>`, поэтому
-/// Rust не приписывает им исходно отсутствовавший Release/DeleteGame. Только
-/// штатный конец публикует exit-event, затем window-close request и код `0`.
-pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime<Game = CGame>>(
-    runtime: &mut Runtime,
-) -> WorldGameThreadReport<Runtime::InitBlock, Runtime::MainLoopBlock> {
-    nebokrai_realm::app::world_runtime::game_thread_func(runtime, new_world_game).await
-}
-
-fn new_world_game() -> Box<CGame> {
-    Box::new(CGame::new())
-}
 
 // Worker-вход SaveThreadFunc, его report-тип и динамическая граница между
 // game-триггером и process save-owner-ом перенесены в Realm
-// `persistence/saveworker` (волна 7 сохраняющего пайплайна). Здесь реэкспорт
-// для старого пакета; `WorldRunSaveGuard` сохраняет старое имя как alias над
-// generic-формой, потому что сам `CGame` остаётся у этого owner-а.
+// `persistence/saveworker` (волна 7 сохраняющего пайплайна); их потребители
+// (save-trigger игры и process save-runtime) живут там же с волн C5-C/C5-D.
+#[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-D; shim умирает с пакетом")]
 pub(crate) use nebokrai_realm::persistence::saveworker::{
     WorldSaveRuntimeContext, WorldSaveThreadReport,
 };
@@ -346,9 +322,8 @@ pub(crate) use nebokrai_realm::app::worldserver::{
 
 // Save-state и trigger-отчёты хода (collect player-data, ручной запрос,
 // pre-gate, launch/notify и терминальный trigger-итог) перенесены в Realm
-// `app/world_save_reports` волной C5-A. Guard остаётся generic на типе игры:
-// локальные alias-формы закрепляют `CGame` до её волны — та же переходная
-// форма, что у WorldGameThreadReport выше.
+// `app/world_save_reports` волной C5-A. Локальные alias-формы отчётов потока
+// игры сняты волнами C5-C/C5-D вместе с типом игры и process owners.
 #[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-C; shim умирает с пакетом в C5-D")]
 pub(crate) use nebokrai_realm::app::world_save_reports::{
     WorldCollectPlayerDataBroadcast, WorldCollectPlayerDataRequestState,
@@ -364,6 +339,7 @@ pub(crate) use nebokrai_realm::app::worldserver::resolve_first_local_ipv4;
 
 // Единый владелец tick-формы — Realm `app::misc_game` волны Misc: тело
 // идентично прежнему (Boottime-часы), мировой дубликат заменён реэкспортом.
+#[allow(unused_imports, reason = "потребитель перенесён в Realm волной C5-D; shim умирает с пакетом")]
 pub(crate) use nebokrai_realm::app::misc_game::legacy_tick_ms;
 
 // Resolution LoginServer endpoint-а общая: initial client-owner и reconnect
