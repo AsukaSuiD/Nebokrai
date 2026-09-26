@@ -1,28 +1,19 @@
 //! ИИ слабого существа `CPuninessCreature` (AI7): поиск ближайшего живого
-//! игрока или питомца и собственное расписание с пошаговым отходом от цели
-//! без интервального гейта.
-//!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\puninesscreature.cpp`.
-//! Машинная сверка: разобраны все три метода класса, кроме ctor `0x0060F370`:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `OnSchedule`: пустой общий hook (`0x00485540`), owner ≠ 0, `HasTarget == 1` и пустые очереди `[+0x14]`/`[+0x28]` → tail-call виртуального `Tracing` (vt `+0x4C`); без цели расписание ничего не ставит (следующий вход без цели обслуживает общий `OnIdle`) | VA `0x0060F4B0` | [`execute_owned_puniness_creature`] (гейты очередей и tamed-исключение), runtime-вход — hub | `MATCH` |
-//! | `Tracing`: цель отсутствует или `IsDied == 1` → `OnLoseTarget + AddAIEvent(5)`, возврат 0; внутри `GetGuardRange` (vt `+0x138`) — направление `GetLineDir(target → owner)`, `GetDirPos` и общий координатный `MoveTo(run=0)` (AI vtable `+0x58`, `0x004C9020`, `0x0060F45B`), **без** записи `SetDir`; за дальностью охраны — проверка `GetChaseRange` (vt `+0x13C`) и возможная потеря цели | VA `0x0060F390` | [`execute_owned_puniness_creature`] | `MATCH` |
-//! | `OnSearchEnemy`: игроки перед питомцами в девяти соседних областях, живые внутри `GetGuardRange`, ближайший с заменой записи при `≤` (равная `RealDistance` побеждает более позднюю запись), назначение через virtual `SetTarget` | VA `0x0060F4E0` | [`search_puniness_enemy`] | `MATCH` |
+//! игрока или питомца и собственное расписание с пошаговым отходом от цели без
+//! интервального гейта. Исходный владелец PDB:
+//! `appserver/ai/puninesscreature.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb` (разобраны все три метода класса, кроме
+//! ctor).
 //!
 //! Питомцы попадают в проход через общий `FindAroundPets`-список региона;
-//! tamed-фильтр hub-формы сохранён. Проверка принадлежности исключает
+//! tamed-фильтр hub-формы сохранён: проверка принадлежности исключает
 //! приручённого монстра (его текущий владелец `CPet`, даже при setup AI7).
-//! `GetDirPos` (`0x0045B330`) безотказен для восьми направлений.
-//!
-//! Остаются hub-владением: общий monster tick hub, runtime-вход `CGame`
-//! (собственный `OnSchedule` вызывается до background/passive) и применение
-//! цели; пространственная мутация — общий `MoveTo` `ai/monsterai.rs`.
+//! Отход внутри `GetGuardRange` идёт через `GetLineDir`/`GetDirPos` и общий
+//! `MoveTo(run=0)` БЕЗ записи `SetDir`; равная `RealDistance` побеждает более
+//! позднюю запись (замена при `≤`). Остаются hub-владением: общий monster tick,
+//! runtime-вход `CGame` и применение цели; пространственная мутация — общий
+//! `MoveTo` `ai/monsterai.rs`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::runtime::get_line_direction;
 

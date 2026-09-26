@@ -1,33 +1,19 @@
 //! ИИ неподвижного лучника `CFixedPositionArcher` (AI5) и наследующая его
 //! стационарная семья: строгая очередь `OnIdle`, хвост `OnChangeSkill` с
-//! ожиданием восстановления навыка и необычное правило `OnSearchEnemy` с
-//! минимальной дистанцией текущего навыка.
+//! ожиданием восстановления навыка и правило `OnSearchEnemy` с минимальной
+//! дистанцией текущего навыка. Исходный владелец PDB:
+//! `appserver/ai/fixedpositionarcher.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb` (разобраны все четыре метода класса,
+//! кроме ctor).
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp`.
-//! Машинная сверка: разобраны все четыре метода класса, кроме ctor
-//! `0x0060F9D0`:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `OnChangeSkill`: виртуальный `SelectAttackSkill` (vt `+0x8C`); навык не разрешился → `SetCurrentSkill(GetDefaultAttackSkillID())` (owner vt `+0xC0`/`+0xC4`) и возврат 1; не восстановленный навык (`IsRestored` vt `+0x80` == 0) ставит `AddAIEvent(Stand, GetRestoreTime(vt +0x84), 0)` с полным сроком | VA `0x0060F9F0` | [`queue_fixed_archer_skill_delay`], [`inherits_fixed_archer_change_skill`] (AI5 и наследующий AI23) | `MATCH` |
-//! | `OnFighting`: базовый `CBaseAI::OnFighting` (`0x004C9320`, ChangeSkill-часть) и при его успехе `AddAIEvent(5)` | VA `0x0060FA70` | [`attack_completion_actions`] | `MATCH` (варианты `0x0060D930` живого владельца и `0x0060F6F0` StupidArcher — по прежней таблице владельца) |
-//! | `OnIdle`: при живом владельце строгая очередь `ChangeSkill(6) → Stand(stop_frame, [monster+0x210]+0x94) → SearchEnemy(5)`; иначе девять областей `::_area` непустым plug-list проверяются до вызова `Hibernate` (vt `+0x64`) | VA `0x0060FAA0` | [`queue_stationary_guard_idle`], потребитель гейта — `ai/monsterai.rs::hibernates_without_nearby_players` | `MATCH` |
-//! | `OnSearchEnemy`: живые игроки, затем питомцы внутри `GetGuardRange` (vt `+0x138`); ближайшая цель не ближе минимальной дистанции навыка (`vt +0x70`), при равной/меньшей дистанции selected слишком близкая заменяется следующей допустимой записью | VA `0x0060FBC0` | [`consider_fixed_archer_target`], [`select_fixed_archer_enemy`] | `MATCH` |
-//!
-//! Стационарное расписание `0x0020B890` и предикат по типам — ранее
-//! зафиксированный факт `ai/monsterai.rs`; входной state-вопрос `0x0047B150`
-//! — `RET1`-эквивалент. Собственный виртуальный конструктор
-//! `CVilCouGuardWithBow` строит `CMonsterAI` напрямую: стационарный idle сам
-//! по себе не наследует этот хвост `OnChangeSkill` — расширение ограничено
-//! точным набором {5, 23}.
-//!
-//! Остаются hub-владением: реальный путь `monsterbaseattack` (выбор навыка и
-//! назначение цели) и общий monster tick hub; реестр навыков `CMoveShape` и
-//! его `GetRestoreTime` — hub-швы [`MonsterDispatcherMoveShape`].
+//! Наследование хвоста `OnChangeSkill` ограничено точным набором {5, 23}:
+//! собственный виртуальный конструктор `CVilCouGuardWithBow` строит
+//! `CMonsterAI` напрямую, и стационарный idle сам по себе хвост не наследует.
+//! Варианты `OnFighting` живого владельца и StupidArcher — по прежней таблице
+//! владельца. Остаются hub-владением: реальный путь `monsterbaseattack` и общий
+//! monster tick; реестр навыков и `GetRestoreTime` — hub-шов
+//! [`MonsterDispatcherMoveShape`].
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::MonsterProperties;
 

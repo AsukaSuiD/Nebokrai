@@ -1,34 +1,23 @@
 //! Данные, top-ten wire decoder и скалярные правила GodsBattle владельцев
 //! (`CGodsBattleMgr`, `CServerGodsBattleRegion`). Исходный владелец —
 //! `appserver/servergodsbattleregion.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; статусы
-//! унаследованы от шапки старого владельца, без повышения). Переходные
-//! агрегаты остаются в старом пакете: manager хранит configuration
-//! `CGodsBattleConf` (setup владелец старого пакета), а region — hub
-//! `CServerWarRegion`; этому модулю делегируются top-ten entry/error/decoder,
-//! скалярный state manager-а (ordered region set, knock standings,
-//! единственный top-ten requester) и скалярный state региона (faction
-//! player/NPC membership и ordered contender-list) со всеми их операциями.
-//! NPC guard/counter lifecycle и GodsBattle-contend исполняет `CGame`; точный
-//! script case `11130` является живым caller-ом, а byte-owned имя contender
-//! сохраняет исходную GBK.
+//! `gameserver.exe` + `GameServer.pdb` (статусы унаследованы от шапки старого
+//! владельца без повышения). Переходные агрегаты остаются в старом пакете:
+//! manager хранит configuration `CGodsBattleConf`, region — hub
+//! `CServerWarRegion`; сюда делегированы top-ten entry/error/decoder и скалярный
+//! state обоих владельцев. NPC guard/counter lifecycle и GodsBattle-contend
+//! исполняет `CGame`; точный script case `11130` — живой caller, byte-owned имя
+//! contender сохраняет исходную GBK.
 //!
-//! Region-set хранит ordered unique ID. Top-ten SZL exchange хранит
-//! единственный overwrite-able requester и terminal-marker decoder: безразмерный
-//! pointer и 256-байтный временный C-string buffer заменены bounded
-//! slice/cursor и owned bytes; обрыв возвращает typed error после уже
-//! завершённого prefix-а вместо неназначаемого legacy UB. Knock standings
-//! повторно разрешают killer identity в owning region до изменения
-//! kill-counter manager-ом. Проверка first-contender намеренно сравнивает
-//! normal `m_lFactionID` с сохранённым GodsBattle faction: это несовпадение
-//! подтверждено RVA `0x000A9270`, а не исправлено по более позднему
-//! C++-донору. `CancelContendByPlayerID` удаляет все записи игрока, сохраняя
-//! порядок остальных; только NULL player возвращает false.
-//! `CGodsBattleMgr::OnEnterContend` сравнивает индекс NPC-set `0..2` с player
-//! faction `5/6`: для допустимого игрока ветвь `SZLGS7` недостижима, поэтому
-//! после гибели всех стражей собственный символ тоже начинает contend. Это
-//! подтверждённое различие представлений не нормализуется.
+//! Quirk-и: проверка first-contender намеренно сравнивает normal `m_lFactionID`
+//! с сохранённым GodsBattle faction (подтверждено машиной, не исправлено по
+//! позднему C++-донору); индекс NPC-set `0..2` против player faction `5/6`
+//! делает ветвь `SZLGS7` для допустимого игрока недостижимой, поэтому после
+//! гибели всех стражей собственный символ тоже начинает contend — подтверждённое
+//! различие представлений не нормализуется. Безразмерный pointer top-ten
+//! exchange заменён bounded slice/cursor; обрыв даёт typed error после
+//! завершённого prefix-а.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#war-регионы
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;

@@ -1,29 +1,18 @@
 //! Startup snapshot `CHonorRanks` исторического GameServer: 4 rank types ×
-//! 4 country lists с record decode и honor-запросами snapshot-а.
+//! 4 country lists с record decode и honor-запросами snapshot-а. Исходный owner
+//! PDB: `gameserver/honorranks.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`.
 //!
-//! `DecordFromByteArray` RVA `0x0000D390` подтверждает 4 rank types × 4
-//! country lists. Для country `-1` списки очищаются и декодируются по порядку;
-//! каждый record содержит player ID, level byte, NUL-name, occupation byte,
-//! appellation ID и eliminate count. Non-positive count означает пустой list.
-//! Reached honor NPC scripts материализуют также `GetPlayerPosition` и
-//! `AddToByteArray`: первый сохраняет 1-based snapshot order, второй — exact
-//! count/record payload для адресного client `0xBFF35`.
-//! Точная пара — `GameServer/gameserver.exe + GameServer/GameServer.pdb`,
-//! исходный owner PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp`.
-//!
-//! `Vec` заменяет только `std::list`; уже очищенные списки и полностью
-//! прочитанный prefix сохраняются при безопасном отказе на обрыве wire.
-//! Последовательный доступ делегирован `LegacyReader` и `LegacyWriter` поверх
-//! `bytes`, а порядок списков и частично прочитанный prefix остаются у owner-а.
-//!
-//! Singleton `getInstance` RVA `0x0000CFA0` технически заменён прямым owned
-//! полем `CGame::honor_ranks`: nullable allocation и error-log невозможны, а
-//! identity snapshot-а остаётся единственной. Его запись текущего дня относится
-//! к отдельной static `m_nSortDate`; достигнутые honor-маршруты её не читают,
-//! поэтому owner не выдаёт её за поле snapshot-а. Деструктор `0x0000D0D0`,
-//! static list initializer `$E4` и compiler sized-delete `$E2` полностью
-//! покрыты `Default`, `Vec` и автоматическим `Drop`; доменной семантики в них нет.
+//! Для country `-1` списки очищаются и декодируются по порядку; каждый record
+//! содержит player ID, level byte, NUL-name, occupation byte, appellation ID и
+//! eliminate count; non-positive count означает пустой list. `Vec` заменяет
+//! только `std::list`; уже очищенные списки и полностью прочитанный prefix
+//! сохраняются при безопасном отказе на обрыве wire. Singleton `getInstance`
+//! технически заменён прямым owned-полем `CGame::honor_ranks`: nullable
+//! allocation невозможна, а identity snapshot-а единственна; его запись текущего
+//! дня — отдельная static `m_nSortDate`, которую достигнутые honor-маршруты не
+//! читают.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use thiserror::Error;
 

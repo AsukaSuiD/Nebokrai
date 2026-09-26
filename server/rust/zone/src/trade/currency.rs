@@ -1,48 +1,20 @@
 //! Денежное ядро обмена исторического GameServer: таблицы маршрутов extend-id
 //! bank/ground валюты, приёмка сумм перевода и правила слияния/установки
-//! баланса.
+//! баланса. Исходные владельцы `appserver/game.cpp` (переводы wallet ↔ bank ↔
+//! auction wallet и commit-пересчёт денег обмена) и `appserver/player.cpp`
+//! (state-ответы `SetYuanBao`/`SetAuctionMoney` и маршруты живых контейнеров);
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`. Мгновенный
+//! владелец `CPlayer`/контейнеры исполняет изменение балансов и
+//! listener-эффекты.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
-//! `server/gameserver/appserver/game.cpp` (переводы wallet ↔ bank ↔ auction
-//! wallet и commit-пересчёт денег обмена) и
-//! `server/gameserver/appserver/player.cpp` (state-ответы `SetYuanBao`/
-//! `SetAuctionMoney` и маршруты живых контейнеров валюты). Мгновенный
-//! владелец `CPlayer`/контейнеры (`CWallet`, `CYuanBao`, `CBank`, auction
-//! wallet) исполняет собственно изменение балансов и listener-эффекты; здесь
-//! — таблицы маршрутов extend-id валюты, приёмка сумм перевода и правила
-//! слияния/установки баланса.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемействам trade и bank/ground
-//! currency дизассембла тел точной пары:
-//!
-//! | правило | машинный факт | здесь | статус |
-//! |---|---|---|---|
-//! | merge денег commit `0x1B9470` | 64-бит `sub eax,edx; sbb esi,0` с clamp к 0 и `add/adc` (НЕ i64-saturating); валидированное предусловие делает wrap/clamp недостижимым | [`merge_trade_money`] | семья `MATCH`, обоснование ниже |
-//! | маршруты банка | `4→8`, `8→4`, `15→4`; позиции строго `0` | [`bank_currency_transfer_route_allowed`], [`bank_currency_transfer_positions_valid`] | семья `MATCH` |
-//! | auction-return `15→4` | `CheckAuctionMoneyMove` ДО remove, повторно после remove → RollBack + `GPM015`/`GPM019` у caller-а | `check_auction_money_move` в [`super::auction`], порядок у прежнего owner | семья `MATCH` |
-//! | установка баланса | `SetYuanBao`/`SetAuctionMoney`: increase на `current − previous`, decrease на `previous − current`, иначе без изменения | [`balance_set_direction`] | семья `MATCH` |
-//! | ground-источник | wallet `4` / increment `5` | [`GroundCurrencyContainer`] | семья `MATCH` |
-//! | bank-источник | wallet `4` / bank `8` / auction wallet `15` | [`BankCurrencyContainer`] | семья `MATCH` |
-//!
-//! Риск-нота merge: машинный пересчёт commit выполняет
-//! `sub/sbb` с нижним clamp к 0 и `add/adc`, а НЕ i64-saturating арифметику.
-//! Формула ниже исполняет тот же числовой результат wrapping-парами
-//! `− outgoing + incoming` и выбором направления сравнением: при
-//! предусловии валидации (`outgoing ≤ balance` и ёмкость противоположной
-//! стороны проверена) отрицательный и переполняющий итоги недостижимы, clamp
-//! и wrap вырождаются в одно значение. Поведение вне предусловия сознательно
-//! не «улучшается».
-//!
-//! Живые контейнеры wire достаёт прежний owner, который вызывает правила
-//! ниже в исходном порядке. Свидетельства `CBank` lock-gate (отдельно от
-//! `CDepot`) и позиций `<0x60/0x30` остаются у контейнерных owner-ов
-//! `items/`.
+//! Quirk merge: машинный пересчёт commit выполняет `sub/sbb` с нижним clamp к 0
+//! и `add/adc`, а НЕ i64-saturating арифметику; формула воспроизводит тот же
+//! числовой результат wrapping-парами, потому что при валидированном предусловии
+//! отрицательный и переполняющий итоги недостижимы. Поведение вне предусловия
+//! сознательно не «улучшается». Свидетельства `CBank` lock-gate и позиций
+//! остаются у контейнерных owner-ов `items/`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
-/// Player-контейнер наземной валюты drop/pickup: wallet `4` и
-/// increment-контейнер `5` исходных маршрутов.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GroundCurrencyContainer {
     Wallet,

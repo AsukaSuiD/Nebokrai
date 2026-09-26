@@ -1,21 +1,15 @@
 //! Городской охранник с луком `CCityGuardWithBow` (AI11): hurt-повторный
-//! поиск вне боя парой виртуальных selector-ов с минимальной дистанцией
-//! текущего навыка.
+//! поиск вне боя парой виртуальных selector-ов с минимальной дистанцией текущего
+//! навыка. Исходный владелец PDB: `appserver/ai/cityguardwithbow.cpp`; сверка
+//! по точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp`.
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `WhenBeenHurted`: базовый hurt (`0x004C93E0`) всегда; `HasTarget != 0` → выход. Иначе `SearchEnemyGuildMember` (vt `+0x90`) и `SearchEnemyGuildPet` (vt `+0x94`), ближайший, игрок при равной дистанции, назначение через virtual `SetTarget`. `SearchEnemyGuildCarriage` (vt `+0x98`) hurt-путь **не вызывает** — прежний hub комбинировал и повозки (установленное расхождение hub, здесь исправлено) | VA `0x0060DA90`, vtable `0x00662BCC` | [`retarget_city_bow_guard_after_hurt`] | `MATCH` |
-//! | selector-пара совпадает с городским общим поиском `0x0060E290`/`0x0060DB10` (фильтры владельца города, минимальная дистанция навыка) | VA `0x0060DB90`/`0x0060DD50` (не перечитаны построчно; форма подтверждена телами sword-пары `0x0060E350`/`0x0060E510` и единым слотом vtable-пары) | [`super::cityguardwithsword::select_city_guard_enemy`] | `PARTIAL` ( bow-тела selector-ов предполагают sword-форму) |
-//! | минимальная дистанция текущего навыка: hub-форма выбирает запись setup с наибольшим уровнем среди совпадающих ID и читает `QueryProperty(5004)` | hub-контракт прежнего владельца (лифт `+0x70` навыка) | [`retarget_city_bow_guard_after_hurt`] | `PARTIAL` (маршрут через setup-уровень — прежний машинный вывод) |
-//!
-//! Разрешение текущего навыка реестром `CMoveShape`, базовые FIFO и применение
-//! цели остаются hub-владением.
+//! `SearchEnemyGuildCarriage` hurt-путь не вызывает — прежний hub комбинировал и
+//! повозки (установленное расхождение hub, здесь исправлено). PARTIAL: тела
+//! bow-selector-ов построчно не перечитаны и предполагают sword-форму (единый
+//! vtable-слот пары); маршрут min-distance через setup-уровень — прежний
+//! машинный вывод. Разрешение текущего навыка реестром `CMoveShape`, базовые
+//! FIFO и применение цели остаются hub-владением.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::MonsterProperties;
 

@@ -1,37 +1,19 @@
-//! GameServer-владелец country-war side state `CountryWarSys` в Zone `activities/` (локальное исполнение войн).
+//! GameServer-владелец country-war side state `CountryWarSys` в Zone
+//! `activities/` (локальное исполнение войн). Исходник
+//! `country/countrywarsys.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Восстановлены constructor, snapshot decoder, side queries,
+//! region lookup/init, `update_apply_war`, phase и victory chains; process
+//! singleton заменён owned-полем `CGame`.
 //!
-//! Восстановлены constructor, snapshot decoder, side queries, region
-//! lookup/init, `update_apply_war`, phase и victory chains; исходник
-//! `country/countrywarsys.cpp`, точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Layout
-//! `CountryWarRegion { defend:i32, attack:i32, clear:bool+padding }`, map-order,
-//! signed IDs и writer-before-region-callback подтверждены PDB и точечным
-//! дизассемблированием.
-//!
-//! `BTreeMap` заменяет `std::map` с тем же key-order. Decoder очищает map до
-//! чтения count и сохраняет частичные эффекты/cursor при коротком payload.
-//! `init_country_region_state` вопреки имени только делает lookup каждого
-//! region: exact EXE после успешного `find` вызывает не меняющий существующий
-//! entry `operator[]` и не переносит side state. `update_apply_war` сначала
-//! меняет запись, затем найденный region и только после двух country-полей
-//! вызывает `UpdateContendPlayer()` slot `+0x104`.
-//!
-//! Phase chain сохраняет точный map-order и порядок global-state мутаций:
-//! declare сначала обнуляет country result `1..4`, start/timeout и prepare
-//! работают только для записей с двумя ненулевыми сторонами, end сначала
-//! сбрасывает три global-флага и стороны каждой записи, clear вызывает готовый
-//! region owner для всех записей. Timeout после callback читает low byte обеих
-//! сторон именно из region и обнуляет соответствующие country results.
-//! Vtable slots `+0x138..+0x150`, включая общий callback `OnTimeOut/OnEnd`,
-//! подтверждены точным EXE.
-//!
-//! Victory chain `on_flag_destroy` сначала ищет war-region по
-//! входной стране и без найденного non-null region не делает ничего. Затем
-//! region callback гасит war-state, входная страна получает result `2`, а
-//! найденная через `GetOtherCountry` — result `1`; обе country-map keys
-//! усекаются до low byte. Потерянные декомпилятором stack-присваивания и точный
-//! порядок двух writes подтверждены дизассемблированием. Process singleton
-//! allocation заменён owned-полем `CGame`.
+//! Decoder очищает map до чтения count и сохраняет частичные эффекты/cursor при
+//! коротком payload. `init_country_region_state` вопреки имени только делает
+//! lookup: после успешного `find` вызывается не меняющий entry `operator[]`.
+//! Phase chain сохраняет точный map-order и порядок global-state мутаций;
+//! timeout после callback читает low byte обеих сторон именно из region и
+//! обнуляет соответствующие country results. Victory chain `on_flag_destroy`
+//! без найденного non-null region не делает ничего; обе country-map keys
+//! усекаются до low byte.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#войны-и-расписания
 
 use std::collections::BTreeMap;
 use thiserror::Error;

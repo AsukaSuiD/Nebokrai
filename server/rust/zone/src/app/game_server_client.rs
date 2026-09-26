@@ -1,47 +1,16 @@
-//! Принятое игровое client-соединение GameServer — состояние принятого
-//! игрового клиента game-направления. Исходник
-//! `nets/netserver/myserverclient.cpp`; источник контракта — та же точная
-//! пара, что у [`crate::app::game_message`].
+//! Принятое игровое client-соединение GameServer — состояние принятого игрового
+//! клиента game-направления. Исходник `nets/netserver/myserverclient.cpp`;
+//! источник контракта — та же точная пара, что у [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
-//! - ctor `CMyServerClient` `0x41C5C0`: base `0x41B850`, vtable `0x64D6EC`,
-//!   receive capacity ровно `0x5000` (`push 0x5000` + `[+0x64] = 0x5000`),
-//!   два компаньона `0xC800` в `+0x70/+0x74` (исходный send accumulator) и
-//!   объект `0x2C` сообщения во всех synthetic вызовах;
-//! - `OnReceive` `0x41C7F0`: gate owner `+0xA8`, цикл, пока накоплено `>= 0xC`;
-//!   флаг `[owner+0x10C]`: предел полной длины (`declared > [owner+0x118]`) и
-//!   CRC длины через общий `DataCrc32 0x47B0A0`, `declared > size` — останов
-//!   без потери хвоста; флаг `[owner+0x10D]`: CRC по сжатым байтам
-//!   `[+0xC, declared-0xC]`; create только RLE `0x413700`; opcode допустим в
-//!   `(0x8F700, 0x9F600)` exclusive — точное `0x8F701..=0x9F5FF`; контекст
-//!   `[+0x34]→[+0x24]` socket, `[+0x88]→[+0x20]` map, `[+0x2C]→[+0x28]` IPv4
-//!   (CD-key у Game-получателя не присваивается); publish через push helper
-//!   `0x4126D0`; consume `sub size, declared`; shrink к `0x100000` при
-//!   возврате под лимит; reject очищает accumulator без отката опубликованного;
-//! - доказаны ровно четыре пути с `AddForbidIP 0x417960` + `QUIT 0x415080`:
-//!   предел длины (с virtual `OnTotalMessageSizeOver [+0x40]`, `0x41C9E3`),
-//!   length CRC (`0x41CA19`), content CRC (`0x41CA49`), opcode вне диапазона
-//!   (`0x41CA93` c deleting dtor `[edx]` с `push 1`); create-null — без ban
-//!   (`0x41CABE`: очистка size и sprintf-log без forbid);
-//! - `OnClose` `0x41C670`: при нулевом map identity — ни публикации, ни
-//!   общего close (`je` сразу в эпилог); при ненулевом — `new(0x2C)`
-//!   `CMessage(0x6FA01)` через ctor `0x4136D0`, `Add` map identity, `Add` общего
-//!   writer-ом empty cstring `0x64BB41`, publish через `0x4126D0` и общий close
-//!   `0x41AD10(0)` — точное совпадение прежнего `bool`-ветвления.
-//!
-//! Статус owner-а: `IMPLEMENTED` для constructor/destructor ownership,
-//! `OnClose`, обе limit diagnostics и корректного/неполного `OnReceive`;
-//! malformed length/RLE границы остаются локальными `BLOCKED_MISSING_FACT`.
-//!
-//! Общий `CServerClient` владеет обоими accumulators; `Vec` заменяет ручные
-//! allocation/realloc/memmove, сохраняя frames и неполный TCP-хвост. Client
-//! envelope имеет форму `[total_len, optional crc(total_len), optional
+//! Client envelope имеет форму `[total_len, optional crc(total_len), optional
 //! crc(rle), rle(message)]`; обе проверки независимо включаются setup-ом, а
-//! предел одного frame проверяется только вместе с length CRC. Готовое
-//! сообщение получает socket/map/IP и публикуется в netserver FIFO.
-//!
-//! Старые внутренности STL, deleting thunk, SEH и allocator unwind не имеют
-//! самостоятельной семантики поверх материализованного владения Rust и удалены.
+//! предел одного frame проверяется только вместе с length CRC. `Vec` заменяет
+//! ручные allocation/realloc/memmove, сохраняя frames и неполный TCP-хвост;
+//! готовое сообщение получает socket/map/IP и публикуется в netserver FIFO.
+//! Статус owner-а: `IMPLEMENTED` для constructor/destructor ownership, `OnClose`,
+//! обеих limit diagnostics и корректного/неполного `OnReceive`; malformed
+//! length/RLE границы — локальные `BLOCKED_MISSING_FACT`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#сетевой-край-gameserver
 
 use nebokrai_shared::network::{CMsgQueue, CServerClient, RleDecodeError};
 use nebokrai_shared::protocol::data_crc32;

@@ -1,104 +1,21 @@
 //! Оружейный roll семейства CalculateAttackPower: три живых вида ширины,
 //! компоненты физического, элементного и душевного урона, живые property
-//! источника по типу владельца и общий критический хвост. Старый серверный
-//! пакет разрешает CGame/find_player/таблицы и передаёт живые поля
-//! типизированным обратным вызовом `WeaponDamageLiveField`; RNG-состояние
-//! и сам `random(int)` остаются у этого владельца.
+//! источника по типу владельца и общий критический хвост. Тела разбросаны по
+//! `appserver/skills/*.cpp` конкретных навыков (chuckstone, yakshaslash,
+//! heartlessarrow и др.); сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Старый серверный пакет разрешает CGame/find_player/таблицы
+//! и передаёт живые поля обратным вызовом `WeaponDamageLiveField`; RNG-состояние
+//! и `random(int)` остаются у владельца.
 //!
-//! Точная пара: `original/server/Miracle_server/GameServer/gameserver.exe`
-//! (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`)
-//! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2, совпадение подтверждено `.local/evidence/symbols.py identity`).
-//! Исходные владельцы PDB — тела `CalculateAttackPower` в
-//! `appserver/skills/chuckstone.cpp`, `skeletonarchery.cpp`, `yakshaslash.cpp`,
-//! `ignition.cpp`, `scorpion.cpp`, `ghostcut*.cpp`, `strike.cpp`,
-//! `lightingarrow2.cpp`, `poisonmoth.cpp`, `bloodrose.cpp`,
-//! `explosivearrow*.cpp`, `heartlessarrow.cpp`, `heartlessarrowphalanx2.cpp/.3`,
-//! `jucut.cpp`, `lightningsword*.cpp`, `inversechopped.cpp` и др.
-//!
-//! Живой vtable-канал тел: уровень цели `+0x110`, CCH `+0x114` (movzx WORD),
-//! живой AddElementAtk `+0x118`, AddSoulAtk `+0x11C` (movzx WORD),
-//! GetMinAttack `+0xE4`, GetMaxAttack `+0xE8`, weapon modifier `+0x184`;
-//! живая ловкость CPlayer — `[+0x3B8]` через хелпер разрешения `0x619319`.
-//! RNG — глобальный `?random@@YAHH@Z` (VA `0x41CBA0`; его внутренний
-//! `rand` на адресе `0x61903F` повторяет msvc-формулу
-//! `state = state * 214013 + 2531011`, `(state >> 16) & 0x7FFF`), выделение
-//! компонента — ctor `tagAttackPower` `0x5D3C80`, push_back `0x4AF200/0x4AEFF0`,
-//! критический множитель — изменяемая BSS-глобаль `fmul dword [0xEF3E5C]`
-//! (читается владельцем и передаётся параметром `critical_rate`), константа
-//! `0x64DBD0` = 0.01f.
-//!
-//! RawRange: VERIFIED_DISASSEMBLY по `CChuckStone::CalculateAttackPower`
-//! (pub `1:0013c6e0`, истинный RVA `0x13D6E0`): чтения MIN (`[esi]+0xE4`) →
-//! MAX (`+0xE8`), сырая DWORD-ширина `1 - min + max` (`mov ebx,1; sub; add`
-//! — без abs и без нижней границы ширины), RNG, повторное MIN после RNG,
-//! сумма и `jns`-нижняя граница нуля. Затем Element (`+0x118`) с
-//! `jge`-нижней границей, Soul (`+0x11C`, movzx WORD) и общий критический
-//! хвост. Тот же порядок зафиксирован шапками вызывающих у CStrike
-//! (pub `1:00169eb0`) и CGhostCut (pub `1:0019c7e0`).
-//!
-//! AbsoluteRange: VERIFIED_DISASSEMBLY по `CYakshaSlash::CalculateAttackPower`
-//! (pub `1:00141dc0`, RVA `0x142DC0`), контрольно `CJuCut::CalculateAttackPower`
-//! (pub `1:00194060`, RVA `0x195060`) и `CInverseChopped::CalculateAttackPower`
-//! (pub `1:00148230`, RVA `0x149230`): чтения MAX (`+0xE8`) → MIN (`+0xE4`),
-//! ширина `abs(max - min) + 1` (`cdq; xor eax,edx; sub eax,edx` + `add eax,1`),
-//! RNG, повторное MIN после RNG, сумма, `jns`-нижняя граница. Отличие от
-//! RawRange — порядок первых двух чтений и abs ширины.
-//!
-//! CapturedMinimumAbsoluteRange: VERIFIED_DISASSEMBLY по
-//! `CHeartLessArrow::CalculateAttackPower` (pub `1:001915f0`, RVA `0x1925F0`):
-//! чтения MIN → MAX, та же abs-ширина с `+1`, RNG, но сумма с СОХРАНЁННЫМ
-//! первым MIN — повторного чтения MIN нет; далее Element/Soul и живой CCH
-//! (vtable `+0x114`, movzx WORD), как у остальных.
-//!
-//! Знаковый CCH снимка: VERIFIED_DISASSEMBLY по
-//! `CHeartLessArrowPhalanx2::CalculateAttackPower` (pub `1:001ec910`, RVA
-//! `0x1ED910`): hit = 0 и damage_factor = сохранённый factor × 0.01f до
-//! компонентов, тот же captured-ролл, затем RNG(100) ПЕРВЫМ и знаковое
-//! `jge`-сравнение с сохранённым DWORD `+0xC4` конструктора — повторного
-//! чтения живого CCH нет. NULL источника тело допускает до SOUL (physical
-//! становится RNG(1) → 0, element нулевым), затем разыменовывает NULL;
-//! старый владелец отсекает этот случай до вызова формулы и не выдумывает
-//! SOUL/CCH.
-//!
-//! Фронтальное усиление: VERIFIED_DISASSEMBLY. JuCut и InverseChopped после
-//! суммы со вторым MIN добавляют живую ловкость `[player+0x3B8]`;
-//! NULL-результат хелпера разрешения пропускает добавку без обрыва тела.
-//! В Rust-переносе недостижимый обрыв оставлен намеренно: цепочка вызова
-//! уже разрешила того же игрока выше (weapon modifier), поэтому
-//! пропуск-и-продолжение и обрыв наблюдаемо совпадают. InverseChopped до
-//! roll расходует первое состояние ID 0x89 (End+destroy) и умножает все ТРИ
-//! компонента f64-множителем: `fild; fmul qword; fistp qword` с control
-//! word `or ah,0xC` и записью МЛАДШЕГО DWORD (`truncate_original_i64_low`).
-//!
-//! Критический хвост: VERIFIED_DISASSEMBLY по ChuckStone (`0x53D888`),
-//! HeartLessArrow (`0x59286B`) и HeartLessArrowPhalanx2 (`0x5EDAF3`):
-//! фильтр видов компонентов `cmp [kind],1/3/4; jne skip`, затем
-//! `fnstcw; fild; fmul dword [0xEF3E5C]; fldcw (or ah,0xC); fistp; fldcw`
-//! только для Physical/Element/Soul. Прежний Rust-проход масштабировал
-//! компоненты без фильтра; наблюдаемого различия не было, потому что все
-//! вызывающие кладут только виды 1/3/4, — zone-форма фиксирует машинный
-//! фильтр, симметричный `skills/projectile.rs::apply_projectile_critical`.
-//!
-//! source_property по типу владельца: PARTIAL (основание — vtable-контракты
-//! тел выше и уже сверенные `CMonster`-формулы `combat/monsterformula`;
-//! собственные тела getter-ов CPlayer отдельно не пересверялись). Тип
-//! 400 отдаёт боевые поля игрока; тип 600 — state-границы MIN/MAX и SOUL
-//! монстра, а Element и CCH всегда 0: исходный `GetAddElementAtk` монстра
-//! умножает pet factor на ноль, и даже нечисловой factor после native FISTP
-//! с нижней границей даёт 0. Типы 500/1100/1200 (NPC/Build/CityGate) — 0;
-//! прочие типы не участвуют.
-//!
-//! Мёртвая сырая ветвь `PlayerWeaponRoll::Archery` прежнего пакета сюда не
-//! перенесена: callsites отсутствовали; живой Archery-roll (`max(max-min, 0)` БЕЗ
-//! +1, два чтения MIN до RNG) уже находится в `skills/projectile.rs` со
-//! статусом VERIFIED_DISASSEMBLY. Отношение +1 по видам: RawRange и оба
-//! abs-вида прибавляют единицу к ширине, Archery — нет.
-//!
-//! Контракт RNG при неположительной ширине принадлежит владельцу (старый
-//! пакет `game_legacy_random` возвращает 0 без расхода состояния); машинное
-//! `random(int)` при bound == 0 вызывает `rand` и возвращает 0 — наблюдение
-//! к владельцу RNG, формула ширину передаёт дословно.
+//! Инварианты: критический хвост применяет множитель только к видам 1/3/4
+//! (машинный фильтр, симметричный `skills/projectile.rs::apply_projectile_critical`);
+//! отношение `+1` к ширине есть у RawRange и обоих abs-видов и нет у Archery
+//! (живой Archery-roll — в `skills/projectile.rs`). `source_property` по типу
+//! владельца — PARTIAL: собственные тела getter-ов CPlayer отдельно не
+//! пересверялись; Element и CCH монстра всегда 0. RNG при неположительной
+//! ширине принадлежит владельцу (`game_legacy_random` возвращает 0 без расхода
+//! состояния); формула передаёт ширину дословно.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#боевые-формулы
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, truncate_original, truncate_original_i64_low,

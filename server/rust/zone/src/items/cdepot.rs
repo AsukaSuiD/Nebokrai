@@ -1,30 +1,21 @@
-//! Lock/position/expansion core `CDepot` исторического GameServer: locked
-//! склад поверх `CVolumeLimitGoodsContainer` с базовыми позициями `0..95` и
-//! extension-anchor группами по 13 ячеек.
+//! Lock/position/expansion core `CDepot` исторического GameServer: locked склад
+//! поверх `CVolumeLimitGoodsContainer` с базовыми позициями `0..95` и
+//! extension-anchor группами по 13 ячеек. Исходный owner
+//! `appserver/container/cdepot.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Player-владелец публикует контейнер под extend-id
+//! `PlayerContainerKind::Depot` единого каталога (дизайн D4); константы
+//! `96/13/161` — внутренняя разметка позиций склада (база 96, шаг группы 13,
+//! конец `96 + 13·5 = 161`), а не wire-номера.
 //!
-//! Player-владелец публикует этот контейнер под extend-id
-//! [`PlayerContainerKind::Depot`][crate::items::playercontainers::PlayerContainerKind]
-//! единого каталога (дизайн D4); константы `96/13/161` ниже — внутренняя
-//! разметка позиций склада (база 96 ячеек, шаг extension-группы 13, конец
-//! расширения `96 + 13·5 = 161`), а не wire-номера.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cdepot.cpp`. Depot оборачивает
-//! `CVolumeLimitGoodsContainer`, стартует locked и разрешает storage mutation
-//! только после внешне подтверждённого player-password check. Базовые позиции
-//! `0..95` обычные; extension-группы начинаются в `96 + 13n`, а anchor goods
-//! активирует остальные двенадцать позиций группы.
-//!
-//! `Vec`/`IndexMap` базы остаются библиотечным storage-слоем. Здесь сохранены
-//! exact position selection, inactive-anchor и expansion partial effects.
-//! Достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
-//! kind-1 activation, GoodsAI/listener effects и rollback. Hand-owned
-//! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap. Persisted
-//! restore очищает исходные 96 ячеек, при `bToAdd` расширяет их на 65,
-//! размечает extension-anchor и загружает goods через depot-specific Add;
-//! lock возвращается при любом результате. Extension-remove listener после
-//! базовой message-разметки лишь повторно запрашивает позицию и не добавляет
-//! observable mutation.
+//! Invariant-ы: depot стартует locked и разрешает storage mutation только после
+//! внешне подтверждённого player-password check; extension-группы начинаются в
+//! `96 + 13n`, а anchor goods активирует остальные двенадцать позиций группы;
+//! достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
+//! kind-1 activation и rollback; persisted restore очищает исходные 96 ячеек,
+//! при `bToAdd` расширяет их на 65, а lock возвращается при любом результате;
+//! extension-remove listener лишь повторно запрашивает позицию без наблюдаемой
+//! мутации.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsCodecError, AmountLimitGoodsRelease,

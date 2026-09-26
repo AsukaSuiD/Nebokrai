@@ -1,38 +1,18 @@
 //! ИИ синего босса `CBossBlue` (AI103): восемь одноразовых HP-порогов ярости,
 //! пороговый выбор боевого навыка и общий enemy-проход ближайшего игрока или
-//! питомца.
+//! питомца. Исходный владелец PDB: `appserver/ai/bossblue.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp`.
-//! Машинная сверка по этой паре:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | ctor: восемь одноразовых порогов ярости созданы сброшенными | VA `0x00609CB0` | [`BossBlueAiState`] (`Default`) | `MATCH` |
-//! | `WakeUp` после общего восстановления HP открывает только ещё не пройденные пороги текущей фазы жизни | VA `0x00609CD0`; `CBossFiend::WakeUp` слинкован тем же RVA (ICF) | [`BossBlueAiState::wake`] | `MATCH` |
-//! | `SelectAttackSkill`: один исходный RNG-бросок runtime, пороговая ярость по фазе, повтор ниже 8% HP при отсутствии записанного fury-состояния; накопление `odds` намеренно учитывает доли исключённых ID `2` и `0x1f7`; исход — default-навык (в отличие от fallthrough без назначения у `CBossFiend`) | VA `0x0060A0E0` | [`select_boss_blue_attack_skill`], [`choose_boss_blue_attack_skill`] | `MATCH` |
-//! | `OnSearchEnemy`: общий проход игроков, затем питомцев с заменой цели при равной дистанции | подтверждён прежней шапкой владельца | [`select_boss_blue_enemy`] через [`super::lord::select_nearest_player_or_pet`] | `MATCH` |
-//!
-//! Остаются hub-владением: общий monster tick hub — `Run`, `OnSchedule`
-//! (VA `0x00609FE0`), `OnIdle`, `OnMoving`, а также решение сна при отсутствии
-//! игроков (`Hibernate`, VA `0x006093B0`, слинковано ICF с общими телами).
-//! `CMonster` создаёт и сбрасывает пороги после общего пробуждения, а
-//! применение выбранного навыка (`bossbluefury` и реестр исполнителей)
-//! остаётся у своих skill-owner-ов.
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`BossBlueDispatcherMonster`]/[`BossBlueDispatcherMoveShape`] — доступ к
-//!   состоянию восьми порогов на hub-владельце `CMonster` и признаку
-//!   записанного fury-состояния формы.
-//! - Enemy-проход повторяет общий шов [`super::lord::EnemySearchDispatcherRegion`]/
-//!   [`super::lord::EnemySearchDispatcherPlayer`] и тот же nearest-проход
-//!   [`super::lord::select_nearest_player_or_pet`], что и владыка (игроки
-//!   перед питомцами, равенство заменяет запись); единый дом прохода —
-//!   `ai/lord.rs`.
+//! Накопление `odds` намеренно учитывает доли исключённых ID `2` и `0x1f7`, а
+//! исход без совпадения — default-навык (в отличие от fallthrough `CBossFiend`).
+//! Остаются hub-владением: общий monster tick (`Run`, `OnSchedule`, `OnIdle`,
+//! `OnMoving`), решение сна при отсутствии игроков (`Hibernate`), создание и
+//! сброс порогов `CMonster`-ом после общего пробуждения и реестр исполнителей
+//! `bossbluefury`. Швы: [`BossBlueDispatcherMonster`]/[`BossBlueDispatcherMoveShape`]
+//! — состояние порогов и признак fury-записи; enemy-проход — общий
+//! [`super::lord::select_nearest_player_or_pet`] (игроки перед питомцами,
+//! равенство заменяет запись; единый дом прохода — `ai/lord.rs`).
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::{MonsterProperties, MonsterSkill};
 

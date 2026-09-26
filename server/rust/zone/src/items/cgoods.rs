@@ -1,43 +1,22 @@
 //! Object/addon core `CGoods` исторического GameServer: shape identity,
-//! base-properties index, amount/price/ticket, ordered addon storage,
-//! stacking, upgrade eligibility и persistence-wire кодек.
-//!
-//! Contract: docs/gameplay/items.md.
+//! base-properties index, amount/price/ticket, ordered addon storage, stacking,
+//! upgrade eligibility и persistence-wire кодек. Исходные owners
+//! `appserver/goods/cgoods.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Contract: docs/gameplay/items.md.
 //!
 //! Lookup реестра базовых свойств типизирован trait-швом
-//! [`GoodsBasePropertiesLookup`] ниже; журнал эффектов роста феи — шов
-//! `FairyGrowEffectSink`, см. `fairyproperties.rs`.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходные owners
-//! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
-//! identity, base-properties index, amount/price/add-ticket/description,
-//! ordered addon storage, first-match lookup с fallback в registry, exact
-//! instance-addon mutation, DaKong modifier/cut/color semantics, stack classification/limit, equipment-upgrade
-//! eligibility, timed equipment start-point, wrapping weight и адаптеры
-//! ordinary/battle-fairy свойств к addon storage. BF-upgrade eligibility
-//! проверяет catalog equipment type и instance-only level marker.
-//! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
-//! arithmetic.
-//! `GetEnabledAddonProperties` сохраняет instance storage order и consumable
-//! catalog fallback для полного player item-use addon loop.
-//! NPC shop использует точный repair predicate и mutation durability value 2.
-//! Единственный legacy null-deref в `CanStacked` при потерянном registry key
-//! выражен typed block-ом, а не тихим `false`.
-//!
-//! Декодирование exact persistence-wire теперь включает `CShape`, legacy
-//! description buffer, ordered addon/value storage и обе fairy-проекции;
-//! `Clone` использует ту же исходную пару `Serialize(true) → Unserialize(true)`
-//! и новый constructor target, а не Rust field-copy. `CGoodsFactory` и
-//! exp-config передаются явно вместо process-global owners.
-//! Общий SetAddonPropertyValue меняет первый value во всех совпавших addon-ах,
-//! затем обновляет только существующие ordinary/BF-проекции в этом порядке,
-//! включая raw MAX_EXP. Отсутствующий catalog при reload возвращает typed block
-//! после записи, без отката, вместо исходного чтения через NULL.
-//! Script durability getter/setter теперь сохраняют exact base-value storage,
-//! включая запись `-1` без client update. Constructor/release, остальные
-//! time-поля, обратный codec и прочая gameplay mutation ещё требуют
-//! реконструкции: достигнутый core не выдаётся за весь 0xCC-byte legacy
-//! object.
+//! [`GoodsBasePropertiesLookup`]; журнал эффектов роста феи — шов
+//! `FairyGrowEffectSink` (`fairyproperties.rs`). `Vec` и owned bytes заменяют
+//! MSVC storage без смены порядка и signed 32-bit arithmetic; `Clone` использует
+//! ту же исходную пару `Serialize(true) → Unserialize(true)` и новый constructor
+//! target, а не Rust field-copy. Quirk-и: единственный legacy null-deref в
+//! `CanStacked` при потерянном registry key выражен typed block-ом; общий
+//! SetAddonPropertyValue меняет первый value во всех совпавших addon-ах и лишь
+//! затем существующие ordinary/BF-проекции; отсутствующий catalog при reload
+//! возвращает typed block после записи без отката. Constructor/release,
+//! остальные time-поля, обратный codec и прочая gameplay mutation ещё требуют
+//! реконструкции: достигнутый core не выдаётся за весь `0xCC`-byte legacy object.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use super::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,

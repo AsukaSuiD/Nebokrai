@@ -1,107 +1,23 @@
 //! Ядро диспетчера боевого расписания обычного монстра `CMonsterAI` и
 //! приручённого `CPet`: типизированные решения OnSchedule/OnIdle/OnChangeSkill,
-//! отдельный timestamp интервала атаки и hub-оркестрация преследования,
-//! стояния, снятия цели и stiffen-перехода над владельцами старого пакета.
+//! отдельный timestamp интервала атаки и hub-оркестрация преследования, стояния,
+//! снятия цели и stiffen-перехода над владельцами старого пакета. Исходные
+//! владельцы PDB: `appserver/ai/monsterai.cpp` (ядро); соседние вызовы
+//! `ai/baseai.cpp`, `ai/pet.cpp` и `appserver/skills/monsterbaseattack.cpp` —
+//! свои владельцы. Сверка по точной паре `gameserver.exe` + `GameServer.pdb`.
 //! Контракт: `docs/gameplay/npc-ai.md`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходные владельцы PDB:
-//! `server/gameserver/appserver/ai/monsterai.cpp` (ядро расписания); соседние
-//! вызовы `ai/baseai.cpp`, `ai/pet.cpp` и координатор
-//! `appserver/skills/monsterbaseattack.cpp` — свои владельцы.
+//! Швы: трейты ниже — переходные фасады владельцев `CGame`, `CPlayer`,
+//! `CServerRegion`, `CMoveShape` и `CMonster` (реализации и прежние сигнатуры —
+//! в делегатах старого пакета); предикаты по `ai_type` записаны числовыми
+//! наборами, а классификатор `CAIFactory::CreateAI` остаётся владением
+//! `appserver/ai/aifactory.rs`; часы каждого события читаются отдельным вызовом
+//! `now_milliseconds`; FIFO монстра остаются hub-владением.
 //!
-//! Машинная база (VERIFIED по этой паре):
-//!
-//! - `CMonsterAI::OnSchedule` (`1:0x1dbf80` → RVA `0x1DCF80`): пустой базовый
-//!   hook; owner `[+0x68]` обязателен; `HasTarget == 1`; очереди пусты
-//!   `[+0x14] == 0 ∧ [+0x28] == 0` (INFERRED active/backstage); `can_fight` —
-//!   `[owner+0x170] != 0` (INFERRED name), иначе только virtual `OnLoseTarget`;
-//!   цель жива и `IsAttackAble` (vtable `+0x134`); `GetCurrentSkill()` null →
-//!   `OnChangeSkill` → повторный null → `OnLoseTarget`; Tracing держит
-//!   дистанцию в `[min..max]` навыка (vt `+0x74` `GetAffectRangeMax`,
-//!   vt `+0x70` — RET1-заглушка минимума), иначе ветвь преследования
-//!   (backoff — UNKNOWN); интервал: `timeGetTime (IAT) >= [this+0x78] +
-//!   (word)GetAtcInterval`, затем `[+0x78] = now`, и только после этого
-//!   `ok = skill->vt[+0x08](owner, target)`; ok → `AddAIEvent(2)`,
-//!   отказ → `OnLoseTarget + AddAIEvent(5)`. Очередь `AI_EVENT`
-//!   `{+0 action, +4 param, +8 время, +0xC состояние}`; `state == 1` ждёт
-//!   `timeGetTime >= ev.time + prev.param`; `2 → OnFighting`,
-//!   `5 → OnSearchEnemy` (у CPet собственный, у монстра пустой RET1),
-//!   `1 → OnMoving` у CPet.
-//! - `Run` (thunk `0x1DCBB0` → `CBaseAI::Run` RVA `0x0C7D10`): guard
-//!   owner/hibernate (→ 2) → OnSchedule → ProcessBackStageAction → != 2 →
-//!   ProcessPassiveAction → ProcessActiveAction → все 0 && !HasTarget → OnIdle
-//!   → vt+0x44 hook → ProcessActiveActionWarSoul; возврат max-состояния.
-//! - `OnChangeSkill` (RVA `0x1DCBC0`): `SelectAttackSkill` → уже выбранный
-//!   объект + `CSkill::IsRestored` (vt `+0x80`: `QueryProperty(10005) +
-//!   [+0x40] < now`; null-props → 1) → готово; иначе
-//!   `SetCurrentSkill(GetDefaultAttackSkillID())`; возврат всегда 1.
-//! - `SelectAttackSkill` (RVA `0x1DD0B0`): `dynamic_cast CMonster`, один
-//!   `random(10000)`, обход `std::list` (`[CMonster+0x210]`; узел
-//!   `word[+8] = id`, `word[+0xC] = odds`), первый с префикс-суммой ≥ r;
-//!   иначе default. `Attack(id, shape)` (RVA `0x1DCEC0`) игнорирует ID —
-//!   только `SetTarget`.
-//! - Контракт результата Begin: отказ — это `OnLoseTarget + AddAIEvent(5)`
-//!   (в Rust — `BeginRejected` → `release_owned_monster_target` +
-//!   `begin_active_ai_search_enemy` в `finish_monster_skill_call`).
-//! - `CBaseAI::MoveTo` (`baseai.cpp` RVA `0x0C9020`; адрес `0x0C8020` —
-//!   середина `Slip`, не вход MoveTo): один Slip для ходьбы, два для бега с
-//!   исходным направлением; после Move timestamp берётся заново.
-//!
-//! UNKNOWN (не достраиваются догадкой): сайт вызова `Run`
-//! и каденсия AI глобальным циклом; точная форма backoff-шага ветви
-//! преследования `MoveTo`; семантика поля `owner+0x170`, принятого здесь как
-//! `can_fight` по INFERRED name; маскировка вызова vt `+0x12C` вокруг Tracing;
-//! массивы default-ID навыков по категориям (только порядок
-//! `GetDefaultAttackSkillID` 0x004CE240) и поле `tdI[2]`; type шаблона списка
-//! навыков монстра (удерживается setup-срезом, а не выводом шаблона).
-//!
-//! Швы к hub-владельцам:
-//!
-//! - Трейты ниже — переходные фасады прежних владельцев `CGame`, `CPlayer`,
-//!   `CServerRegion`, `ServerRegionOwner`, `CMoveShape` и `CMonster`
-//!   (state-машина AI, скилл-реестр через фабрику, region publish, RNG,
-//!   пространственный рантайм). Реализации и делегации прежних сигнатур — в
-//!   файлах-делегатах старого пакета `appserver/ai/monsterai.rs` и
-//!   `appserver/skills/monsterbaseattack.rs`; потребители не меняются.
-//!   Потребление статическое (generic), dyn-совместимость и `Send`-контракт не
-//!   вводятся (ADR-0013).
-//! - Порядковые предикаты по `ai_type` записаны числовыми наборами вместо
-//!   матчинга по `MonsterAiKind` (классификатор `CAIFactory::CreateAI` остаётся
-//!   владением старого пакета `appserver/ai/aifactory.rs`). Машинный реестр
-//!   (VERIFIED): `CAIFactory::CreateAI` RVA `0x1DC550`, byte-map `0x5DCB08`,
-//!   jump-table `0x5DCA94`, default-case `0x5DCA32` → `CMonsterAI`. Точная
-//!   таблица: 0 CGladiator, 1 CPassiveGladiator, 2 CSmartGladiator,
-//!   3 CStupidGladiator, 4 CArcher, 5 CFixedPositionArcher, 6 CStupidArcher,
-//!   7 CPuninessCreature, 8 CGuardWithBow, 9 CGuardWithSword,
-//!   10 CCityGuardWithSword, 11 CCityGuardWithBow, 12 CCarriage,
-//!   13 CGuardCountry, 14 CGuardCountry2, 15 CVilCouGuardWithSword,
-//!   16 CVilCouGuardWithBow, 17 CWarDeffendMonster, 18 CWarAttackMonster,
-//!   19 CNationCouGuardWithSword, 20 CGuardCountry, 21 CNationGladiator,
-//!   23 CGBGuardWithSward, 24 CGodsBattleMonsterAI, 100 CLord, 101 CJiuMai,
-//!   103 CBossBlue, 104 CBossFiend; 22, 25..=99, 102 и >104 — default
-//!   `CMonsterAI`. Стационарное расписание (собственный OnSchedule
-//!   `0x0020B890`) — ровно {5,8,11,13,14,16,20}; интервальный
-//!   timeGetTime-гейтинг `[+0x78]` имеют `CMonsterAI` и thunk-наследники
-//!   {0,1,3,4,6,9,10,15,17,18,19,21,23,24,100} вместе с default, собственные
-//!   расписания без интервала — {2,7,12,101,103,104} и стационарные.
-//! - Активный AI приходит проекцией `MonsterActiveAiView`: различение
-//!   Pet/Carriage/guard-station/JiuMai/PuninessCreature вычисляет hub-владелец
-//!   по своей таблице virtual-семей (guard post — CGuardWithSword и наследники
-//!   9/10/15/19; JiuMai = 101; PuninessCreature = 7).
-//! - Часы каждого события читаются отдельным вызовом `now_milliseconds`
-//!   (fn-параметр от делегата старого main loop, как в
-//!   `skills/baseattackruntime.rs`); это точное значение blanket
-//!   `GameClockContext::now_milliseconds = game_tick_milliseconds`.
-//! - `resolve_owned_monster_attack_target` hub-владельца сжат в один шов
-//!   `monster_attack_target_view`: перенесённому коду нужна только `ShapeView`
-//!   недохожей цели (filter `!dead`), выбор разрешения сохранён у владельца
-//!   (`monsterattack.rs`).
-//! - `AI_EVENT`/`AiShapeAction` и passive-реакции `CBaseAI` уже зонские
-//!   (`ai/events.rs`, `ai/reactions.rs`); сами FIFO-очереди монстра остаются
-//!   hub-владением и переставляются только через фасады трейта.
+//! UNKNOWN: сайт вызова `Run` и каденсия AI; форма backoff-шага; семантика поля
+//! `owner+0x170` (`can_fight` по INFERRED name); массивы default-ID навыков;
+//! поле `tdI[2]`; type шаблона списка навыков монстра.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::{GlobeSetupSnapshot, MonsterProperties, MonsterSkill};
 use nebokrai_shared::runtime::get_line_direction;

@@ -1,29 +1,18 @@
-//! Порядковая механика passive-реакций `CBaseAI` исторического GameServer
-//! над FIFO-очередями hub-владельца поведения.
+//! Порядковая механика passive-реакций `CBaseAI` исторического GameServer над
+//! FIFO-очередями hub-владельца поведения. Исходный владелец PDB:
+//! `appserver/ai/baseai.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match). Публичные
-//! символы семейства: `CBaseAI::ProcessPassiveAction` (`1:0x0c74f0` → RVA
-//! `0x0c84f0`), `CBaseAI::OnBeenHurted` (`1:0x0c7700` → RVA `0x0c8700`),
-//! `CBaseAI::OnStiffen` (`1:0x0c7770` → RVA `0x0c8770`),
-//! `CBaseAI::OnBeenKilled` (`1:0x0c8220` → RVA `0x0c9220`).
-//! Исходный владелец PDB: `server/gameserver/appserver/ai/baseai.cpp`.
-//!
-//! Базовый `OnBeenHurted` удаляет только префикс active-очереди до первого
-//! `Attack` либо `Move` и возвращает 1. `OnStiffen` вызывает `CSkill::End(4)`
-//! только для `Attack` с `handling == 0`, а `Attack` остаётся в FIFO, пока
-//! concrete владелец не подтвердит завершение навыка через `IsEnded` — этот
-//! ответ лежит вне хранилищ очередей и остаётся hub-владением вместе с самими
-//! очередями. Очистка префикса останавливается на `Move` и не снимает его.
-//! `OnBeenKilled` отбрасывает все active-события до первого `Move`, сохраняет
-//! только этот `Move` со всеми его часами/`handling` и повторяет обработчик,
-//! пока движение не завершится; смерть owner-а разрешается лишь после него.
-//! `ProcessPassiveAction` вызывает производный обработчик для каждого
-//! `Defense` до его pop, поэтому следующий `Defense` видит мутации
-//! active-очереди предыдущего, и различает ноль, единицу и прочие знаковые
-//! `handling`: только единица допускает снятие по deadline. War-soul FIFO
-//! реакциями не затрагивается никогда.
+//! Поведение: `OnBeenHurted` удаляет только префикс active-очереди до первого
+//! `Attack` либо `Move`; `OnStiffen` вызывает `CSkill::End(4)` только для
+//! `Attack` с `handling == 0`, а ответ завершения навыка лежит вне хранилищ
+//! очередей и остаётся hub-владением вместе с самими очередями; `OnBeenKilled`
+//! отбрасывает active-события до первого `Move` и повторяет обработчик, пока
+//! движение не завершится, — смерть owner-а разрешается лишь после него;
+//! `ProcessPassiveAction` вызывает обработчик каждого `Defense` до его pop, и
+//! только `handling == 1` допускает снятие по deadline; war-soul FIFO реакциями
+//! не затрагивается никогда.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use std::collections::VecDeque;
 

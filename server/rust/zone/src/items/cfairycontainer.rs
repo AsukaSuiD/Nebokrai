@@ -1,31 +1,21 @@
 //! Owner `CFairyContainer` исторического GameServer: ordinary-fairy товары
 //! поверх volume-контейнера — hatch timer-ы, state transition, рост и
-//! синкретизация с positional add-правилами.
-//!
-//! Report-типы путей опыта [`FairyContainerExpEntry`],
-//! [`FairyContainerExpFailure`] и [`FairyImplantReport`] параметризованы
-//! `Effects` швом `FairyGrowEffectSink` (см. `fairyproperties.rs`). Extend-id
+//! синкретизация с positional add-правилами. Исходный owner
+//! `appserver/container/cfairycontainer.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`. Report-типы путей опыта параметризованы
+//! `Effects` швом `FairyGrowEffectSink` (см. `fairyproperties.rs`); extend-id
 //! `11` — вариант `PlayerContainerKind::Fairy` каталога
 //! `items/playercontainers.rs` (дизайн D4).
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cfairycontainer.cpp`. Контейнер
-//! владеет ordinary-fairy товарами через `CVolumeLimitGoodsContainer`:
-//! auto-add сначала выбирает ячейку base-owner-а, positional add сохраняет
-//! отдельное правило `0..12` для headgear с fairy property и исключение
-//! `13/FZ0885`, а remove блокирует фею с ненулевым hatch timer. Codec suffix,
-//! инкубация, общий рост, state transition и синкретизация материализованы с
-//! точным порядком проверок, wrapping arithmetic и partial mutation.
-//!
-//! `CVolumeLimitGoodsContainer`, owned `CGoods`, `Vec` effects и явные
-//! clock/config/player facts заменяют vtable dispatch, raw pointers и globals,
-//! не меняя lock/stack/listener/message semantics. Пять hatch timer-ов codec
-//! suffix сохраняют partial decode; state/syncretize не откатывают уже
-//! выполненные remove/add и возвращают detached ownership на отказе. Достигнутые
-//! state/amount client packets и incubate/syncretize World logs исполняет
-//! canonical `CGame`, поэтому здесь остаются только ordered typed effects.
-//! Float-формулы state change и syncretize сохраняют точные целые операнды,
-//! `f32`-коэффициенты setup и исходное FISTP-усечение к нулю.
+//! Invariant-ы: auto-add сначала выбирает ячейку base-owner-а, positional add
+//! сохраняет отдельное правило `0..12` для headgear с fairy property и
+//! исключение `13/FZ0885`, remove блокирует фею с ненулевым hatch timer; state
+//! и syncretize не откатывают уже выполненные remove/add и возвращают detached
+//! ownership на отказе; float-формулы сохраняют точные целые операнды,
+//! `f32`-коэффициенты setup и исходное FISTP-усечение к нулю. Достигнутые
+//! state/amount client packets и World logs исполняет canonical `CGame`; здесь
+//! остаются только ordered typed effects.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,

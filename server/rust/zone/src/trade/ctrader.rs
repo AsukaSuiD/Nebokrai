@@ -1,64 +1,22 @@
 //! Агрегат и правила рамки двустороннего обмена исторического GameServer
 //! `CTrader`: три trade-shadow container-а, ready-state, source metadata и
-//! скалярная приёмка предложений.
+//! скалярная приёмка предложений. Исходные владельцы
+//! `appserver/session/ctrader.cpp` (агрегат и рамка) и `appserver/game.cpp`
+//! (маршрутизация источника и сверка количества на commit); сверка по точной
+//! паре `gameserver.exe` + `GameServer.pdb`. Contract: docs/gameplay/trade.md.
 //!
-//! Contract: docs/gameplay/trade.md (двусторонний обмен).
+//! Все поля — типы Zone items и скаляры, хранимого доступа к живому
+//! `CPlayer`/`CGame` нет. `CGame` выполняет двухфазную проверку и ownership
+//! transaction: goods остаются у player до commit, при частичном отказе
+//! удаляются у получателя и возвращаются в packet владельца (исходный
+//! `RollBack`). Константы сессии обмена материализованы здесь, потому что
+//! `CSessionFactory` создаёт рамку именно с этими параметрами.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/session/ctrader.cpp` (агрегат, правила рамки и
-//! предложений) и `server/gameserver/appserver/game.cpp` (маршрутизация
-//! источника предложения и сверка количества на commit). Агрегат `CTrader` с
-//! тремя trade-shadow container-ами `(goods, Gold, YuanBao)`, ready-state,
-//! source metadata, terminal clear и отчётами `TraderOfferAdded`/
-//! `TraderOfferRemoved`: все его поля — типы Zone items и скаляры, методы
-//! принимают `CGoods`/`CGoodsFactory` по ссылке, хранимого доступа к живому
-//! `CPlayer`/`CGame` нет — hub-форма не требуется, и агрегат следует карте в
-//! Zone вместо прецедента container-owner старого пакета. `CGame` по-прежнему
-//! выполняет
-//! достигнутую двухфазную проверку и ownership transaction: исходные goods
-//! остаются у player до commit, затем переходят в packet второго участника;
-//! при частичном отказе они удаляются у получателя и возвращаются в packet
-//! владельца, как исходный `RollBack`. Registry поиск plug-ов выполняет
-//! `CSessionFactory`, wire доставку — message runtime caller-ы. Здесь — сам
-//! агрегат, объявленные kind индексов рамки, скалярная приёмка предложения до
-//! занятия ячейки, таблица допустимых player-контейнеров источника, сверка
-//! количества и правила обратимости stack-merge при rollback.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемейству trade дизассембла тел
-//! точной пары: CTrader трёх shadow-контейнеров; reset ready у обоих
-//! участников при любой смене рамки `OnObjectAdded`; commit `0x1B9470` — 1241
-//! insn, per-goods AmountChange → packet Add → move publish; частичный отказ
-//! → Clear(temp) + RollBack(map) полностью и немедленно.
-//!
-//! | правило | машинный факт | здесь | статус |
-//! |---|---|---|---|
-//! | extend-id рамки | `plug << 8 \| index` (`0/1/2` = goods/Gold/YuanBao) | [`trade_container_extend_id`], [`trade_extend_id_parts`] | семья `MATCH` |
-//! | приёмка goods | currency в goods → NoTrade flag `0x20` → позиция за объёмом → занятость ячейки | [`trade_goods_offer_block`] | семья `MATCH` |
-//! | приёмка валюты | несовпадение index ожидаемой валюты, единственная позиция `0` | [`trade_currency_offer_block`] | семья `MATCH` |
-//! | источник предложения | goods ← packet `1`/equipment `2`, Gold ← wallet `4`, YuanBao ← increment `5` | [`TradeSourceContainer`], [`trade_offer_player_container_allowed`] | семья `MATCH` |
-//! | сверка количества | packet снимает часть стека (`>=`), экипировка целиком (`==`) | [`trade_offer_amount_satisfies`] | семья `MATCH` |
-//! | rollback stack-merge | полный merge (`amount == original`) обратим вычитанием; иначе `None` | [`trade_rollback_merge_reversible`] | семья `MATCH` |
-//!
-//! Риск-ноты:
-//!
-//! - Reset ready: `record_offer`/`remove_offer`/`clear` агрегата немедленно
-//!   сбрасывают собственный `ready`, а `CGame` затем сбрасывает готовность
-//!   ОБОИХ участников и рассылает `0xBF716`. Между своим локальным сбросом и
-//!   внешним сбросом второго участника есть micro-окно исходного порядка — оно
-//!   является контрактом очерёдности оригинала и сознательно не уплотняется.
-//! - Rollback в commit: когда доставленный предмет слился со стеком
-//!   получателя НЕ полностью (исходный `RollBack` получает неслитый остаток),
-//!   обратного удаления части стека в Rust-владельце commit-прохода (`CGame`)
-//!   нет — как и у release-формы оригинала вопрос о частичном unmerge остаётся
-//!   [`trade_rollback_merge_reversible`] == `false` (возврат `None` caller-а).
-//!
-//! Двухфазная ownership transaction commit/rollback и reset готовности
-//! второго участника остаются у `CGame`. Константы сессии обмена
-//! материализованы здесь же, потому что `CSessionFactory` создаёт рамку
-//! именно с этими параметрами.
+//! Quirk-и: micro-окно между локальным сбросом собственного ready и внешним
+//! сбросом готовности второго участника — контракт очерёдности оригинала и
+//! сознательно не уплотняется; при частичном слиянии со стеком получателя
+//! обратного удаления части стека нет — как и у release-формы оригинала.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
 use crate::content::goods::GAP_PARTICULAR_ATTRIBUTE;
 use crate::content::goodsfactory::CGoodsFactory;

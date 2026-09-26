@@ -1,15 +1,7 @@
-//! Поведение AI фигур живого региона: базовый владелец очередей `CBaseAI`,
-//! элементы FIFO и коды действий, диспетчер-ядро `CMonsterAI`, lifecycle
-//! `CPet`, игровой AI игрока `CPlayerAI`, производные AI лордов, боссов,
-//! близнецов Цзюмай, гладиаторов, повозки и стационарных охранников плюс
-//! общая порядковая механика passive-реакций исторического GameServer.
-//!
-//! Региональный реестр, around-доставка шагов и час-тик owner-а остаются
-//! hub-владением через узкие фасады `monsterai`/`playerai` делегатов старого
-//! пакета; тела общего monster tick hub (`Run`/`OnSchedule`/`OnIdle`/`OnMoving`
-//! этих владельцев) здесь не размещаются.
-//!
-//! Контракт: `docs/gameplay/npc-ai.md`.
+//! Поведение AI фигур живого региона исторического GameServer. Региональный
+//! реестр, around-доставка шагов и час-тик owner-а остаются hub-владением через
+//! фасады `monsterai`/`playerai` делегатов старого пакета. Контракт:
+//! `docs/gameplay/npc-ai.md`.
 
 mod events; // элементы `AI_EVENT` и коды `AI_SHAPE_ACTION`; чистый wrapping-deadline.
 pub mod baseai; // `CBaseAI`: три FIFO, object-цель, back-stage навыки, dormancy, Slip и задержка шага MoveTo.

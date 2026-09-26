@@ -1,38 +1,18 @@
-//! Скалярные правила наземного перемещения предметов исторического
-//! GameServer: приёмка сумм, particular-запрет, дистанция подбора, маршрут
-//! currency-назначения и правило цены move-журнала.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/game.cpp` (drop в регион и pickup из региона
-//! одной container-message семьи). Мгновенный владелец `game.rs` исполняет
-//! detach/add по маршрутам `(1 packet, 2 equipment, 3 hand, 4|5 currency,
-//! 9 depot, 11 fairy)`, владельцев регионов, random-stream и весь transport;
-//! здесь — приёмка сумм, particular-запрет, дистанция подбора, маршрут
-//! currency-назначения и правило цены move-журнала.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемейству ground currency
-//! дизассембла тел точной пары:
-//!
-//! | правило | машинный факт | здесь | статус |
-//! |---|---|---|---|
-//! | drop-запрет | particular flag `0x100` отклоняет drop | [`ground_drop_forbidden`] | семья `MATCH` |
-//! | сумма drop | `0 < amount ≤ source`, equipment — строго целиком | [`ground_drop_amount_valid`] | семья `MATCH` |
-//! | частичный drop | busy progress блокирует частичный drop НЕ-валюты | [`ground_partial_drop_busy_blocked`] | семья `MATCH` |
-//! | дистанция pickup | отказ при `|dx| ≥ 2` или `|dy| ≥ 2` | [`ground_pickup_out_of_range`] | семья `MATCH` |
-//! | currency назначение | Gold → `(4, 0)`, YuanBao → `(5, 0)` | [`ground_currency_pickup_destination`] | семья `MATCH` |
-//! | цена журнала | валюта пишет amount, остальные — price | [`ground_move_audit_price`] | семья `MATCH` |
+//! Скалярные правила наземного перемещения предметов исторического GameServer:
+//! приёмка сумм, particular-запрет, дистанция подбора, маршрут
+//! currency-назначения и правило цены move-журнала. Исходный владелец
+//! `appserver/game.cpp` (drop в регион и pickup из региона одной
+//! container-message семьи); сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Мгновенный владелец `game.rs` исполняет detach/add по
+//! маршрутам `(1 packet, 2 equipment, 3 hand, 4|5 currency, 9 depot,
+//! 11 fairy)`, владельцев регионов, random-stream и весь transport.
 //!
 //! Обход team-share наземной валюты (доля по alive участникам с per-player
-//! apply) живёт по соседнему владельцу drop-генерации и сюда не входит; этот
-//! файл покрывает только маршруты drop/pickup одного игрока.
-//!
-//! Container mutations, region owner и rollback-цепочки остаются у прежнего
-//! owner, который вызывает правила ниже в исходном порядке.
+//! apply) живёт по соседнему владельцу drop-генерации и сюда не входит; файл
+//! покрывает только маршруты drop/pickup одного игрока. Container mutations,
+//! region owner и rollback-цепочки остаются у прежнего owner.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
-/// Particular-флаг запрета drop предмета на землю (`GAP 0x13`, бит `0x100`).
 pub const GROUND_DROP_FORBIDDEN_FLAG: u32 = 0x100;
 
 /// Исходный запрет drop: particular attribute содержит флаг `0x100`.

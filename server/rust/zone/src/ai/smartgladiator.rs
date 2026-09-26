@@ -1,40 +1,19 @@
 //! ИИ умного гладиатора `CSmartGladiator` (AI2): очередь шагов отхода,
 //! выбор уязвимой цели (HP < 40%) среди игроков и питомцев, hurt-отход от
-//! ближайшей угрозы и готовый-idle шлюз гибернации.
+//! ближайшей угрозы и готовый-idle шлюз гибернации. Исходный владелец PDB:
+//! `appserver/ai/smartgladiator.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp`.
-//! Машинная сверка: разобраны все пять функций класса:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | ctor: `m_qTarget` — пустой `std::deque<tagCell>` (`[+0x7C..+0x8F]`, `_Mysize = [+0x8C] = 0`) | VA `0x00610850` | [`SmartGladiatorState`] (`Default`) | `MATCH` |
-//! | `OnIdle`: базовый `CMonsterAI::OnIdle` (`0x005DCC60`) только при живом owner и `[+0x8C] == 0` — очередь шагов исчерпана; тот же признак `≡ smart_gladiator_ready_to_idle` гейта гибернации | VA `0x00610660` | [`SmartGladiatorState::has_queued_steps`], потребитель параметра — `ai/monsterai.rs::hibernates_without_nearby_players` | `MATCH` |
-//! | `OnSchedule`: пустые очереди `[+0x14]`/`[+0x28]`; бой по общей схеме без `GetAtcInterval`-гейта; без цели и непустом `m_qTarget` — `front` (`tagCell{lX,lY}`) идёт в координатный `CBaseAI::MoveTo(run=0)` (`0x0061083D`), затем `pop` всегда, включая неуспешное движение | VA `0x006106E0` (входной hook `0x00485540`, безцелевая ветвь `0x006107EF`) | [`execute_smart_gladiator_retreat`] расписание — hub-оркестрация; ячейка — [`SmartGladiatorState`] | `MATCH` |
-//! | `OnSearchEnemy`: игроки перед питомцами, живые внутри `GetGuardRange` (vt `+0x138`); ближайшая угроза (`<=` заменяет запись) и цель с HP vt `+0xD0`/`+0xD8` < 0.4 с минимальным абсолютным HP (замена при строго меньшем); vulnerable → virtual `SetTarget`, иначе от ближайшего — `GetLineDir(threat → owner)`, `GetDirPos` и `push_back` `tagCell{lX,lY}` | VA `0x00610AC0` | [`SmartGladiatorSelection`], [`select_smart_gladiator_enemy`], [`retreat_step_from`] | `MATCH` |
-//! | `WhenBeenHurted`: базовый hurt всегда (`0x004C93E0`); тип 400 вне боя — существующий игрок при HP-части владельца < 0.75 (double-константа `0x3FE8000000000000`, vt `+0xD0`/`+0xD8`) принимается целью, иначе отход от этого игрока; игрок исчез — отход от ближайшего живого игрока, иначе **шаг к ближайшему монстру**, иначе шаг по текущему `GetDir`; тип 600 вне боя — приручённое существо или повозка принимается целью | VA `0x006103B0` | [`apply_player_hurt_response`], [`apply_monster_hurt_response`] | `MATCH` |
-//! | hurt-отход/сближение: найденный ориентир пишет направление формы `CShape::SetDir` (owner vtable `+0x60`, `0x0044A1C0`) перед `GetDirPos` и общим координатным `MoveTo(run=0)` (AI vtable `+0x58`, `0x004C9020`, точка вызова `0x006105A9`) | vtable `CShape` `0x0064EA04`, RVA-место `0x00610561`/`0x006105A9` | [`apply_player_hurt_response`] | `MATCH`; две ветки прежнего hub расходились: шаг к ближайшему монстру прежний hub разворачивал отходом, а запись `SetDir` не выполнял (расхождения устранены) |
-//!
-//! `GetDirPos` (`0x0045B330`) безотказен для восьми направлений; входной
-//! state-вопрос `0x0047B150` собственных `OnSearchEnemy` — `RET1`-эквивалент.
-//!
-//! Остаются hub-владением: общий monster tick hub, `Hibernate` (vtable
-//! `+0x64`, `0x005DCC50`), реальный путь `monsterbaseattack` (в т.ч. его
-//! hurt-вход `periodicattack`) и применение цели. Фактическое пространственное
-//! перемещение и журналирование — через фасады `ai/monsterai.rs` и
-//! [`SmartGladiatorDispatcherMonster`].
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`SmartGladiatorDispatcherMonster`] — очередь шагов на hub-владельце
-//!   `CMonster`, общая hurt-ветвь, назначение цели и запись направления
-//!   формы; состояние хранится hub-владельцем, тела перенесены сюда.
-//! - [`SmartGladiatorDispatcherPlayer`] — текущее и максимальное HP игрока
-//!   для уязвимого критерия; проходы кандидатов повторяют общий шов
-//!   `ai/lord.rs` (`EnemySearchDispatcherRegion`).
+//! Сохранённые quirks: без цели `front tagCell` идёт в `MoveTo(run=0)`, затем
+//! `pop` всегда, включая неуспешное движение; hurt-ориентир пишет `SetDir`
+//! направления формы перед `GetDirPos` — прежний hub эту запись не выполнял и
+//! шаг к ближайшему монстру разворачивал отходом (расхождения устранены).
+//! Остаются hub-владением: общий monster tick, `Hibernate`, реальный путь
+//! `monsterbaseattack` (в т.ч. hurt-вход `periodicattack`) и применение цели.
+//! Швы: [`SmartGladiatorDispatcherMonster`] — очередь шагов, hurt-ветвь и запись
+//! направления на владельце `CMonster`; [`SmartGladiatorDispatcherPlayer`] — HP
+//! игрока; проходы кандидатов — общий шов `ai/lord.rs`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use std::collections::VecDeque;
 

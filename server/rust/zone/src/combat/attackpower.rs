@@ -2,8 +2,8 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/states/attackpower.cpp` и ApplyFinalDamage из `appserver/moveshape.cpp`.
-//! Пара: EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB SHA-256 `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
+//! Идентификаторы точной пары —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
 //! Машинный код `tagAttackInformation` (VA `0x005D3CA0`, `0x005D3D70`)
 //! подтверждает исходный ID, уровень и сброс; `CMoveShape::ApplyFinalDamage`
 //! (VA `0x004D0DA0`) — порядок DWORD-вычитаний, ограничение HP/MP и записи

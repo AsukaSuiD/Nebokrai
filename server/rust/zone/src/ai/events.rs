@@ -2,8 +2,9 @@
 //! исторического GameServer) и числовые коды `AI_SHAPE_ACTION`.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match). Публичные
+//! (идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
+//! Публичные
 //! символы семейства: `CBaseAI::AddAIEvent` (`1:0x0c7f90` → RVA `0x0c8f90`)
 //! и `CBaseAI::ProcessPassiveAction` (`1:0x0c74f0` → RVA `0x0c84f0`).
 //! PDB подтверждает numeric `AI_SHAPE_ACTION` `0..8`,

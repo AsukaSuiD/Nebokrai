@@ -1,40 +1,17 @@
 //! Outgoing/receive и Linux I/O owner GameServer `CMyNetClient` — исходящий
 //! край Game к World и Billing. Исходник `nets/netserver/mynetclient.cpp/.h`;
-//! источник контракта — та же точная пара, что у
-//! [`crate::app::game_message`].
+//! источник контракта — та же точная пара, что у [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
-//! - ctor `CMyNetClient` `0x41A4B0`: базовый `CClient` ctor, task type zero
-//!   (исходный `ST_UNKNOWNSERVER == 0`), destructor `0x41A530` и
-//!   `GetSocketCommand` `0x41A520` остаются теми же свидетельствами;
-//! - `OnReceive` `0x41A6A0` имеет статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`:
-//!   один вызов читает не более `0x2800`; `WSAEWOULDBLOCK 0x2733` и `recv == 0`
-//!   — только журнал; цикл frames, пока накоплено `>= 0xC`: CRC длины через
-//!   общий `DataCrc32 0x47B0A0`, `declared > size` — останов без потери хвоста,
-//!   create только несжатым `0x413850` (upstream без RLE), повторный CRC,
-//!   publish в FIFO `+0x100` через `0x4126D0`; shrink к `0x100000`;
-//! - `HandleClose` `0x41A590` (virtual слот 19 диспетчера close): по server
-//!   type `[client+0x1F0]` публикует в ту же FIFO `+0x100` `CMessage(0x6F901)`
-//!   (World) либо `CMessage(0x6F903)` (Billing) через ctor `CMessage 0x4136D0`;
-//!   ветка unknown type ставила stack-local value без доказанного смысла —
-//!   эта одна UB-граница не получает Rust-значения и остаётся typed
-//!   `UnknownServerTypeCloseReaction`.
-//!
-//! Общий `CClient` receive capacity `0x100000`, ручные realloc/memmove,
-//! `CSocketCommands::Clear`, destructor и deleting thunk заменены
-//! `Vec`/`CMsgQueue`/RAII. Component хранит owned `TcpStream`, resolved endpoint,
-//! control-send и один awaitable read/send шаг поверх общего `CClient`.
-//! EOF и подтверждённая системная ошибка TCP проходят один и тот же
-//! `OnClose -> HandleClose`: socket закрывается до публикации synthetic
-//! World/Billing сообщения, которое живой `CGame` обрабатывает в своём FIFO.
-//! `SetSendRevBuf` RVA `0x0001A650` передавал Windows `SO_SNDBUF=0`; Linux
-//! backpressure-эквивалент не доказан, поэтому эта socket-option остаётся
-//! локальным `BLOCKED_MISSING_FACT`, а не получает фиктивный вызов.
-//! Завершение GameServer дописывает исходящую очередь до закрытия сокета:
-//! CClient::Close (0x004191b0) ждёт ExitSocketThread, чей send-loop
-//! (0x0041a171..0x0041a19d) проверяет очередь и живое соединение.
-//! Ожидание writable выполняет Tokio, частичный хвост хранит ClientSendQueue.
-//! Успех означает только передачу байтов TCP, не подтверждение World/БД.
+//! Component хранит owned `TcpStream`, resolved endpoint, control-send и один
+//! awaitable read/send шаг поверх общего `CClient`. EOF и подтверждённая
+//! системная ошибка TCP проходят один и тот же `OnClose -> HandleClose`: socket
+//! закрывается до публикации synthetic World/Billing сообщения, которое живой
+//! `CGame` обрабатывает в своём FIFO. Ветка unknown server type исходного
+//! `HandleClose` не получает Rust-значения (`UnknownServerTypeCloseReaction`).
+//! `SetSendRevBuf` (Windows `SO_SNDBUF=0`) не имеет доказанного Linux-эквивалента
+//! — локальный `BLOCKED_MISSING_FACT` без фиктивного вызова. Успех send означает
+//! только передачу байтов TCP, не подтверждение World/БД.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#сетевой-край-gameserver
 
 use std::collections::VecDeque;
 use std::error::Error;

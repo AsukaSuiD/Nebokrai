@@ -1,30 +1,17 @@
 //! Базовая идентичность объектов GameServer (`CBaseObject`): type/ID/GUID,
-//! graphics ID, byte-string имя, constructor-defaults и wire codec.
-//! Исходники `server/gameserver/appserver/baseobject.h/.cpp`; сверка по точной
-//! паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`).
+//! graphics ID, byte-string имя, constructor-defaults и wire codec. Исходники
+//! `appserver/baseobject.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Фабрики npc/monster остаются в старом пакете связными с
+//! ним проводами.
 //!
-//! Фабрики npc/monster (вызываются только старым `CServerRegion` в
-//! `serverregion.rs`) остаются в старом пакете связными с ним проводами.
-//!
-//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: `AddToByteArray` RVA
-//! `0x000FC300`, scalar/name часть constructor-а `0x000FC3C0`,
-//! `DecordFromByteArray` `0x000FC440` и identity helpers
-//! `GetHashValue/CalculateType/CalculateID` `0x000FC0C0/0x000FC0E0/0x000FC0F0`.
-//!
-//! EXE подтверждает signed `m_lType +0x4`, `m_lID +0x8`, нулевой `CGUID +0xC`,
-//! `m_lGraphicsID +0x1C`, byte-string `+0x20`, include-child `+0x3C == true` и
-//! null father `+0x40`. Codec пишет три little-endian `long`, затем имя с NUL;
-//! decoder использует локальный `char[256]`, сохраняет тот же порядок и на
-//! normal return явно ставит `AL=1` по `0x004FC4BD`. Входной include-child
-//! оба тела не читают. `Vec<u8>` заменяет `std::string` без навязывания UTF-8,
-//! а safe decoder останавливает отсутствие NUL/выход за старый 256-байтовый
-//! буфер локальным `BLOCKED_MISSING_FACT`; уже прочитанные scalar-поля и
-//! cursor сохраняются. Child-list/father ownership и полный destructor не
-//! материализованы: helper конструктора строит только достигнутую
-//! region-chain часть и не объявляет Rust layout копией старого ABI.
-//! Identity helpers: верхний DWORD хранит type с исходным sign-extension
-//! отрицательного ID, нижний — битовый образ ID.
+//! Codec пишет три little-endian long, затем имя с NUL; `Vec<u8>` заменяет
+//! `std::string` без навязывания UTF-8, а decoder останавливает отсутствие NUL
+//! и выход за старый 256-байтовый буфер локальным `BLOCKED_MISSING_FACT`,
+//! сохраняя уже прочитанные поля и cursor. Identity helpers: верхний DWORD
+//! хранит type с исходным sign-extension отрицательного ID. Child-list/father
+//! ownership и полный destructor не материализованы: helper строит только
+//! достигнутую region-chain часть и не объявляет Rust layout копией старого ABI.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
 use std::fmt;
 use thiserror::Error;

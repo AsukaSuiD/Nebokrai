@@ -1,47 +1,21 @@
 //! Данные и скалярные правила country war-региона `ServerCountryRegion`.
-//! Исходный владелец — `appserver/servercountryregion.h/.cpp`; сверка по
-//! точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат `CServerCountryRegion` остаётся в старом пакете: хранит hub
-//! `CServerRegion`, contender-список (element `ContendState` — data-тип Zone
-//! `regions/serverwarregion`, re-export через hub) и карты concrete
-//! gates/flags поверх hub-типов, а этому агрегату делегирует чистый state
-//! (symbol ownership, area-maps, guard sets, стороны и фазовые флаги) и все
-//! скалярные операции без изменения сигнатур; wire-stream readers с
-//! `RegionDecodeInputBlock` живут в Zone `regions/serverwarregion`, а
-//! entry-effects для contenders и их вызовы остаются у старого пакета.
+//! Исходный владелец — `appserver/servercountryregion.h/.cpp`; сверка по точной
+//! паре `gameserver.exe` + `GameServer.pdb`. Переходный агрегат остаётся в
+//! старом пакете: хранит hub `CServerRegion`, contender-список и карты concrete
+//! gates/flags, а этому агрегату делегирует чистый state и скалярные операции;
+//! wire-stream readers живут в Zone `regions/serverwarregion`, entry-effects
+//! для contenders — у старого пакета. Машинные статусы унаследованы от шапки
+//! старого владельца без повышения (layout gate/camp/flag, map-key, overload
+//! return, area selection и refresh/clear order).
 //!
-//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY` (унаследован от шапки старого
-//! владельца, без повышения): subtype decoder `0x001CD3F0`, gate runtime
-//! `0x001CAC80/0x001CADD0/0x001CB1E0..0x001CB310`, refresh
-//! `0x001CB750/0x001CB880`, `ClearRegion` `0x001CBA50`, phase callbacks
-//! `0x001CABC0..0x001CAC60`, spatial `0x001CA9F0/0x001CE010`, virtual
-//! security `0x001CAD70`, guard ownership/refresh
-//! `0x001CB370/0x001CC960..0x001CCA30`, `GetCamp` `0x001CE540`, attackability
-//! `0x001CE830..0x001CE970`, contender damage/time
-//! `0x001CA980/0x001CAFF0/0x001CB0D0`, enter/list/symbol
-//! `0x001CB710/0x001CCAC0/0x001CCB50/0x001CE190/0x001CE2B0`, AI/victory
-//! `0x001CE380/0x001CEA10` и `IsPlayerContendSymbol` `0x001D24E0`;
-//! `VERIFIED_DISASSEMBLY`: gate/camp/flag layout, map-key, overload return,
-//! area selection и refresh/clear order.
-//!
-//! `BTreeMap`/`BTreeSet`/Vec сохраняют STL order. Flags являются обычными
-//! `CBuild` type `0x44C`: wire `field_24` не применяется, initial action
-//! остаётся `0`, а refresh меняет только HP; scalar decode wire blocks — это
-//! семья этого модуля, а hub-публикация `0xBF60F` и обходы карт остаются у
-//! вызывающего aggregate. `random(map.size())` и исходный mutating
-//! `operator[]` заданы return-point семейством. `INT_MIN / -1` и недоказанные
-//! invalid x87 conversions остаются локальными typed-границами арифметики
-//! этого модуля. Exact EXE подтвердил исходную странность
-//! `OnPrepareBegin/End`: оба проверяют `_state_prepare`, но меняют
-//! `_state_declare`; безопасный исходный gate закрыт.
-//! Victory callback `OnFlagDestroy` `0x001CAD50` независимо от исходного
-//! war-byte оставляет его false при совпавшем region ID; переданный country
-//! long не читает.
-//! `CancelContendByPlayer` содержит исходный дефект инвертированного условия:
-//! любой реальный player немедленно получает `false`, а null-ветка читает
-//! absolute `0x8` и вызывает метод с null; safe Rust не придумывает ей
-//! результат.
+//! Quirk-и и дефекты сохранены: исходная странность `OnPrepareBegin/End` (оба
+//! проверяют `_state_prepare`, но меняют `_state_declare`; безопасный исходный
+//! gate закрыт); `OnFlagDestroy` независимо от исходного war-byte оставляет его
+//! false при совпавшем region ID; `CancelContendByPlayer` несёт дефект
+//! инвертированного условия (любой реальный player получает `false`) — safe
+//! Rust не придумывает результат null-ветке. `INT_MIN / -1` и недоказанные x87
+//! conversions остаются локальными typed-границами.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#war-регионы
 
 use std::collections::{BTreeMap, BTreeSet};
 

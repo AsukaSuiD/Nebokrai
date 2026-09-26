@@ -1,30 +1,16 @@
 //! Audit-кадры семьи обмена и наземного перемещения исторического GameServer,
 //! изолированные от transport-шва: сборка кадра в исходном порядке полей без
-//! знания маршрута доставки.
+//! знания маршрута доставки. Исходный владелец `appserver/game.cpp` (пара
+//! журналов обмена после commit и move-журнал drop/pickup/перевода банка);
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`. Флаги log-system,
+//! форматирование текстов и отправка (`Send` на log server) остаются у прежнего
+//! owner.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/game.cpp` (пара журналов обмена после commit
-//! `0x1B9470` и move-журнал drop/pickup/перевода банка). Здесь собираются
-//! сами кадры в исходном порядке полей; флаги log-system, форматирование
-//! текстов и отправка (`Send` на log server) остаются у прежнего owner —
-//! transport-шов caller-а, кадр не знает маршрута.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по wire-константам журналов
-//! `0x60201`/`0x60202`/`0x6020D`; состав `0x6020D` машинно не переоткрывался —
-//! Rust форма ниже соответствует прежнему владельцу, статус честный
-//! `UNKNOWN`:
-//!
-//! | кадр | содержимое | здесь | статус |
-//! |---|---|---|---|
-//! | `0x60201` предмет обмена | byte 0, обе party-записи, GUID, price, amount, name, оба IPv4 | [`trade_goods_audit_frame`] | семья `MATCH` |
-//! | `0x60202` move-журнал | reason byte, actor-запись, GUID, price/amount rule, name, region/tile/IP | [`ground_goods_move_log_frame`] | семья `MATCH` |
-//! | `0x6020D` валюта обмена | kind byte, transaction, amount, текст, owner, balance | [`trade_currency_audit_frame`] | состав — `UNKNOWN`, форма по прежнему owner |
-//!
-//! C-строковый примитив общий с `trade/session.rs`
+//! Wire-константы `0x60201`/`0x60202` — семья MATCH; состав `0x6020D` машинно не
+//! переоткрывался — Rust форма соответствует прежнему владельцу и держит честный
+//! статус `UNKNOWN`. C-строковый примитив общий с `trade/session.rs`
 //! ([`append_legacy_c_string`]).
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
 use nebokrai_shared::values::CGuid;
 

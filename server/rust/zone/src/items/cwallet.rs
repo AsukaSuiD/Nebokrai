@@ -1,30 +1,17 @@
 //! Однослотовое currency/storage core `CWallet` исторического GameServer:
-//! владеет одним `CGoods` catalog `MONEY`, а не числовым balance; generic
-//! core также обслуживает `CYuanBao` и `CJiFen`.
+//! владеет одним `CGoods` catalog `MONEY`, а не числовым balance; generic core
+//! также обслуживает `CYuanBao` и `CJiFen`. Исходный owner
+//! `appserver/container/cwallet.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Player-владелец публикует контейнер под extend-id
+//! `PlayerContainerKind::Wallet` единого каталога (дизайн D4).
 //!
-//! Player-владелец публикует этот контейнер под extend-id
-//! [`PlayerContainerKind::Wallet`][crate::items::playercontainers::PlayerContainerKind]
-//! единого каталога (дизайн D4).
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cwallet.cpp`. Wallet владеет не
-//! числовым balance, а одним `CGoods` catalog `MONEY`; `Option<CGoods>` и RAII
-//! заменяют nullable pointer и `GarbageCollect`. Общий generic core также
-//! используется точным двойником `CYuanBao`, который отличается только
-//! factory-index-ом.
-//!
-//! Query, add/stack, remove, positional full/partial take, direct
-//! increase/decrease и lifecycle возвращают
-//! typed reports для будущего listener/message dispatcher-а. Exact decrease
-//! при запросе больше balance выполняет unsigned wrapping subtraction — это
-//! наблюдаемый legacy-контракт, а не внутренний pointer-дефект. Достигнутый
-//! battle-fairy и ground currency callers собирают из outcomes точный
-//! `CS2CContainerObjectMove`; increase/create публикации остаются за своими
-//! ещё отдельными сценариями.
-//! Marker + optional full-goods persisted codec достигнут общим player
-//! GameSave owner-ом и одинаково обслуживает wallet/YuanBao/JiFen. Restore
-//! очищает только прежний goods: owner, mode и listener-set принадлежат
-//! container lifecycle и не освобождаются при `Unserialize`.
+//! Invariant-ы: `Option<CGoods>` и RAII заменяют nullable pointer и
+//! `GarbageCollect`; exact decrease при запросе больше balance выполняет
+//! unsigned wrapping subtraction — это наблюдаемый legacy-контракт, а не
+//! внутренний pointer-дефект; restore очищает только прежний goods (owner, mode
+//! и listener-set принадлежат container lifecycle и при `Unserialize` не
+//! освобождаются).
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use std::marker::PhantomData;
 

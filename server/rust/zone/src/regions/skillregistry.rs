@@ -4,51 +4,16 @@
 //! этот реестр внутри себя и делегирует сюда его поведение без изменения
 //! сигнатур своих методов.
 //!
-//! Разрез записи навыка: скалярная база `CSkill` (ID (+0x04), level, concrete
-//! owner, item position, reuse timestamp +0x40 и owned visual) живёт здесь
-//! типом `SkillIdentity`, а execution kernel (Player/BattleFairy/Monster) и
-//! retained данные полёта — типом `skills/execution::RegisteredSkillRecord`
-//! (там же payload исполнения монстра и alias `MoveShapeSkill`).
-//! Реестр связан с записью только швом `SkillIdentityAccess`
-//! (generic-trait сварка по прецеденту `StateRecordTarget`).
-//! Конструирование полной записи при AddSkill/CFightDefense также задаёт
-//! владелец записи своим handler: категория и concrete owner выбираются здесь
-//! по единственному каталогу `CSkillFactory`.
-//!
-//! Четыре независимые категории сохраняют экземпляры, их порядок вставки и
-//! повторные ID: native AddSkill (RVA `0x000D1C70`) допускает повторный ID,
-//! когда уровень первого найденного экземпляра равен нулю; повышение
-//! ненулевого уровня не понижается, а удаляет первое совпадение и добавляет
-//! экземпляр в хвост. В каждой категории SlotMap владеет записями, а Vec
-//! ключей задаёт только native-порядок: поколенческий `SkillSlot` переживает
-//! сдвиги этого Vec и не разрешает вложенному callback завершить новую
-//! одноимённую регистрацию; порядок самого SlotMap не используется. Удаление
-//! и очистка инвалидируют ключи, а не пересоздают хранилище с прежними
-//! поколениями. Это техническая замена указателей экземпляров, не
-//! дополнительный каталог ID либо owners.
-//!
-//! GetSkill/DelSkill (RVA `0x000CF320`) выбирают категорию отдельно через
-//! актуальный `QuerySkillType(ID, 1)`; DelSkill отвергает UNKNOWN до current
-//! cleanup, ID 0 проходит cleanup и только потом category lookup, и удаляет
-//! только первый найденный экземпляр. ClearSkills (RVA `0x000CDCE0`) сохраняет
-//! неразрешённый current ID и очищает категории в порядке Attack → Defense →
-//! Summon → State. GetCurrentSkill (RVA `0x000CDC10`) разрешает выбранный ID
-//! через реестр: выбранный ID сам по себе не доказывает наличие навыка.
-//! GetDefaultAttackSkillID (RVA `0x000CE240`) выбирает ID 2 только по
-//! attack-вектору, иначе ID 3 по summon-вектору, иначе ID 1 — сверено по
-//! машинному коду (скан поля ID `CSkill +0x04` по векторам `+0x130`/`+0x150`,
-//! без зависимости от QuerySkillType и без раннего выхода).
-//!
-//! Публичные символы семейства: `?AddSkill@CMoveShape@@QAEHW4tagSkillID@@J@Z`
-//! (`0x000D1C70`), `?AddSkill@CMoveShape@@QAEHPBDJ@Z` (`0x000D3C70`,
-//! name-вариант не перенесён), `?DelSkill@CMoveShape@@QAEHW4tagSkillID@@@Z`
-//! (`0x000CF320`), `?DelSkill@CMoveShape@@QAEHPBD@Z` (`0x000CF560`,
-//! name-вариант не перенесён), `?ClearSkills@CMoveShape@@QAEXXZ`
-//! (`0x000CDCE0`), `?GetCurrentSkill@CMoveShape@@QAEPAVCSkill@@XZ`
-//! (`0x000CDC10`), `?SetCurrentSkill@CMoveShape@@UAEXW4tagSkillID@@@Z`
-//! (`0x000CEEE0`), `?SetItemSkill@CMoveShape@@QAEXW4tagSkillID@@@Z`
-//! (`0x000D1570`), `?GetDefaultAttackSkillID@CMoveShape@@UAE?AW4tagSkillID@@XZ`
-//! (`0x000CE240`).
+//! Разрез записи навыка: скалярная база `CSkill` живёт здесь типом
+//! `SkillIdentity`, execution kernel и retained данные полёта — типом
+//! `skills/execution::RegisteredSkillRecord`; реестр связан с записью только
+//! швом `SkillIdentityAccess`, а категорию задаёт каталог `CSkillFactory`. В
+//! каждой из четырёх категорий SlotMap владеет записями, а Vec ключей задаёт
+//! native-порядок: поколенческий `SkillSlot` переживает сдвиги этого Vec и не
+//! разрешает вложенному callback завершить новую одноимённую регистрацию.
+//! Правила повторного ID, category lookup и выбор default-навыка сверены по
+//! машинному коду семейства `CMoveShape`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
 use slotmap::{SlotMap, new_key_type};
 

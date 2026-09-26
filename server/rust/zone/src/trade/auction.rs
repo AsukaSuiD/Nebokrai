@@ -1,61 +1,21 @@
 //! Player-side состояние и правила аукциона живого игрока исторического
-//! GameServer: флаг окна, поисковый фильтр/страница, timestamp-гейты, плата
-//! за выставление, ожидающие узлы и правила допуска товара и возврата денег.
+//! GameServer: флаг окна, поисковый фильтр/страница, timestamp-гейты, плата за
+//! выставление, ожидающие узлы и правила допуска товара и возврата денег.
+//! Исходный владелец `appserver/player.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/player.cpp`. Здесь живёт вложенное в игрока
-//! состояние аукциона: флаг открытого окна, поисковый фильтр и текущая
-//! страница, оба операционных timestamp-гейта, плата за выставление и два
-//! ожидающих узла (выставление и покупка), а также чистые правила допуска
-//! товара в ячейку выставления и вместимости кошельков при возврате денег.
-//! Контейнеры `auction_listing/auction_goods/auction_wallet`, `CGoods` и
-//! фабрика остаются переходными владельцами старого пакета; операции над ними
-//! исполняют фасады `CPlayer` и передают сюда только скаляры. Порядок
-//! сообщений, journal-отправок, billing-ожидание и сборка узла остаются у
-//! message runtime caller-ов.
+//! Контейнеры `auction_listing/auction_goods/auction_wallet`, `CGoods` и фабрика
+//! остаются переходными владельцами старого пакета и передают сюда только
+//! скаляры; порядок сообщений, journal-отправок, billing-ожидание и сборка узла
+//! — у message runtime caller-ов. `CGoodsNode` принадлежит Realm
+//! `auction/auctionnode.rs`, поэтому состояние параметризовано типом узла
+//! `Node`; `LegacyReader/Writer` здесь не появляются.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинные статусы по дизассемблу тел точной пары:
-//!
-//! | функция | RVA | здесь | статус |
-//! |---|---|---|---|
-//! | `CPlayer::AuctionLimit` | `0x0002EF00` | [`auction_listing_goods_allowed`] | `VERIFIED_DISASSEMBLY` (побитовая логика GAP13: `&0x20→2`, `&0x04→−1`, attr `0xE5`→`−1`, иначе `3`; bool-форма — допуск «иначе 3») |
-//! | `CPlayer::CheckAuctionMoneyMove` | `0x000369B0` | [`check_auction_money_move`] | `VERIFIED_DISASSEMBLY` (checked unsigned sum обоих wallet против max stack основного; notify `GPM015` у caller-а) |
-//! | `CPlayer::IsAollowAuction` | `0x00036200` | [`PlayerAuction::begin_limit_check`] | `VERIFIED_DISASSEMBLY` (1-сек gate `[+0xCD0]`: timestamp до limit-queries; owner count `CAuctionRoom@CGame+0x1B8`; bonus slot1 `GAP 0xEA == 3 → value2`; float-compare; отказ поглощает попытку + notify) |
-//! | `CPlayer::BuyItemFromAauction` | `0x00030BC0` | [`PlayerAuction::begin_buy`] | `VERIFIED_DISASSEMBLY` (reject при `sampled ≤ last + 5000` — signed `jbe` после wrapping-сложения; второй сэмпл записывается до GUID decode) |
-//! | `CPlayer::MakeCurAucNode` | `0x00045A50` | [`PlayerAuction::begin_listing`], [`PlayerAuction::set_current_node`] | `VERIFIED_DISASSEMBLY` (5-сек двухсэмпловый gate; pipeline `IsAollow → IsMoney → IsCurAucNodeOK → DeleteGoods → узел` у caller-а) |
-//! | `CPlayer::ReFlushSelfGoods` | `0x00030D90` | [`PlayerAuction::begin_self_goods_refresh`] | `VERIFIED_DISASSEMBLY` (тот же 5-сек gate; `goods/wallet space` собирает фасад из контейнеров) |
-//! | `CPlayer::OpenAuction` | `0x000367B0` | [`PlayerAuction::set_open`] | `VERIFIED_DISASSEMBLY` (клиент `0xC0706` 11 dword → World `0x60810` 1 dword — у caller-а) |
-//! | `CPlayer::AutoAddAuctionGoods` | `0x000466A0` | [`PlayerAuction::replace_current_node`] | `VERIFIED_DISASSEMBLY` (каждый созданный предмет безусловно заменяет `m_CurrentAucNode`) |
-//! | `CPlayer::AddItemToAuction` | `0x00045910` | [`PlayerAuction::take_current_node`], [`PlayerAuction::set_listing_fee`] | `VERIFIED_DISASSEMBLY` (порядок `node Serialize → World 0x60801 → SendSaleLog → AddByteGS2WS → TellClietAuctionOK → Clear` у caller-а) |
-//!
-//! Соседние владельцы, не вошедшие в этот файл: `ModifyAuctionSpace`
-//! `0x0003F7A0`, `GetAuctionMoney` `0x0002EEF0` (tail-jmp amount `[+0x8F0]`)
-//! и `SetAuctionMoney` `0x00030E60` — wallet/container мутации, остаются в
-//! фасаде `CPlayer`; `TellClietAuctionOK`
-//! `0x0003ED50` (`0xC0701`, `Unserialize → SerializeForOldClient → Add`),
-//! `WriteBuyAuctionLog` `0x00036370` (`0x60214`), `SendToGSBaiTan`
-//! `0x0002F1C0` / `NoticyWS_BaiTan_Over` `0x0002F140` (`0x60811`/`0x60812`) —
-//! message runtime caller-ы прежних обработчиков. fee-формулы
-//! `GetOptMoneyJin/Yuan` (x87) здесь не реализованы.
-//!
-//! UNKNOWN: `IsGoodAllowedInAuction` `0x0002EA50` — линейный скан 256 dword
-//! таблицы `0xEF4AC8`; таблица в образе нулевая, её заполнение — `INFERRED`.
-//! Rust использует принятый конфиг-список `globesetup`
-//! (`GlobeSetupSnapshot::auction_goods_allowed`, Shared resources), что
-//! поведенчески совпадает при заполненном конфиге; сама проверка живёт вне
-//! этого файла у setup-снимка.
-//!
-//! `CGoodsNode` принадлежит Realm `auction/auctionnode.rs`, а Zone не
-//! импортирует владельцев другой роли, поэтому состояние параметризовано
-//! типом узла `Node`; мгновенный владелец — `CPlayer`
-//! (`PlayerAuction<CGoodsNode>`). `LegacyReader/Writer` и wire-кадры здесь не
-//! появляются: сборка и разбор сообщений — за message runtime caller-ами.
+//! UNKNOWN: заполнение таблицы `IsGoodAllowedInAuction` — INFERRED; Rust
+//! использует конфиг-список `GlobeSetupSnapshot::auction_goods_allowed` (Shared
+//! resources). Fee-формулы `GetOptMoneyJin/Yuan` здесь не реализованы.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
-/// State-отчёт `CheckAuctionMoneyMove`: checked сумма обоих кошельков
-/// сравнивается с max stack основного кошелька.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuctionMoneyMoveCapacity {
     pub wallet_amount: u32,

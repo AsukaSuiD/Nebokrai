@@ -1,59 +1,21 @@
-//! Владелец GameServer-снимка городских войн `CAttackCitySys` в Zone `activities/`.
+//! Владелец GameServer-снимка городских войн `CAttackCitySys` в Zone
+//! `activities/`. Исходник PDB: `organizingsystem/attackcitysys.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Snapshot/setup (`0x00060E40`), initial state (`0x000600F0`), faction update
-//! (`0x000601F0`) и фазовые callbacks `0x00060320`,
-//! `0x00061040..0x00061420` имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY`; schedule queries `0x0005FAD0..0x0005FBC0` и
-//! `0x000603C0` — `IMPLEMENTED`, с локальным membership-блоком ниже. Остальные
-//! функции owner-а остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Исходник PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\attackcitysys.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
-//!
-//! Wire начинается с signed `long` количества. Для каждого положительного
-//! элемента исходник копирует prefix `tagAttackCityTime` длиной `0xB0`, затем
-//! читает signed count и ordered faction IDs. PDB подтверждает восемь пар
-//! `event ID + tagTime`, signed schedule/city/state и `std::list` с offset
-//! `0xAC`; weekly flag по offset `0xB8` в snapshot не входит. `BTreeMap` и
-//! `Vec` заменяют STL с тем же key/order-контрактом; повторный `lTime` заменяет
-//! ранее декодированную запись, как `map::operator[]` с присваиванием.
-//!
-//! Четыре bytes stateless allocator-base внутри prefix сознательно читаются и
-//! отбрасываются. Event IDs сохраняются как wire `u32`, но в этом GameServer
-//! owner-е ни один достигнутый consumer их не читает. Недоставленный weekly
-//! flag выражен `None`, а не выдуманным значением. Exact EXE показывает внешний
-//! цикл `0x00461009..0x00461015` и общий `mov al,1` по `0x00461025`.
-//! Безразмерный C++ pointer на short buffer уходил в неизвестный UB; safe Rust
-//! возвращает локальный `UnexpectedEnd`, сохраняя уже пройденный cursor и уже
-//! вставленные полные записи. Static `m_Attacks` остаётся у единственного
-//! Rust-owner-а; STL tree/list allocation, SEH и cleanup не восстанавливаются.
-//!
-//! Initial-state owner в map-order выбирает только closed interval
-//! `DeclarWarTime <= now <= AttackCityEndTime`. City ID ищется сначала в
-//! `CGame::s_mapRegion`, а при miss/null — через `FindProxyRegion`; найденный
-//! region получает virtual `ReSetWarState(war number, state)`. Exact EXE
-//! подтверждает два stack-аргумента и vtable slot `+0xE8`. Сырой
-//! `CGame/CServerRegion` остаётся внешним context-контрактом до своего прохода.
-//! Faction-update всегда читает war ID, но при miss сразу возвращает `false`,
-//! не читая count. Hit очищает прежний list, принимает signed count и ordered
-//! IDs, затем ищет city region только в `s_mapRegion` без proxy fallback и при
-//! non-null вызывает virtual `UpdateContendPlayer()` slot `+0x104`. Safe short
-//! buffer сохраняет уже выполненные clear/append и cursor, не назначая старому
-//! UB дополнительный результат.
-//!
-//! Фазы сохраняют значения `DUTH=1`, `Mass=2`, `Fight=3`, порядок мутации
-//! schedule перед lookup и точные различия поиска: declare/start/timeout/end/mass
-//! допускают proxy, а clear/refresh — только основной map. Timeout действует
-//! лишь в `Fight`, clear лишь в `Mass`; end очищает faction list, но не меняет
-//! schedule state. Vtable slots `+0x78..+0x90` сверены с точными сигнатурами
-//! `CServerRegion` из PDB; context выражает ещё не реализованный region-owner.
-//!
-//! Query-поверхность сохраняет map-order, strict `now < end`, старую packed
-//! minute-формулу с x86 wrapping и main-then-proxy lookup имени. Выходной
-//! `std::string& + bool` представлен `Option<String>`. Оба нативных membership
-//! query проверяли `bIsEveryWeek`, но setup-кодирует только `0xB0`-префикс и
-//! ordered faction-list: конструктор не задаёт DWORD `+0xB8`, а assignment
-//! копирует туда неинициализированный stack. Без доказанного внешнего эффекта
-//! этот UB не воспроизводится: оба query используют переданный список фракций.
+//! Wire начинается с signed `long` количества; каждый положительный элемент
+//! копирует prefix `tagAttackCityTime` длиной `0xB0`, затем signed count и
+//! ordered faction IDs. Четыре bytes stateless allocator-base внутри prefix
+//! сознательно читаются и отбрасываются; недоставленный weekly flag выражен
+//! `None`, а не выдуманным значением; обрыв short buffer возвращает
+//! `UnexpectedEnd`, сохраняя пройденный cursor и полные записи, вместо старого
+//! UB. Фазы сохраняют `DUTH=1`/`Mass=2`/`Fight=3` и различия поиска:
+//! declare/start/timeout/end/mass допускают proxy, а clear/refresh — только
+//! основной map; timeout действует лишь в `Fight`, clear — лишь в `Mass`.
+//! Оба membership query в оригинале проверяли `bIsEveryWeek`, копируемый
+//! assignment-ом из неинициализированного stack — UB не воспроизводится, оба
+//! query используют переданный список фракций. Остальные функции owner-а —
+//! `UNKNOWN`; сырой `CGame/CServerRegion` остаётся внешним context-контрактом.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#войны-и-расписания
 
 use std::collections::BTreeMap;
 use thiserror::Error;

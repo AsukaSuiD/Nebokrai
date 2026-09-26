@@ -1,40 +1,21 @@
 //! Данные и скалярные правила городского war-региона `CServerCityRegion`.
 //! Исходный владелец — `appserver/servercityregion.h/.cpp`; сверка по точной
-//! паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат `CServerCityRegion` остаётся в старом пакете: хранит hub-обёртку
-//! `CServerWarRegion` (обёртку над Zone `regions/serverwarregion`), карту
-//! concrete gates `CCityGate` и делегирует этому агрегату чистый state
-//! (defence-return, guard sets, last-attacker колонки) и все скалярные
-//! операции без изменения сигнатур; wire-stream readers с
-//! `RegionDecodeInputBlock` живут в Zone `regions/serverwarregion`, а
-//! decode-контексты над owner-ом хранилищ и вызовы readers остаются у
-//! старого пакета.
+//! паре `gameserver.exe` + `GameServer.pdb`. Переходный агрегат остаётся в
+//! старом пакете: хранит hub-обёртку `CServerWarRegion` и карту concrete gates
+//! `CCityGate`, а этому агрегату делегирует чистый state и скалярные операции;
+//! wire-stream readers живут в Zone `regions/serverwarregion`, decode-контексты
+//! — у старого пакета. Машинные статусы унаследованы от шапки старого владельца
+//! без повышения: зафиксированы layout gate-полей, decoder/factory returns,
+//! фазовый call order, child-ID `+0x158` и base-region registration; оставшаяся
+//! поверхность исходного файла — `UNKNOWN`.
 //!
-//! Статус `IMPLEMENTED`: фазовые callbacks `0x001CF730`,
-//! `0x001CFA00..0x001CFD70`, `0x001D09F0`, ownership `0x001CED70/0x001CEF40`,
-//! victory `0x001CF1A0`, spatial `0x001CEE80/0x001CEF60`, virtual
-//! security/guard attackability `0x001CF0E0/0x001CF050`, gate runtime
-//! `0x001CAAA0/0x001CF370..0x001CF640`, clear `0x001CF970`, guard refresh
-//! `0x001CF7C0` и direct timeout-forwarding `0x001CFEB0`; `VERIFIED_DISASSEMBLY`:
-//! layout gate-полей, decoder/factory returns, фазовый call order, child-ID
-//! `+0x158` и base-region registration (статусы унаследованы от шапки
-//! старого владельца, без повышения). Оставшаяся поверхность исходного файла
-//! сохраняет унаследованный статус `UNKNOWN` у старого пакета.
-//!
-//! `BTreeMap/BTreeSet/Vec` сохраняют STL order. Обязательный defence-return
-//! block хранится с нейтральным zero-default до decode без недостижимой
-//! Option-границы. Spatial override сохраняет два state-read, defender-only
-//! return setup, fallback в базовый/country owner у вызывающего aggregate и
-//! игнорирование random bool. `GetSecurity` сначала возвращает `SAFE=2` для
-//! mass-state `2` (этот pre-query gate выполняет вызывающий aggregate до
-//! cell lookup, сохраняя исходный порядок без лишнего cell read); при найденной
-//! клетке scalar-решение действующего `city-state` и marker-а — функция этого
-//! модуля. Guard refresh возвращает ordered monster/spawn snapshot.
-//! Timeout агрегирует владельцев symbols по faction ID и выбирает первый
-//! достаточный ID в map-order; если победителя нет, сохраняется действующий
-//! owner faction/union. `OnWinSymbol` внутри `OnFactionVictory` у этой сборки
-//! указывает на точный no-op `0x004A8750`, фиктивный callback не создаётся.
+//! Quirk-и: `GetSecurity` сначала возвращает `SAFE=2` для mass-state `2` (этот
+//! pre-query gate выполняет вызывающий aggregate до cell lookup); timeout
+//! агрегирует владельцев symbols по faction ID в map-order и при отсутствии
+//! победителя сохраняет действующий owner faction/union; `OnWinSymbol` внутри
+//! `OnFactionVictory` у этой сборки — точный no-op, фиктивный callback не
+//! создаётся.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#war-регионы
 
 use std::collections::{BTreeMap, BTreeSet};
 

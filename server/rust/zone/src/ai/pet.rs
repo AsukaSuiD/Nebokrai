@@ -1,68 +1,21 @@
-//! Жизненный цикл и боевые расписания приручённого монстра `CPet`.
+//! Жизненный цикл и боевые расписания приручённого монстра `CPet`: ветви
+//! Attack/Follow/Stay по режиму, watchdog мастера, авто-отзыв при полных слотах,
+//! шестичасовые уведомления и lifecycle-хвост между действием и background.
+//! Исходный владелец PDB: `appserver/ai/pet.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match). Исходный
-//! владелец PDB: `server/gameserver/appserver/ai/pet.cpp`.
+//! Режимы PET_MODE: 0 активный, 1 защитный, 2 пассивный; конструктор ставит
+//! mode = 2 и action = 1. Runtime-входы выбираются по `CMonster::GetAI`, а не по
+//! знаку приручения. Случайная свободная клетка 7x7 читается общим
+//! `CRegion::get_random_pos_in_range` с исходным `RegionRandomContext`; ближний
+//! шаг — общий `MoveTo(run = 0)`. Hub-фасады семейства `MonsterDispatcher*`
+//! (`ai/monsterai.rs`) покрывают пространство региона, слот следования игрока,
+//! перенос и часы.
 //!
-//! Машинная база (VERIFIED по этой паре):
-//!
-//! - `CPet::OnSchedule` (RVA `0x0E9DC0`): выбирает собственные ветви по режиму
-//!   `[+0x80]` — 0 = Attack, 1 = Follow (`OnFallowingSchedule` RVA `0x0E9BB0`),
-//!   2 = Stay (`OnStayingSchedule` RVA `0x0E9650`); watchdog мастера —
-//!   `Distance(master) > 32` клеток вместе с глобалом `0xEF44E8` → `GS0012` и
-//!   `Evanish` (vt `+0x188`); авто-отзыв при полных слотах
-//!   (`CheckSkill(0xD4)`/`AddPet`, `GS0011`); шестичасовые
-//!   (`0x1499700` мс) уведомления о сроке жизни со счётчиком `>= 4`;
-//!   master разрешается `dynamic_cast<CPlayer*>`, region —
-//!   `dynamic_cast<CServerRegion*>`.
-//! - `CPet::OnAttackingSchedule` (RVA `0x0E9A20`): дистанционный гейт
-//!   `CShape::Distance <` BSS `0xEF44EC` от мастера (при его отсутствии — от
-//!   питомца); отказ `IsAttackAble` живой цели: если AI цели целится в самого
-//!   питомца — встречный virtual `OnLoseTarget` цели, затем свой
-//!   `OnLoseTarget + SearchEnemy`; БЕЗ GetAtcInterval-гейта — Tracing/диапазон
-//!   и сразу Begin.
-//! - `CPet::OnStayingSchedule` (RVA `0x0E9650`) не вызывает Tracing:
-//!   включительный min/max диапазон текущего навыка проверяет общий dispatcher
-//!   перед Begin, при выходе — `OnLoseTarget → SearchEnemy`.
-//! - Lifecycle-хвост OnSchedule (RVA `0x0E9E4E`) выполняется после ветви
-//!   действия и до background/passive даже при занятых FIFO; секундный поиск
-//!   мастера (`0x3E8` мс) и одичание не останавливаются ожиданием Move/атаки.
-//!
-//! UNKNOWN: точная семантика BSS-глобалов питомца
-//! (`0xEF44E8` watchdog-флаг/условие слежения и `0xEF44EC` предел
-//! преследования — значения записываются внешним lifecycle `CGame`, здесь
-//! приходят как факты `PetLifecycleFacts` и distance-гейт hub-владельца);
-//! конкретная нить вызова `Evanish` и отзыва из watchdog (выполняет hub по
-//! результату `tick`).
-//!
-//! Швы к hub-владельцам: hub-фасады семейства `MonsterDispatcher*`
-//! (`ai/monsterai.rs`) покрывают пространство региона,
-//! слот следования игрока, перенос и часы. Часы каждого события читаются
-//! отдельным вызовом `now_milliseconds` (fn-параметр делегата).
-//! Случайная свободная клетка 7x7 читается общим `CRegion::get_random_pos_in_range`
-//! с исходным `RegionRandomContext` старого main loop; ближний шаг остаётся
-//! общим `MoveTo(run = 0)`.
-//!
-//! Доказанные контракты остальных тел `CPet`: `OnMoving` живого питомца без
-//! текущего навыка ставит
-//! отдельный `ASA_SEARCH_ENEMY` в общую FIFO; `OnIdle` сохраняет
-//! `ChangeSkill? → Stand → SearchEnemy`; `OnLoseTarget` (RVA `0x0E95F0`)
-//! вызывает базовую очистку цели, затем для ATTACKING проверяет HasTarget
-//! (+0x50), при необходимости повторяет OnLoseTarget (+0x2C) и пишет
-//! FOLLOWING. `SetTarget` (RVA `0x0E9630`) меняет FOLLOWING на ATTACKING и
-//! передаёт пару цели в `CBaseAI::SetTarget` (0x004C7C60); текущий cast и
-//! Move не отменяются. `SetPetCurrentAction` (RVA `0x0E94B0`) вызывает
-//! OnLoseTarget только для нового FOLLOWING при HasTarget; STAYING цель не
-//! очищает. Числовой PET_MODE: 0 — активный (OnSearchEnemy RVA `0x0E98CD`),
-//! 1 — защитный, 2 — пассивный (OnBeenHurted RVA `0x0E94F9`).
-//! `SetPetCurrentAIMode` (RVA `0x0E9460`) перед записью режима вызывает
-//! OnLoseTarget, если новый режим пассивный либо прежний активный, затем
-//! обнуляет invalid_master_ms (+0x84) и seek_master_ms (+0x88), не затрагивая
-//! шестичасовой счётчик и master_logout. Конструктор (RVA `0x0E9400`, записи
-//! 0x0E942E/0x0E9435) задаёт mode = 2 и action = 1 при нулевых
-//! lifecycle-таймерах. Runtime-входы выбираются по `CMonster::GetAI`
-//! (0x004E6D80), а не по знаку приручения.
+//! UNKNOWN: семантика BSS-глобалов watchdog-флага и предела преследования
+//! (`0xEF44E8`/`0xEF44EC`, значения записывает внешний lifecycle `CGame`); нить
+//! вызова `Evanish`/отзыва из watchdog — выполняет hub по результату `tick`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::values::CGuid;
 

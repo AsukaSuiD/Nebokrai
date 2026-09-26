@@ -1,58 +1,19 @@
 //! Spatial/membership-часть `CShape`: позиция и геометрия фигуры, wire codec,
 //! distance-семейство и динамическая block-разметка. Исходники
-//! `server/gameserver/appserver/shape.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb`.
+//! `appserver/shape.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`.
 //!
-//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: constructor RVA `0x0005B9A0`,
-//! base `SetPosXY` `0x0002ABE0`, `GetTileX/GetTileY/SetTileXY`
-//! `0x0005B110`/`0x0005B140`/`0x0005B170`, direction/geometry
-//! `0x0004A1C0`/`0x000FC5C0`/`0x0005B2B0..0x0005B380` и `SetBlock`
-//! `0x0005BA60`.
-//!
-//! EXE подтверждает region-link `+0x40`, region ID `+0x44`, float X/Y,
-//! area/next-area links `+0x60/+0x64`, next-area X/Y `+0x68/+0x6C`, нулевые
-//! direction/position/state/action и остальной next-state, speed `2000.0`.
-//! Старые raw pointers region/area выражены typed link и area-index: живое
-//! владение остаётся у `CServerRegion`, без self-reference и `unsafe`.
-//! Float-поля хранятся бит-в-бит; tile conversion использует подтверждённое
-//! exact EXE x87 truncation toward zero. Неопределённый результат x87 для
-//! non-finite/out of range координаты становится локальным
-//! `BLOCKED_MISSING_FACT`.
-//!
-//! `SetBlock` меняет только клетки с исходным block `3 -> 0` либо `0 -> 3` в
-//! прямоугольнике virtual figure `DIR 2/DIR 0`. Конкретная figure и RTTI-факты
-//! принадлежат derived owner-ам и передаются как `ShapeRuntimeFacts`; это не
-//! перенос monster/goods/player семантики в базовый shape. Out-of-bounds
-//! footprint-клетки исходный owner пропускает; несогласованный in-bounds
-//! storage остаётся typed-границей `CRegion`. Остальная shape
-//! поверхность ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! `IsInAround` RVA `0x0005BCE0` также `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY`: region ID должен совпасть, обе area-ссылки должны
-//! существовать, а абсолютная разница X и Y обязана быть меньше двух. Typed
-//! lookup `ShapeAreaLookup` разрешает owned area-index обратно в координаты
-//! вместо сохранения двух сырых `CArea*`; живой владелец областей остаётся
-//! у `CServerRegion` старого пакета и реализует lookup через свой
-//! `get_area_by_index`.
-//! `Distance(CShape*)` RVA `0x0005B390` выражен через immutable `ShapeView`:
-//! сохраняются truncation-toward-zero positions, virtual figure extents,
-//! wrapping subtraction и signed max без искусственного clamp к нулю.
-//! `RealDistance(CShape*)` RVA `0x0005B780` использует тот же view: после
-//! center-distance выбирает большую clearance-ось, вычитает figure extent
-//! обеих сторон и масштабирует евклидову дистанцию по этой оси. Нулевой
-//! указатель исходника выражен `Option` и возвращает `LONG_MAX`.
-//! Координатные `Distance(long,long)`, `Distance(long,long,long,long)` и
-//! `RealDistance(float,float)/(long,long)` RVA `0x0005B580..0x0005B730`
-//! также принадлежат этому owner-у. Общий integer helper теперь используется
-//! боевыми и AI-владельцами через тонкий adapter `skills::baseattack`, поэтому
-//! расстояние больше не дублируется в конкретном навыке.
-//! `InitMoveCheckCellList` RVA `0x0005BE60` материализован как process-owned
-//! registry: точные 96 offsets распределены по трём figure и восьми direction,
-//! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
-//! Persistence decode `0x0005B280/0x0005BC30` сохраняет wire-порядок и exact
-//! quirk: сериализованная position читается, но live `m_lPos` становится нулём.
-//! `AddToByteArray` и `AddShapeToByteArray` сохраняются отдельными слоями:
-//! первый добавляет `CBaseObject`, второй пишет GUID и shape-поля в исходном
-//! порядке без параллельного wire-кодека.
+//! Float-поля хранятся бит-в-бит; tile conversion использует подтверждённое x87
+//! truncation toward zero, а неопределённый для non-finite/out of range результат
+//! становится `BLOCKED_MISSING_FACT`. `SetBlock` меняет только клетки с block
+//! `3 -> 0`/`0 -> 3` в прямоугольнике virtual figure `DIR 2/DIR 0`; конкретная
+//! figure и RTTI-факты принадлежат derived owner-ам и приходят как
+//! `ShapeRuntimeFacts`. Persistence decode читает сериализованную position, но
+//! live `m_lPos` становится нулём — подтверждённая странность оригинала. Общий
+//! integer helper расстояний переиспользуется боевыми и AI-владельцами через
+//! `skills::baseattack` и не дублируется в навыках. Остальная поверхность
+//! `CShape` остаётся `UNKNOWN`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 use super::region::{CRegion, RegionCellAccessBlock};

@@ -1,42 +1,20 @@
 //! ИИ демона-босса `CBossFiend` (AI104): восемь одноразовых HP-порогов
 //! призыва, строгий таймер повторного призыва ниже 8% HP, пороговый выбор
 //! боевого навыка и enemy-проход с минимальной дистанцией текущего навыка.
+//! Исходный владелец PDB: `appserver/ai/bossfiend.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp`.
-//! Машинная сверка по этой паре:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | ctor записывает `timeGetTime` и открывает все восемь HP-порогов ровно в момент создания AI-owner-а | VA `0x00609310` | [`BossFiendAiState::new`] | `MATCH` |
-//! | `SelectAttackSkill`: один исходный RNG-бросок, восемь HP-порогов, повторный призыв ниже 8% HP по строгой проверке `last + persist < now`; накопление `odds` через исключённые ID `1`, `2` и `0x1f9`; исход без совпадения — возврат без назначения текущего навыка (в отличие от default у `CBossBlue`) | VA `0x00609670` | [`select_boss_fiend_attack_skill`], [`BossFiendSkillSelection`] | `MATCH` |
-//! | полная фиксация выбранного навыка: проверка таймера и запись момента призыва используют два отдельных чтения часов в исходных местах | тот же VA | [`choose_boss_fiend_attack_skill`] | `MATCH` |
-//! | `OnSearchEnemy`: один выбор проходит игроков, затем питомцев и сохраняет особое предпочтение целей не ближе минимальной дистанции текущего навыка | подтверждён прежней шапкой владельца | [`select_boss_fiend_enemy`] | `MATCH` |
-//!
-//! Остаются hub-владением: общий monster tick hub — `Run`, боевой caller
-//! `OnSchedule` без обычного attack-speed gate, `OnIdle` со случайным шагом
-//! либо ожиданием, `OnMoving` и усыпление при отсутствии игроков. FIFO caller
-//! сохраняет target/current skill, `Tracing`, `CheckCast` и потерю цели.
-//! Выполнение выбранного навыка (`bossfiendsummon` и реестр исполнителей)
-//! остаётся у своих skill-owner-ов.
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`BossFiendDispatcherMonster`] — доступ к одноразовым порогам призыва и
-//!   таймеру последнего принудительного призыва на hub-владельце `CMonster`.
-//! - Часы проверки таймера и фиксации призыва читаются отдельными вызовами
-//!   `now_milliseconds` (fn-параметр делегата старого main loop); точное
-//!   значение равно `game_tick_milliseconds`
-//!   (`GameClockContext::now_milliseconds`).
-//! - Enemy-проход повторяет общий шов кандидатов
-//!   [`super::lord::EnemySearchDispatcherRegion`]/
-//!   [`super::lord::EnemySearchDispatcherPlayer`]; ядро отбора
-//!   [`consider_distance_target`] ниже повторяет общее дистанционное ядро
-//!   `ai/guardtarget.rs` (`consider_guard_distance_target`), но держит тело
-//!   собственного RVA владыки демона.
+//! Отличия от `CBossBlue` сохранены: ctor записывает `timeGetTime` и открывает
+//! пороги в момент создания; odds идут через исключённые ID `1`, `2` и `0x1f9`;
+//! без совпадения — возврат без назначения текущего навыка (fallthrough, не
+//! default); проверка таймера и запись момента призыва используют два отдельных
+//! чтения часов. Остаются hub-владением: общий monster tick, боевой caller
+//! `OnSchedule` без attack-speed gate, `OnIdle`, `OnMoving`, усыпление и реестр
+//! исполнителей `bossfiendsummon`. Швы: [`BossFiendDispatcherMonster`] — пороги
+//! и таймер призыва; ядро [`consider_distance_target`] повторяет
+//! `ai/guardtarget.rs::consider_guard_distance_target`, но держит тело
+//! собственного VA.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::{MonsterProperties, MonsterSkill};
 

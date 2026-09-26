@@ -1,54 +1,20 @@
 //! ИИ владыки `CLord` (AI100): hurt-план бегового отвода от призванной формы,
-//! общий enemy-проход ближайшего игрока/питомца и фазовый выбор боевого
-//! навыка по доле HP.
+//! общий enemy-проход ближайшего игрока/питомца и фазовый выбор боевого навыка
+//! по доле HP. Исходный владелец PDB: `appserver/ai/lord.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp`.
-//! Машинная сверка по этой паре:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `SelectAttackSkill`: один RNG-бросок caller-а, HP сохраняется как `f32`, деление и сравнения на x87-подобной ширине; `[20%, 50%)` → `TRUNC(roll * float(0.6666667))`, `< 20%` → `roll / 2`; исключённые ID `1`/`2` продолжают копить `odds` | VA `0x0060AF60` | [`select_lord_attack_skill`] | `MATCH` |
-//! | `WhenBeenHurted`: общая Defense-ветвь → скан квадрата младшего байта `figure` в порядке `x -> y` через `CServerRegion::GetShape`, первая `CSummonShape` → направленный беговой отход; атакующий принимается только при пустой прежней цели | VA `0x0060B0B0` | [`LordHurtPlan`], [`plan_lord_hurt_response`], [`apply_lord_hurt_response`] | `MATCH` |
-//! | `OnSearchEnemy` AI100: игроки перед питомцами, равная дистанция заменяет предыдущую запись | подтверждён прежней шапкой владельца | [`select_lord_enemy`] через [`select_nearest_player_or_pet`] | `MATCH` |
-//!
-//! Вызов `0x0060B259` идёт через направленный MoveTo (`0x004C7CB0`) в общий
-//! координатный MoveTo (`0x004C9020`): два Slip с исходным направлением,
-//! Move(run=1), затем отдельное событие Move перед HasTarget/SetTarget. Отказ
-//! любого Slip не публикует частичный шаг; общий обработчик сохраняет формулу
-//! задержки и свежий timestamp после spatial-вызова. Этот общий MoveTo-контракт
-//! — дом `ai/monsterai.rs`, здесь он только вызывается.
-//!
-//! Остаются hub-владением: тела общего monster tick hub — `Run`
-//! (VA `0x0060E250` → `CMonsterAI::Run` RVA `0x0C7D10`), `OnSchedule`
-//! (VA `0x0060AF50` → thunk общего расписания), `OnIdle`, `OnMoving`
-//! `CMonsterAI`/`CBossBlue`/`CBossFiend`/`CLord` и `CRage::End` (RVA
-//! `0x59F790`). Там же — реальный путь `monsterbaseattack`, назначающий
-//! выбранный навык и ближайшую живую цель, и исполнители `lordfastattack`/
-//! `lordwiderangingattack` конкретных стадий и эффектов.
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`LordDispatcherMonster`] — общая Defense-ветвь `when_been_hurted` и
-//!   назначение цели hub-владельца `CMonster` (state-машина AI и FIFO
-//!   остаются hub-владением).
-//! - [`LordDispatcherGame`] — размеры области и `GetShape` одной клетки с
-//!   resolver-ом hub-владельца; `None` соответствует исходному отказу
-//!   `GetShape`, клетка пропускается без результата, как и прежде.
-//! - [`EnemySearchDispatcherRegion`]/[`EnemySearchDispatcherPlayer`] — общий
-//!   проход кандидатов (players → pets) в исходном девяти-area порядке живого
-//!   региона с фильтром живых игроков этого региона и приручённых живых
-//!   питомцев; теми же швами пользуются `ai/bossblue.rs` и `ai/bossfiend.rs`.
-//!   [`select_nearest_player_or_pet`] — единый дом этого прохода, а правило
-//!   минимальной дистанции навыка живёт отдельно в `ai/guardtarget.rs`.
-//! - Часы каждого события читаются отдельным вызовом `now` (closure/fn от
-//!   делегата старого main loop); точное значение равно
-//!   `game_tick_milliseconds` (`GameClockContext::now_milliseconds`).
-//! - Пространственная мутация и wire-доставка MoveTo остаются у общего ядра
-//!   `ai/monsterai.rs` и hub-владельца `CGame`.
+//! Остаются hub-владением: тела общего monster tick (`Run`, `OnSchedule`,
+//! `OnIdle`, `OnMoving`), реальный путь `monsterbaseattack`, назначающий
+//! выбранный навык и цель, и исполнители `lordfastattack`/`lordwiderangingattack`
+//! конкретных стадий. Швы: [`LordDispatcherMonster`]/[`LordDispatcherGame`] —
+//! hurt-ветвь и `GetShape` одной клетки на владельце `CMonster`/`CGame`;
+//! [`EnemySearchDispatcherRegion`]/[`EnemySearchDispatcherPlayer`] — общий
+//! проход кандидатов (players → pets), которым пользуются и боссы;
+//! [`select_nearest_player_or_pet`] — единый дом прохода, правило min-distance
+//! отдельно в `ai/guardtarget.rs`; часы — отдельным вызовом `now` делегата;
+//! пространственная мутация и wire-доставка MoveTo — у общего ядра
+//! `ai/monsterai.rs` и `CGame`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::{MonsterProperties, MonsterSkill};
 use nebokrai_shared::runtime::get_line_direction;

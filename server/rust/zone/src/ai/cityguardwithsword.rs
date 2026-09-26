@@ -1,42 +1,23 @@
 //! Городские охранники `CCityGuardWithSword` (AI10) и `CCityGuardWithBow`
 //! (AI11) стационарной семьи: точка поста, фильтры владельца города по
-//! фракции/союзу, правило минимальной дистанции навыка и унаследованная
-//! ветвь `Tracing` с сбросом за `chase_range`.
+//! фракции/союзу, правило минимальной дистанции навыка и унаследованная ветвь
+//! `Tracing` с сбросом за `chase_range`. Исходные владельцы PDB:
+//! `appserver/ai/cityguardwithsword.cpp` и соседний `cityguardwithbow.cpp`;
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp`
-//! и соседний `cityguardwithbow.cpp`. Машинная сверка: свидетельства прежней
-//! шапки владельца плюс построчно дочитанные тела этой сборки:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `OnSearchEnemy` AI10: при имеющейся цели (`HasTarget ≠ 0`) и заданном посте (`m_lX/m_lY ≠ −1`) сравнивается только `RealDistance(long,long)` до поста с `GetChaseRange` (owners vt `+0x13C`) — при превышении virtual `OnLoseTarget` (`+0x2C`); новый selector и добавочный поиск в этой ветви не исполняются | VA `0x0060E290` | [`check_guard_station_target`] | `MATCH` |
-//! | `OnSearchEnemy` AI10 (без цели) и AI11 (`0x0060DB10`, с прежним virtual `OnLoseTarget` у лучника): selector — `SearchEnemyGuildMember` (vt `+0x90`) и `SearchEnemyGuildPet` (vt `+0x94`), ближайший из двух, игрок при равной дистанции. **`SearchEnemyGuildCarriage` (vt `+0x98`) эти тела не вызывают**; по статическому скану `CALL [reg+0x98]` её единственные caller-ы — `CVilCouGuardWithBow::WhenBeenHurted` (`0x0060C8F6`) и `::OnSearchEnemy` (`0x0060C972`) деревенского AI16 | VA `0x0060E290`, VA `0x0060DB10`, vtable `0x00662BCC`, скан call-сайтов `+0x98` | [`select_city_guard_enemy`] | `MATCH`; прежний hub дополнительно комбинировал проход повозок `603` — установленное расхождение hub, здесь проход удалён (он принадлежит деревенской AI16-семье) |
-//! | фильтры selector-а: ненулевая `m_lFactionID` игрока == `GetFactionID` региона (region vt `+0xB0`) либо ненулевая `m_lUnionID` == `GetUnionID` (`+0xB4`) исключает игрока; хозяин-игрок с тем же совпадением защищает питомца; минимальная дистанция навыка vt `+0x70` внутри каждого прохода | VA `0x0060E350`, VA `0x0060E510` | [`select_city_guard_enemy`] | `MATCH` |
-//! | живость кандидатов гарантирована фильтром `CServerRegion::FindAroundObject` (`IsDied` внутри `0x00480E70`), региональное членство — списком областей | RVA `0x00480E70` | [`select_city_guard_enemy`] (hub-критерии `is_dead`/регион) | `MATCH` |
-//! | `OnLoseTarget` AI9/AI10/AI15/AI19: базовый `CMonsterAI::OnLoseTarget` (`0x005DCC30`, только цель), возврат к посту, заблокированная клетка заменяется одним `GetRandomPosInRange` на квадрате 3×3 | VA `0x0060D020` (прежний владелец) | [`release_guard_sword_target`], [`lose_guard_sword_target`] | `MATCH` (по прежней шапке владельца; тело построчно не перечитано) |
-//! | `Tracing`: шаг назад от слишком близкой цели, `ForceMove` в случайную клетку 3×3 около далёкой (затем отдельный `Move(0)`), сброс за `chase_range` через virtual `OnLoseTarget` и внешний `SearchEnemy` | VA `0x0060D0E0` (прежний владелец) | [`trace_city_sword_target`] | `MATCH` (по прежней шапке владельца; тело построчно не перечитано) |
-//! | стационарное `OnSchedule` `0x0020B890` — общий dispatcher семьи до Begin; `OnIdle` один раз фиксирует пост (`m_lX/m_lY`) и продолжает через общий idle FIFO | зафиксированный факт `ai/monsterai.rs`; запись поста — прежний владелец | [`GuardStationState`] (`ai/guardtarget.rs`), [`check_guard_station_target`] | `MATCH` (по зафиксированному факту) |
-//!
-//! Остаются hub-владением: общий monster tick hub, материализация FIFO,
+//! Установленное расхождение hub исправлено: selector-пути AI10/AI11 не вызывают
+//! `SearchEnemyGuildCarriage` (vt `+0x98`) — проход повозок принадлежит
+//! деревенской AI16-семье и здесь удалён. Часть строк семьи (`OnLoseTarget`
+//! AI9/10/15/19, `Tracing`) держит статус по прежней шапке владельца без
+//! построчной перечитки. Остаются hub-владением: общий monster tick, FIFO,
 //! `Hibernate`, `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и реальный путь
-//! `monsterbaseattack`. Минимальная дистанция текущего навыка вычисляется
-//! hub-caller-ом через свойства навыка (`QueryProperty(5004)` — эквивалент
-//! skill vt `+0x70`-запроса).
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`CityGuardDispatcherPlayer`]/[`CityGuardDispatcherRegion`] — фракция и
-//!   союз игрока, владелец города региона; общие проходы кандидатов
-//!   повторяют шов `ai/lord.rs` (`EnemySearchDispatcher*`).
-//! - [`GuardStationDispatcherMonster`]/[`CityGuardDispatcherMoveShape`] —
-//!   состояние поста на hub-владельце `CMonster` и ID текущего навыка формы.
-//! - Мгновенный `ForceMove` и RNG случайных клеток приходят через
-//!   [`super::jiumai::JiuMaiDispatcherGame`] и `RegionRandomContext` —
-//!   прежние контракты hub-владельца.
+//! `monsterbaseattack`; min-distance текущего навыка вычисляет hub-caller через
+//! `QueryProperty(5004)`. Швы: [`CityGuardDispatcherPlayer`]/[`CityGuardDispatcherRegion`]
+//! — фракция/союз и владелец города (проходы — общий шов `ai/lord.rs`);
+//! [`GuardStationDispatcherMonster`]/[`CityGuardDispatcherMoveShape`] — состояние
+//! поста и ID текущего навыка; `ForceMove` и RNG клеток — через
+//! [`super::jiumai::JiuMaiDispatcherGame`] и `RegionRandomContext`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::runtime::get_line_direction;
 

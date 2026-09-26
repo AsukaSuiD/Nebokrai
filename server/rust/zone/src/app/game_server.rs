@@ -2,28 +2,15 @@
 //! game-направления. Исходник `nets/netserver/mynetserver.cpp`; источник
 //! контракта — та же точная пара, что у [`crate::app::game_message`].
 //!
-//! Машинно подтверждённые точки (дизассембл `.exe/gameserver.exe`):
-//! - ctor `CMyNetServer` `0x418E70`: базовый `CServer` ctor `0x418A80`,
-//!   vtable `0x64D024`, поле `+0x120 = 0`, limits `+0x14C = 3` и
-//!   `+0x150 = 0x400000` — точные константы component;
-//! - `CreateServerClient` `0x418EB0` имеет статус `IMPLEMENTED` и создаёт
-//!   downstream `CMyServerClient`; sender-виртуальные slots: `SendBySocketID`
-//!   slot `+0x38`, `SendByMapID` slot `+0x3C`; `OnMapIDError` `0x418F10`.
-//!
-//! `ServerCommandHandle` во всех трёх случаях синхронно копирует payload в
-//! owned-команду до возврата, поэтому старый общий RLE scratch-buffer не
-//! требует Rust lifetime-lock. Реальный net-owner и порядок команд остаются
-//! общим `CServer`; Linux transport выполняет общий owner, а доменные
-//! сообщения здесь не исполняются. Та же FIFO типизированно заменяет
-//! внутрипроцессные reconnect pointer-сообщения (typed `GameServerEvent`
-//! вместо `0x6F902/0x6F904 + pointer`).
-//!
-//! Oversized `SendAll` до отправки печатал inherited `CMySocket::m_lIndexID
-//! +0x34`. Exact `CMySocket` constructor это поле не инициализирует, а
-//! перенесённый `CGame::InitNetServer` writer-а не содержит. Поэтому Rust
-//! хранит только явно наблюдённое позднее значение как `Option`; сама
-//! локальная logging-граница отмечена в message-owner-е, не заменена
-//! придуманным нулём.
+//! `ServerCommandHandle` синхронно копирует payload в owned-команду до возврата,
+//! поэтому старый общий RLE scratch-buffer не требует Rust lifetime-lock. Та же
+//! FIFO типизированно заменяет внутрипроцессные reconnect pointer-сообщения
+//! (typed `GameServerEvent`). Реальный net-owner и порядок команд остаются общим
+//! `CServer`; Linux transport выполняет общий owner, доменные сообщения здесь не
+//! исполняются. Oversized `SendAll` печатал inherited неинициализированное поле
+//! `m_lIndexID`: Rust хранит только явно наблюдённое позднее значение как
+//! `Option`, не заменяя границу придуманным нулём.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#сетевой-край-gameserver
 
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddrV4};

@@ -1,51 +1,19 @@
 //! ИИ близнецов `CJiuMai` (AI101): создание и связывание пары, сближение
 //! близнецов, выбор цели с минимальным текущим HP и hurt-поведение с отходом
-//! или приёмом атакующего.
+//! или приёмом атакующего. Исходный владелец PDB: `appserver/ai/jiumai.cpp`;
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp`.
-//! Машинная сверка: разобраны все шесть функций класса, кроме ctor
-//! `0x0060A5D0` — построчно не читан, а его известный эффект (нулевые
-//! lifecycle-поля) зафиксирован владельцем состояния:
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `OnIdle`: призванный близнец берёт `m_lTwinsID` из `GetMasterInfo()->lMasterID`; обычный монстр один раз ставит `tagMasterInfo{lMasterType=[owner+4], lMasterID=[owner+8]}`, `GetRandomPosInRange(x−5, y−5, 10, 10)`, `AddSummonedCreature(…, −1, 0xFFFFFFFF)` и пишет ID близнеца, при отказе spawn — `−1`; любой исход завершается базовым `CMonsterAI::OnIdle` (`0x005DCC60`) | VA `0x0060A5F0` | [`ensure_jiumai_twin`] | `MATCH`, кроме ветки отказа `GetRandomPosInRange`: машинный код спавнит с уже записанным выходом функции позиции и ставит `−1` только при отказе `AddSummonedCreature`/cast; hub-форма `position.ok().and_then(spawn)` даёт `−1` и при отказе позиции — `PARTIAL` |
-//! | `OnSchedule`: только живой владелец с пустыми очередями `[+0x14]`/`[+0x28]`; живой близнец (region `FindObject(600, m_lTwinsID=[this+0x7C])`, dynamic_cast) дальше пяти клеток при текущей цели не ближе к владельцу получает `GetRandomPosInRange(twin.x−5, twin.y−5, 10, 10)` и `CMoveShape::ForceMove(run=0)`; затем общий боевой хвост без `GetAtcInterval`-гейта (`HasTarget` → цель жива и `IsAttackAble` → навык/`OnChangeSkill` → vt `+0x4C` → Begin → `ASA_ATTACK`, отказ — `OnLoseTarget + AddAIEvent(5)`) | VA `0x0060AB10` (Run-вход `0x0060AB16` — пустой общий hook `0x00485540`) | [`maintain_jiumai_twin`] префикс; боевой хвост — общий диспетчер `ai/monsterai.rs` | `MATCH` |
-//! | `OnSearchEnemy`: игроки перед питомцами, минимальный текущий HP (vt `+0xD0`) внутри `GetGuardRange` (vt `+0x138`), равный HP сохраняет первую запись, живость — фильтром | VA `0x0060AD10` | [`select_jiumai_enemy`] | `MATCH` |
-//! | `SetTarget`: базовый `CMonsterAI::SetTarget` (`0x005DCC40`); живой близнец без собственной цели (`GetAI` cast, `HasTarget == 0`) получает virtual `SetTarget` той же пары | VA `0x0060AA50` | [`assign_jiumai_target`] | `MATCH` |
-//! | `OnLoseTarget`: базовый `CMonsterAI::OnLoseTarget` (`0x005DCC30`); при успехе — живой близнец с `HasTarget` получает свой virtual `OnLoseTarget`; возврат 1/0 по базовому переходу | VA `0x0060A990` | [`release_jiumai_target`], [`synchronize_jiumai_target_loss`] | `MATCH` |
-//! | `WhenBeenHurted`: базовый hurt всегда; тип 400 вне боя — существующий игрок региона принимается целью; иначе отход от ближайшего игрока, шаг к ближайшему монстру (иначе), отсутствие ориентира — шаг по текущему направлению; тип 600 вне боя — приручённое существо (`0x004E6460`) или повозка (`0x004E6D30`) принимается целью | VA `0x0060A750` | [`retarget_jiumai_after_hurt`] | `MATCH` |
-//! | hurt-отход: найденный ориентир задаёт направление формы `CShape::SetDir` (owner vtable `+0x60`, `0x0044A1C0`) перед `GetDirPos` и общим координатным `CBaseAI::MoveTo(run=0)` (AI vtable `+0x58`, `0x004C9020`); отсутствие ориентира сохраняет текущее `GetDir` (vtable `+0x5C`) | RVA-место `0x0060A89F`/`0x0060A8E7`; vtable `CShape` `0x0064EA04` | [`retarget_jiumai_after_hurt`] (запись направления) | `MATCH`; прежний hub эту запись не выполнял (расхождение устранено) |
-//!
-//! `GetDirPos` (`0x0045B330`) безотказен для восьми направлений (табличное
-//! сложение дельт) — `Result`-форма `CShape::get_direction_position` в
-//! валидном потоке не даёт иного исхода. Входной state-вопрос `0x0047B150`
-//! собственных `OnSearchEnemy` и пустой hook `0x00485540` собственных
-//! `OnSchedule` — `RET1`-эквиваленты, наблюдаемого эффекта не имеют.
-//!
-//! Остаются hub-владением: общий monster tick hub — `Run` (`0x0060E250` →
-//! `CBaseAI::Run` `0x004C7D10`), материализация active/passive FIFO, реальный
-//! путь `monsterbaseattack` и runtime-входы `CGame`. `CGame` владеет
-//! журналированием, пакетами, привязкой игрока и фактическим
-//! спавном/переносом: они приходят через фасады ниже. Отложенная
-//! синхронизация хранит метку связанной цели (местная метка
-//! [`JiuMaiAiState::linked_target`], машиной не требуется — см. прежнего
-//! владельца).
-//!
-//! Швы к hub-владельцам:
-//!
-//! - [`JiuMaiDispatcherMonster`] — доступ к состоянию пары, признакам
-//!   призыва/повозки, общей hurt-ветви и записи направления формы на
-//!   hub-владельце `CMonster`.
-//! - [`JiuMaiDispatcherGame`] — `GetRandomPosInRange` с RNG hub-владельца,
-//!   фактический `AddSummonedCreature` и мгновенный `ForceMove` монстра.
-//! - [`JiuMaiDispatcherPlayer`] — текущее HP игрока для min-HP селектора;
-//!   проходы кандидатов повторяют общий шов `ai/lord.rs`
-//!   (`EnemySearchDispatcherRegion`).
+//! PARTIAL: в ветке отказа позиции машинный код спавнит с уже записанным выходом
+//! `GetRandomPosInRange` и ставит `−1` только при отказе `AddSummonedCreature`,
+//! а hub-форма `position.ok().and_then(spawn)` даёт `−1` и при отказе позиции.
+//! Остаются hub-владением: общий monster tick (`Run` → `CBaseAI::Run`),
+//! материализация FIFO, реальный путь `monsterbaseattack`, журналирование,
+//! пакеты и фактический спавн/перенос (`CGame`). Швы:
+//! [`JiuMaiDispatcherMonster`]/[`JiuMaiDispatcherGame`]/[`JiuMaiDispatcherPlayer`]
+//! — состояние пары, `GetRandomPosInRange`/`AddSummonedCreature`/`ForceMove` и HP
+//! игрока; проходы кандидатов — общий шов `ai/lord.rs`. Метка
+//! [`JiuMaiAiState::linked_target`] — местная и машиной не требуется.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::MonsterProperties;
 use nebokrai_shared::runtime::get_line_direction;

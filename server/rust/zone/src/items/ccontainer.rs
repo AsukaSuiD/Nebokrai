@@ -2,9 +2,8 @@
 //! listener-ов с контрактами add/remove/duplicate и нулевым domain-смыслом
 //! destructor-а.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, SHA-256 EXE
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, PDB
-//! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
+//! Точная пара `gameserver.exe + GameServer.pdb` (идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! Исходный owner `server/gameserver/appserver/container/ccontainer.cpp`.
 //!
 //! Constructor/destructor RVA `0x000DF570/0x000DF2A0` владеют только ordered

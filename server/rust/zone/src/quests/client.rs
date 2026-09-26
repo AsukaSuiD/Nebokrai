@@ -1,7 +1,7 @@
 //! Клиентская запись задания из `CPlayer` Game
 //! (`server/gameserver/appserver/player.cpp`).
-//! GameServer/gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E;
-//! GameServer.pdb: RSDS 5bee6dd1-bf90-49b8-8be9-eb25c4038d53, age 2.
+//! Точная пара `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
+//! (идентификаторы — docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! Снимок входа `AddQuestDataByteArray_ForClient` VA 0x0043E229–0x0043E339
 //! и уведомление добавления `CPlayer::AddQuest` VA 0x004453F4–0x004454FE
 //! (`0xBFF2C`) записывают одинаковый набор полей в одном порядке: u16 ID,

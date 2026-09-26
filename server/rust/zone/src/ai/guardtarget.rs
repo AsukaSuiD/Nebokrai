@@ -6,9 +6,9 @@
 //! запись. Фильтры страны, фракции и союза остаются у конкретных владельцев.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Дистанционное ядро разобрано построчно по телам
+//! (идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки;
+//! RVA истинные, VA − 0x400000). Дистанционное ядро разобрано построчно по телам
 //! `CCityGuardWithSword::SearchEnemyGuildMember` (VA `0x0060E350`, ветки
 //! замены при equal/compare и минимальной дистанции навыка vt `+0x70`),
 //! `SearchEnemyGuildPet` (VA `0x0060E510`) и общему выбору

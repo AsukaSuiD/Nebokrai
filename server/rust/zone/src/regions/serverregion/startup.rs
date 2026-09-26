@@ -1,34 +1,22 @@
 //! Startup decode-семейство `CServerRegion`: полный World -> Game snapshot
 //! decoder `DecordFromByteArray`, setup decoder `DecordSetupFromByteArray` с
 //! return-setup prefix, exact lookup `FindForbidGood` и resource-обёртки
-//! `Save/New/Load`. Исходный владелец — `appserver/serverregion.h/.cpp`;
-//! сверка по точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы
-//! сборки — `server/rust/src/manifest/_gameserver_export_manifest.toml`).
-//! Переходный агрегат `CServerRegion` и доменные `CNpc`/`CMonster` остаются
-//! в старом пакете: decode-ядра ниже работают над единым store-швом
-//! `ServerRegionDecodeStore` (реализация в `appserver/serverregion.rs` рядом
-//! с store-швами spawn setup) и повторно используют spawn store-трейты.
-//! Pub(crate)-обёртки агрегата и оркестр `servermessage`/`game` не правятся:
-//! обёртка делегирует ядру, log/send/guard остаются closure-обвязками
-//! исходных context-трейтов, trace-обвязки — у переходного владельца
-//! batch-ядер. Имя региона передаётся шву byte-exact (`name_bytes`):
-//! ANSI-преобразование WINDOWS_1251 остаётся у переходного владельца, где
-//! уже есть `encoding_rs`; zone не заводит новой зависимости, а `CRegion`
+//! `Save/New/Load`. Исходный владелец — `appserver/serverregion.h/.cpp`; сверка
+//! по точной паре `gameserver.exe` + `GameServer.pdb`. Decode-ядра работают над
+//! единым store-швом `ServerRegionDecodeStore` (реализация в
+//! `appserver/serverregion.rs` рядом со store-швами spawn setup) и повторно
+//! используют spawn store-трейты; log/send/guard и trace-обвязки остаются у
+//! переходного владельца. Имя региона передаётся шву byte-exact
+//! (`name_bytes`): ANSI-преобразование WINDOWS_1251 остаётся у переходного
+//! владельца с `encoding_rs`, zone не заводит новой зависимости, а `CRegion`
 //! по-прежнему владеет byte-exact именем.
 //!
-//! Pub `DecordFromByteArray@CServerRegion` — RVA `0x000858F0`,
-//! `DecordSetupFromByteArray` — RVA `0x0007EAC0`, `FindForbidGood` — RVA
-//! `0x0007D6A0` из карты стены; машинная сверка тел отдельно не выполнялась,
-//! статусы не повышались. Перенесённые тела сверены statement-в-statement с
-//! телами переходного владельца на момент переноса: различия только в
-//! pub-видимости, путях модулей и объявленном store-шве.
-//!
-//! Не переносятся: context-трейты spawn-эффектов и
-//! `ServerRegionDecodeContext` старого пакета, AI refresh-фасады
-//! `refresh_monster_groups*` и weather AI-fragment этого агрегата,
-//! lookup-семья NPC (`find_npc_by_name`, accessors, owned-remove/detach),
-//! subtype wire-tail декодеры War/City/Country и сериализаторы
-//! `AddToByteArray` (`0x00019120`)/`AddRegionParamToByteArray`.
+//! Перенесённые тела сверены statement-в-statement с телами переходного
+//! владельца; машинная сверка Pub-тел отдельно не выполнялась, статусы не
+//! повышались. Не переносятся: context-трейты spawn-эффектов, AI refresh-фасады
+//! `refresh_monster_groups*`, weather AI-fragment, lookup-семья NPC и subtype
+//! wire-tail декодеры War/City/Country — они остаются у старого пакета.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#региональное-пространство
 
 use super::areagrid::AreaGridBlock;
 use super::queries::legacy_msvc_npc_hash_traversal;

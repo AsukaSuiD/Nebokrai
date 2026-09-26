@@ -1,37 +1,20 @@
 //! Позиционное owning-ядро `CEquipmentContainer` исторического GameServer:
 //! 17 колонок с add/remove/swap, timed/AI partial effects и ростом фей.
+//! Исходный owner `appserver/container/cequipmentcontainer.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb`. Report-ы роста феи
+//! параметризованы generic-швом `FairyGrowEffectSink` (см. `fairyproperties.rs`);
+//! extend-id `2` — вариант `PlayerContainerKind::Equipment` каталога
+//! `items/playercontainers.rs` (дизайн D4).
 //!
-//! Report-ы роста феи параметризованы generic-швом `FairyGrowEffectSink`
-//! (см. `fairyproperties.rs`); extend-id `2` — вариант
-//! `PlayerContainerKind::Equipment` каталога `items/playercontainers.rs`
-//! (дизайн D4).
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cequipmentcontainer.cpp`. Семнадцать
-//! колонок `0..=16`, их deterministic enum-order, lookup-ы, подсчёты, weight,
-//! `Clear` и mode-зависимый `Release` материализованы по RVA
-//! `0x000ED180..0x000EDB30` и `0x000EEBF0`. `BTreeMap` заменяет legacy
-//! `std::map`, а owned `CGoods` — сырые указатели без изменения порядка.
-//!
-//! Exact EXE сравнивает число непустых колонок именно с 17. Вопреки позднему
-//! архивному донору, `Clear` и `Release` не обнуляют `m_nExpantPkgNum`;
-//! `Release` очищает external listeners через `CGoodsContainer::Release`, а
-//! внутренний self-listener представлен прямым derived callback-ом и потому
-//! не хранится как самоссылка. `Clear` возвращает ordered reports вместе с
-//! владением товарами, а `Release` в test-mode возвращает detached товары;
-//! это безопасная замена legacy pointer lifetime/`GarbageCollect`.
-//!
-//! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
-//! timed/AI/package effects, typed skill/property/message callbacks и rollback
-//! loss. Timed-prefix передаёт изменяемый товар в GoodsAI до проверки equip-place и
-//! захвата слота; назначенный ticket сохраняется и при последующем отказе.
-//! Ordinary/battle-fairy growth замкнут через свойства `CGoods`, включая
-//! old-client update и необратимый delete/add transition; конкретный goods
-//! payload codec и player dispatcher остаются callback-границами связанных
-//! owners. Add-report отдельно хранит факт применения package-extension, так
-//! как native пишет `PackExpand` log и при нулевой дельте. Внешний equipment
-//! codec сохраняет wire-order и partial decode.
-//! Достигнутое ядро не выдаётся за весь контейнер.
+//! Invariant-ы: `Clear` и `Release` вопреки позднему архивному донору НЕ
+//! обнуляют `m_nExpantPkgNum`; внутренний self-listener представлен прямым
+//! derived callback-ом и не хранится самоссылкой; timed-prefix передаёт
+//! изменяемый товар в GoodsAI до проверки equip-place и захвата слота;
+//! назначенный ticket сохраняется и при последующем отказе; add-report отдельно
+//! хранит факт применения package-extension, так как native пишет `PackExpand`
+//! log и при нулевой дельте. Внешний equipment codec сохраняет wire-order и
+//! partial decode. Достигнутое ядро не выдаётся за весь контейнер.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use std::collections::BTreeMap;
 

@@ -1,8 +1,8 @@
 //! Базовый CVisualEffect для состояний и навыков Zone.
 //! GameServer/gameserver.exe + GameServer.pdb, исходный владелец
 //! appserver/states/visualeffect.h/.cpp. Проверены VA 0x005DC1B0..0x005DC234.
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E;
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
+//! Идентификаторы пары —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct CVisualEffect {

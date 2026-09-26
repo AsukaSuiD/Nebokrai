@@ -2,8 +2,9 @@
 //! `src/gameserver/appserver/message/sequencestring.rs`.
 //!
 //! Исходный владелец PDB: `server/gameserver/appserver/message/sequencestring.cpp`.
-//! Пара GameServer: EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB SHA-256 `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
+//! (идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! Машинный код конструктора (VA `0x0042A390`), `Initialize` (`0x0042A6D0`)
 //! и `Serialize` (`0x0042A3D0`) подтверждает: в реестр добавляется `count`
 //! значений прямого MSVCRT `rand`, ноль заменяется единицей, а новый player-owner выбирает

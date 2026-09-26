@@ -3,10 +3,9 @@
 //! пакета делегирует сюда без изменения сигнатур методов, передавая свои
 //! hub-поля типизированными параметрами.
 //!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Публичные символы семейства: `GetMaxHP` (RVA `0x000E65A0`),
+//! Точная пара: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
+//! (идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки). Публичные символы семейства: `GetMaxHP` (RVA `0x000E65A0`),
 //! `GetAttackAvoid` (`0x000E64F0`), `GetElementAvoid` (`0x000E6520`),
 //! `GetHit` (`0x000E6760`), `GetDef` (`0x000E6780`), `GetDodge` (`0x000E6800`),
 //! `GetElementResistant` (`0x000E6880`), `GetElementModify` (`0x000E6900`),

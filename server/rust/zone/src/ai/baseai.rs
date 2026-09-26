@@ -1,105 +1,22 @@
 //! Базовый `CBaseAI` исторического GameServer без hub-типов: три FIFO-очереди
-//! объявленных действий (`active`/`passive`/`war-soul`), object-цель,
-//! dormancy, фоновый список back-stage навыков, active-фаза
-//! `ProcessActiveAction` и пространственная механика `MoveTo`
-//! (`Slip` + задержка одного шага). Порядковые реакции
-//! Defense/Stiffen/Died живут в соседнем `ai/reactions.rs` и переставляют эти
-//! очереди через узкую сварку `PassiveReactionQueues`.
+//! действий (`active`/`passive`/`war-soul`), object-цель, dormancy, фоновый
+//! список back-stage навыков, active-фаза `ProcessActiveAction` и
+//! пространственная механика `MoveTo` (`Slip` + задержка одного шага). Порядковые
+//! реакции Defense/Stiffen/Died живут в соседнем `ai/reactions.rs`. Исходный
+//! владелец PDB: `appserver/ai/baseai.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные
-//! `off pub + 0x1000`). Исходный владелец PDB:
-//! `server/gameserver/appserver/ai/baseai.cpp`.
+//! Инварианты: пустая active-очередь — native `-1`, представленный `None`;
+//! `VecDeque` заменяет `std::queue<std::deque<...>>` с сохранением FIFO; deadline
+//! сравнивается после wrapping-сложения `begin + delay`; время среды приходит
+//! точным `now_ms` (`u32` сохраняет исходное переполнение). Единственная
+//! hub-связь здесь — прямой `&CRegion` в `Slip`; региональный реестр,
+//! around-доставка шагов, часы owner-а и оркестрация монстра остаются
+//! hub-владением через фасады `ai/monsterai.rs`.
 //!
-//! Машинная база (VERIFIED по этой паре):
-//!
-//! - Постановка и очереди: `AddAIEvent` (RVA `0x0C8F90`) кладёт
-//!   `{action, beginning, delay, handling=0} = {+0,+4,+8,+C}` с замером часов
-//!   в момент вызова; `STIFFEN`/`DIED`/`OPEN`/`DEFENSE` всегда идут в
-//!   `passive_actions`, остальные — в `active_war_soul_actions` при любом
-//!   ненулевом флаге и иначе в `active_actions`. PDB подтверждает numeric
-//!   `AI_SHAPE_ACTION 0..8`, `ASA_FORCE_DWROD = 0xFF` и три очереди
-//!   (`ai/events.rs`). `GetCurrentActiveAction` (RVA `0x0C81B0`) читает
-//!   только action первого элемента без проверки handling; пролог начинается
-//!   с `or eax,-1` + `cmp [ecx+0x14],0`, поэтому пустая очередь — это
-//!   native `-1`, в Rust представлена `None`.
-//! - `Run` (RVA `0x0C7D10`): guard owner `[+0x68]` и hibernate `[+0x6c]` →
-//!   OnSchedule → background → passive → active → хвостовой OnIdle только
-//!   при AES_IDLE всех основных фаз и отсутствии цели, затем WarSoul-хвост.
-//!   Сам факт вызова OnSchedule не блокирует OnIdle.
-//! - Общий обработанный-элемент любой из трёх очередей (`ProcessActiveAction`
-//!   RVA `0x0C81D0`, `ProcessPassiveAction` RVA `0x0C84F0`, WarSoul-вариант
-//!   RVA `0x0C8390`): различает ноль, единицу и прочие знаковые `handling`;
-//!   снятие по deadline только при `handling == 1`, ожидание любого action
-//!   кроме `Move` даёт HUNG_UP и блокирует следующую фазу; пробы deadline
-//!   читают часы лениво, после записи handling. Снятие головы завершает
-//!   текущий проход, не исполняя следующий элемент.
-//! - Достигнутый `Stand` из `ProcessActiveAction`: первый вызов обработчика
-//!   всегда считается исполнением и удерживает расписание до исходного срока;
-//!   повторный после истечения снимает событие. `OnIdle` ставит следующий
-//!   `Stand` на 1000 мс только при пустом результате основного прохода и
-//!   отсутствии цели (базовый обработчик; слот +0x48 `CPlayerAI` — пустой
-//!   RET `0x00485540`, с игроком это не срабатывает).
-//! - Object-части `SetTarget`/`GetTarget`/`HasTarget`/`OnLoseTarget`:
-//!   identity `{type, id}`, нулевые type/id не образуют lookup, положительные
-//!   обязательны для HasTarget. `Clear` (RVA `0x0C7F70`) при guard-refresh
-//!   очищает обычные active/passive очереди, object-цель и флаг сна;
-//!   war-soul FIFO и сохранённые времена сна не затрагиваются. Спящий
-//!   владелец (`Hibernate`/`WakeUp`) запоминает оборачивающийся счётчик
-//!   времени; интервал сна вычисляется один раз при пробуждении.
-//! - Back-stage список: `WhenAddBackStageSkill` (RVA `0x0C94B0`) требует
-//!   `owner != null` (`cmp [rcx/rcx+0x68],0`) и `ID != SKILL_UNKNOW`
-//!   (`cmp [esp+4], 0x7FFFFFFF` — наблюдается в прологе) и добавляет ID в
-//!   `m_vBackStageSkills` конкретного AI без дедупликации.
-//!   `OnExecuteBackStageSkills` (RVA `0x0C88E0`) сначала удаляет старые
-//!   UNKNOWN, затем разрешает каждый ID у `CMoveShape`;
-//!   отсутствующий/завершённый навык только помечается UNKNOWN до
-//!   следующего прохода. `Clear` список сохраняет, destructor (RVA
-//!   `0x0C8890`, запись vtable `0x651D24` в прологе) уничтожает вместе с AI.
-//! - Пространство `MoveTo` (RVA `0x0C9020`, пролог `83 ec 18`): один `Slip`
-//!   (RVA `0x0C7FF0`) для ходьбы, два для ненулевого run с исходным желаемым
-//!   направлением; отказ Slip не меняет очередь.
-//!   `Slip` пробует статическую таблицу `_slip_order` — dword-набор 8×8
-//!   (`.data` raw `0x29EDE0`, VA `0x69EDE0`), побайтово совпадающую с
-//!   `SLIP_ORDER` ниже, и построчно
-//!   `s_listMoveCheckCell[figure][direction]` (база VA `0xEF670C`,
-//!   индексация `[n*8+direction]`, `.data`-BSS); `CRegion::get_block`
-//!   возвращает исходные младшие три бита клетки (`& 7`).
-//! - Задержка шага (по телу `0x0C9020`): MSVC считает в
-//!   x87 `fsubr 1000.0` (raw `0x251DB8`) от `fild(4*g_ms)`, затем
-//!   `fmul 0.001` (raw `0x24E9FC`, VA `0x64E9FC`), `fdivr` по скорости
-//!   (vt `+0x6C`), `fmul` по `1_000_000.0` (чётное направление, raw
-//!   `0x251DB4`) либо `1_414_000.0` (нечётное, raw `0x251DB0`),
-//!   `fadd fild` stop-frame (vt `+0xB8`) и `fistp` под forcibly-truncating
-//!   control word (`fstcw`/`or ah,0x0C`); промежуточные значения округляются
-//!   до `float` через `fstp dword`. Глобальный `g_ms` (raw `0x29E1F4`,
-//!   VA `0x69E1F4`) равен 80, поэтому коэффициент кадра
-//!   `(1000 - 4*80)*0.001 = 0.68`. Те же три константы и фактор грузит
-//!   трёхаргументный `CPlayerAI::MoveTo` (ссылки raw `0x109031`/`0x109092`
-//!   и `0x109046`/`0x1090A7`).
-//!
-//! Швы к hub-владельцам:
-//!
-//! - Единственная hub-связь старого файла — обёртка `CServerRegion` вокруг
-//!   `CRegion` в `Slip`; Zone-версия принимает `&CRegion` напрямую
-//!   (`zone/src/regions/region.rs`), а переупаковка `&CServerRegion →
-//!   &region.region` остаётся в делегате старого пакета. Региональный
-//!   реестр, around-доставка шагов, игровые часы owner-а и оркестрация монстра
-//!   остаются hub-владением через существующие узкие фасады
-//!   `ai/monsterai.rs` (`MonsterDispatcherGame::find_slip_step_in_direction`,
-//!   `one_step_move_delay_ms`) — здесь не дублируются.
-//! - `VecDeque` заменяет внутренности `std::queue<std::deque<...>>`, сохраняя
-//!   FIFO и `push_back`; `Vec` заменяет vector back-stage. Время среды
-//!   передаётся точным `now_ms` в момент вызова (`u32` сохраняет исходное
-//!   переполнение); deadline сравнивается после wrapping-сложения
-//!   `begin + delay` (`ai_event_deadline_reached`, см. `ai/events.rs`).
-//!
-//! UNKNOWN (не достраиваются догадкой): указатель
-//! владельца (`m_pOwner` `[+0x68]`) и обработчики вне достигнутых участков;
-//! точная семантика virtual-вызовов (`OnLoseTarget` из `OnStiffen`,
-//! `End(4)` ответ concrete owner-а) — политики разрешения остаются у
-//! hub-владельцев (`appserver/monster.rs`, `appserver/player.rs`).
+//! UNKNOWN: указатель владельца `[+0x68]` и обработчики вне достигнутых
+//! участков; семантика virtual-вызовов `OnLoseTarget`/`End(4)` — hub-политики.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use std::collections::VecDeque;
 

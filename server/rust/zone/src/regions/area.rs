@@ -1,75 +1,19 @@
 //! Storage-часть областей региона (`CArea`): ячейки членства фигур и их
 //! упорядоченные identity-снимки для spatial-операций владельца
-//! `CServerRegion`. Исходник `server/gameserver/appserver/area.cpp`; сверка по
-//! точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`).
+//! `CServerRegion`. Исходник `appserver/area.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY`: constructor RVA `0x00075400`
-//! (старый размер объекта `0x118` подтверждён allocation stride) с
-//! использованием из `CServerRegion::CreateAreaArray` `0x0007BE10`, семейство
-//! членства `GetNumShapes`/`AddObject`/`RemoveObject`/`FindShapes`/
-//! `GetAllShapes` `0x00070B80`/`0x00073B70`/`0x000721F0`/`0x00073DE0`/
-//! `0x000743A0`; inline `CSession::GetPlugList` `0x00070910` из того же
-//! source-owner имеет статус `IMPLEMENTED`.
-//!
-//! Constructor создаёт base-state type `300`, координаты `-1/-1`, девять
-//! пустых vector-storage, три пустые ordered map и один Win32 critical section.
-//! `Vec` и `BTreeMap` заменяют технические контейнеры. Блокировка не
-//! переносится: `CArea` физически принадлежит закрытому массиву региона, а
-//! все изменяющие вызовы уже держат исключительный `&mut CServerRegion`.
-//! Семейство членства хранит только исходные ID/GUID/hash и получает живой
-//! shape-view через resolver исторического `CServerRegion::FindChildObject`;
-//! pointer ownership в `CArea` не вводится.
-//! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal.
-//! `WakeUpMonsters` RVA `0x00073A70` атомарно забирает sleeping storage;
-//! владеющий `CGame` выполняет `CMonsterAI::WakeUp`, публикует изменение HP и
-//! возвращает монстра в список активных, питомцев или повозок либо оставляет
-//! вне области при устаревшем владельце или отсутствующем AI.
-//! Nation `OnClearWar` получает ordered type `600` и sleeping-only views:
-//! они возвращают owned ID в исходном active/sleep/pet/carriage порядке без
-//! введения второго pointer owner-а.
-//! `GetActivedShapes` выражен ordered identity snapshot-ом
-//! players/active monsters/pets/carriages/goods/NPC/other. Owning region
-//! выполняет старый `FindChildObject`, stale-storage cleanup и особый goods
-//! filter `m_lChangeState == CS_DELETE` перед virtual shape AI.
-//! `FindAroundPets` caller получает ordered pet-ID snapshot тех же девяти area
-//! и разрешает canonical monster только у owning region.
-//! `AI` RVA `0x00074500` сохраняет отдельный `timeGetTime` для каждой ordered
-//! goods/protection записи, around-delete с `CS_DELETE` и active→sleep/pet/
-//! carriage переклассификацию только в area без игроков. Ground-goods wire и
-//! state принадлежат actual Game/region owner-у; после их публикации caller
-//! завершает удаление deadline через отдельный reached tail. Derived monster
-//! Сведения AI читаются из канонического владельца `CMonster`.
-//! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
-//! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
-//! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
-//! refresh index при последующей реконструкции другой версии.
-//! Inline `CSession::GetPlugList` возвращает ordered plug-list без копии;
-//! материализация живёт у владельца типа в Zone sessions; Rust slice
-//! сохраняет порядок и запрещает чужую мутацию во время around-send обхода.
-//! `CreateAreaArray` после построения всего массива записывает в inherited
-//! father-slot `+0x40` один и тот же `CServerRegion*`, затем X/Y по
-//! `+0x44/+0x48`. Самоссылочный pointer выражен структурным
-//! `AreaParentLink::OwningServerRegion`: `CArea` уже физически принадлежит
-//! `CServerRegion::areas`, а методы получают живой region-context без
-//! `unsafe`. Это сознательная смена формы API, но не identity/topology
-//! контракта.
-//! `AddWarSoul/DelWarSoul/FindWarSoul` RVA `0x00072F60/0x000710D0/0x00072EA0`
-//! сохраняют exact ordered-map semantics: delete только помечает point
-//! `(-1,-1)`, а find не публикует такие записи и не перезаписывает output key.
-//! `RemoveObject` буквально не удаляет unknown-type hash из
-//! `m_vOtherShapes`; это подтверждённая странность оригинала, а не забытый
-//! Rust cleanup. Goods timestamp/protection удаляются только при успешном
-//! `CGoods` RTTI, а type `700` membership — по base GUID независимо от RTTI.
-//! `ShapeRuntimeFacts` переносит только уже доказанные derived RTTI/getter
-//! результаты; AI, loot lifetime и protection policy остаются у своих
-//! нереализованных owner-ов.
-//! Девять однородных `Unwind@00635210..00635280`, делавших только
-//! `operator_delete` временного allocation при exception, эквивалентно покрыты
-//! RAII Rust-контейнеров. Полные constructor/destructor блоки не перенесены:
-//! оба проходят через ещё не материализованный base child-tree, а destructor
-//! также фиксирует cleanup всех domain containers; реализован только reached
-//! storage prefix.
+//! Блокировка исходного critical section не переносится: `CArea` физически
+//! принадлежит закрытому массиву региона, а все изменяющие вызовы уже держат
+//! исключительный `&mut CServerRegion`. Самоссылочный father-slot выражен
+//! структурным `AreaParentLink::OwningServerRegion` без self-reference и
+//! `unsafe` — это смена формы API, не контракта identity/topology. Подтверждённые
+//! quirks сохранены: `RemoveObject` буквально не удаляет unknown-type hash из
+//! `m_vOtherShapes`; `DelWarSoul` лишь помечает point `(-1,-1)`; goods
+//! timestamp/protection удаляются только при успешном `CGoods` RTTI, а type 700
+//! membership — по base GUID. Девять `Unwind`-funclet освобождения временного
+//! STL allocation покрыты RAII и не имеют domain-семантики.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#региональное-пространство
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -1,44 +1,21 @@
-//! Позиционный storage-prefix `CBattleFairyContainer` исторического
-//! GameServer: 17 фиксированных ячеек боевой феи с positional add-фильтрами,
-//! check/execution combine и gear grow/upgrade операциями.
+//! Позиционный storage-prefix `CBattleFairyContainer` исторического GameServer:
+//! 17 фиксированных ячеек боевой феи с positional add-фильтрами, check/execution
+//! combine и gear grow/upgrade операциями. Исходный owner
+//! `appserver/container/cbattlefairycontainer.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`. Gear/property-логика Zone skills
+//! `battlefairygear` представляет ячейку позицией `u32`; enum `BattleFairyCell`
+//! и его positional валидация остаются здесь, сигнатуры не меняются.
 //!
-//! Gear/property-логика Zone skills `battlefairygear` представляет ячейку
-//! позицией `u32`; enum `BattleFairyCell` и его positional валидация остаются
-//! здесь у владельца контейнера, сигнатуры не меняются.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cbattlefairycontainer.cpp`.
-//! Материализованы 17 фиксированных ячеек и exact positional add-фильтры по
-//! goods type/addon marker. Gear-слоты публикуют ранний `BFPropertyAdd(+1)`
-//! effect до base Add, поэтому отказ storage не отменяет этот effect. Проверка
-//! combine сверяет original-name material/fetch stone/fetch body в порядке
-//! записи compose, публикуя legacy packet `0xbf92c`; его `fistp` использует
-//! truncation к нулю. Gem success/fail/probability и upgrade-price queries
-//! сохраняют positional RNG, signed clamp и неинициализированный cached price
-//! как `Option`. Полный combine теперь разделяет check-only `0xbf92c` и
-//! execution opcode `0x8fc27`: global gate, валидация goods-presence ×3 затем
-//! base-properties ×3 с машинными notification `(56/57/58, затем 56/57/60)`,
-//! молчаливый execution no-match (tail 0x503F81), порядок remove
-//! `body → stone → material`, RNG-result и ownership
-//! созданного товара выполняются в `CPlayer`; этот owner даёт recipe,
-//! positional storage и `LoadBFDefualtProperty` callback в том же порядке.
-//! Gear add/remove теперь замкнуты через `CPlayer`: ранний `BFPropertyAdd`
-//! остаётся partial effect даже при отказе base Add, а Remove применяет `-1`
-//! только после успешного отделения goods. Сам контейнер публикует typed
-//! storage/result state; GlobeSetup-формулы и client update принадлежат
-//! player/game owner-ам.
-//! Upgrade target/gems также проходят через player/game owner: container
-//! сохраняет positional queries, stack decrement и полный remove ownership.
-//! Ошибочный повторный native pointer guard в optional-gem tail заменён
-//! независимой безопасной обработкой ячеек `13..=16`; порядок не меняется.
-//! `ResetSkill` перенесён в `CPlayer/CGame`, где одновременно доступны
-//! equipment, packet, skill storage, общий RNG и ordered network effects;
-//! восемь constructor-owned incompatible pairs подтверждены EXE immediate-ами.
-//!
-//! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
-//! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
-//! логичную ячейку из позднего C++-донора. Остальные ещё не подключённые
+//! Invariant-ы: gear-слоты публикуют ранний `BFPropertyAdd(+1)` effect до base
+//! Add, поэтому отказ storage его не отменяет; check-only `0xbf92c` и execution
+//! `0x8fc27` разделены, молчаливый execution no-match и порядок remove
+//! `body → stone → material` сохранены; ошибочный повторный native pointer guard
+//! в optional-gem tail заменён независимой безопасной обработкой ячеек `13..=16`
+//! без смены порядка. Автоматический overload читает неинициализированный
+//! `m_eBFEquipPlace` у catalog owner-а — выражен typed block-ом, а не выбором
+//! логичной ячейки из позднего C++-донора. Остальные не подключённые
 //! player-integrated методы ещё требуют реконструкции.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#предметы-и-контейнеры
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,

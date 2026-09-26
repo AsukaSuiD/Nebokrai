@@ -1,40 +1,19 @@
 //! Скалярное ядро оркестрации обмена `CGame` исторического GameServer:
-//! порядок условий `CheckTradeCondition`, Billing-вилка YuanBao и кадр
-//! запроса `0xEF203`.
+//! порядок условий `CheckTradeCondition`, Billing-вилка YuanBao и кадр запроса
+//! `0xEF203`. Исходный владелец `appserver/game.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`. Мгновенный владелец `game.rs` исполняет
+//! регистрацию, packet-simulation ёмкостей, detach/add последствия и весь
+//! transport; здесь — проверяемый порядок скалярных условий, billing-решение и
+//! сам кадр запроса.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/game.cpp`: двухфазная `CheckTradeCondition`,
-//! YuanBao-вилка Billing и её запрос, таблица уведомлений отказа. Мгновенный
-//! владелец `game.rs` исполняет регистрацию, packet-simulation ёмкостей,
-//! detach/add последствия и весь transport; здесь — проверяемый порядок
-//! скалярных условий, billing-решение и сам кадр запроса `0xEF203`.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинный статус — `MATCH` по подсемейству trade дизассембла тел
-//! точной пары:
-//!
-//! | правило | машинный факт | здесь | статус |
-//! |---|---|---|---|
-//! | порядок `CheckTradeCondition` | contrary trader + owners → ёмкости/весы/деньги → IsSpaceEnough; 8 уведомлений | [`PlayerTradeConditionBlock`], [`trade_condition_notice`] | семья `MATCH` |
-//! | ёмкость валют | `maximum < balance − outgoing + incoming` (wrapping DWORD) | [`trade_currency_capacity_exceeded`] | семья `MATCH` |
-//! | вес | burden после замены `own → incoming` строго превышает max | [`trade_resulting_burden_exceeded`] | семья `MATCH` |
-//! | Billing-вилка | signed разность YuanBao → payer/receiver/amount | [`trade_yuan_billing_decision`] | семья `MATCH` |
-//! | запрос `0xEF203` | кадр type 2 + SendToBS (вызов `0x001BB036` → `0x00013BE0`) | [`TradeBillingRequest`], [`build_trade_billing_request_frame`] | семья `MATCH`, кадр по caller-у прежнего owner |
-//!
-//! Риск-нота Billing-complete: завершение обмена по
-//! ответу Billing (`OnUniBillMessage`) исполняет commit БЕЗ повторной
-//! дистанционной проверки участников — оригинал доверяет уже зафиксированной
-//! рамке. Гейты сверх исходного («улучшающие») в этот путь сознательно не
-//! добавляются; существующий owner достаточно сохраняет свои прежние отказы.
-//!
-//! Simulation packet-а, веса `CGoods`, журналирование и отправка остаются у
-//! прежнего owner, который вызывает правила ниже в исходном порядке. Кадр
-//! `0xEF203` собирается здесь, а его транспортный выбор (`SendToBS`, не
-//! World) — у caller-а вместе с комментарием-маршрутом. C-строковый
-//! wire-примитив [`append_legacy_c_string`] — основное место соглашения
-//! «prefix байт + NUL» семьи; его использует и соседний `trade/audit.rs`.
+//! Риск-нота Billing-complete: завершение обмена по ответу Billing исполняет
+//! commit БЕЗ повторной дистанционной проверки участников — оригинал доверяет
+//! уже зафиксированной рамке; гейты сверх исходного сознательно не добавляются.
+//! Кадр `0xEF203` собирается здесь, а его транспортный выбор (`SendToBS`, не
+//! World) — у caller-а. C-строковый wire-примитив [`append_legacy_c_string`] —
+//! основное место соглашения «prefix байт + NUL» семьи; его использует и
+//! `trade/audit.rs`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#торговля-и-деньги
 
 use nebokrai_shared::network::CBaseMessage;
 use nebokrai_shared::values::CGuid;

@@ -1,13 +1,7 @@
-//! Data-ядра `CServerRegion`: area-grid и war-soul карты, block-разметка
-//! клеток, membership/transition ядра, identity-регистр, spatial-запросы,
-//! налоги, погода, return-setup, war-фазы, spawn setup и startup decode-
-//! семейство. Исходный владелец — `appserver/serverregion.h/.cpp`; сверка по
-//! точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`).
-//! Переходный агрегат `CServerRegion` остаётся в старом пакете: хранит те же
-//! хранилища и делегирует операции файлам этого компонента без изменения
-//! сигнатур методов; entry-effects входа, доменные классы и lifecycle
-//! остаются у него.
+//! Data-ядра `CServerRegion` (исходный владелец — `appserver/serverregion.h/.cpp`).
+//! Переходный агрегат старого пакета делегирует операции файлам этого
+//! компонента без изменения сигнатур методов; entry-effects входа, доменные
+//! классы и lifecycle остаются у него.
 
 pub mod areagrid; // area-grid: построение, доступ и war-soul карты.
 pub mod blocks; // block-refresh клеток, spatial shape-lookup и skill-cell формула блока.

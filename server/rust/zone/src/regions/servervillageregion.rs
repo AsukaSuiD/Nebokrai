@@ -1,31 +1,20 @@
 //! Context-контракты, wire/log эффекты и скалярные правила деревенского
 //! war-региона `CServerVillageRegion`. Исходный владелец —
 //! `appserver/servervillageregion.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат остаётся в старом пакете: хранит hub `CServerWarRegion`, ordered
-//! goods-list и flag-owner колонку (runtime `CGame` перезаписывает обе
-//! напрямую при re-init региона), schedule-запросы `CVillageWarSys` и
-//! фазовые/tail-вызовы над этими колонками; этому модулю делегируются
-//! owner-context, типы эффектов и чистые scalar-решения нужных товаров и
-//! flag-owner после захвата символа.
+//! `gameserver.exe` + `GameServer.pdb`. Переходный агрегат остаётся в старом
+//! пакете: хранит hub `CServerWarRegion`, ordered goods-list и flag-owner
+//! колонку (runtime `CGame` перезаписывает обе при re-init региона), а этому
+//! модулю делегированы owner-context, типы эффектов и чистые scalar-решения
+//! нужных товаров и flag-owner после захвата символа. Машинные статусы
+//! унаследованы от шапки старого владельца без повышения.
 //!
-//! Статус `IMPLEMENTED`: фазовые callbacks RVA `0x001D1310`, `0x001D13C0`,
-//! `0x001D1590..0x001D16D0`, victory `0x001D12C0`, clear `0x001D1370`,
-//! membership `0x001D12F0`, direct timeout-forwarding `0x001D14F0` и
-//! `AddNeedGood` `0x001D1900`; `IMPLEMENTED, VERIFIED_DISASSEMBLY`
-//! (унаследовано от шапки старого владельца, без повышения):
-//! decoder-forwarding `0x001D1280` и ownership query `0x001D1980`.
-//! PDB подтверждает наследование `CServerWarRegion`, ordered goods-list
-//! `+0x270` и `m_lFlagOwnerFacID +0x27C`.
-//!
-//! Timeout намеренно игнорирует аргумент и шлёт текущие `(war, region,
-//! flag-owner, 0)` как `0x60136`. `OnFactionWinOneSymbol` переносит flag
-//! owner только по symbol `0`, остальные символы не меняют колонку.
-//! `AddNeedGood` игнорирует пустое имя и сохраняет порядок списка.
+//! Quirk-и: timeout намеренно игнорирует аргумент и шлёт текущие `(war, region,
+//! flag-owner, 0)` как `0x60136`; `OnFactionWinOneSymbol` переносит flag owner
+//! только по symbol `0`; `AddNeedGood` игнорирует пустое имя и сохраняет порядок
+//! списка. PDB подтверждает ordered goods-list `+0x270` и
+//! `m_lFlagOwnerFacID +0x27C`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#war-регионы
 
-/// Ищет сначала `s_mapRegion`, а при miss либо null — `FindProxyRegion`;
-/// owned city faction читается у найденного schedule context owner-а.
 pub trait VillageOwnerContext {
     type Region: Copy;
     fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region>;

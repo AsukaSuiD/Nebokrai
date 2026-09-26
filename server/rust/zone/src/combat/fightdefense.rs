@@ -1,70 +1,22 @@
-//! Базовая защита GameServer (`SKILL_BASE_DEFENSE`) для обычной атаки.
+//! Базовая защита GameServer (`SKILL_BASE_DEFENSE`) для обычной атаки:
+//! проверки попадания и полного промаха, физический/стихийный/духовный урон,
+//! критические и усиленные удары, уклонение и коэффициент PvP. Исходный
+//! владелец `appserver/skills/fightdefense.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/fightdefense.cpp`. Сохранены проверки попадания и полного
-//! промаха, физический, стихийный и духовный урон, критические и усиленные
-//! удары, уклонение и коэффициент PvP. Полный промах обнуляет только physical,
-//! element и soul: poison остаётся для последующего `ApplyFinalDamage`. Для
-//! монстров сохраняются отдельные
-//! ограничения попадания, защита и сопротивления без коэффициента PvP.
-//! PvP full-miss со стихийным уроном сравнивает целый RNG непосредственно с
-//! x87-произведением `FILD u16 * FMUL f32`: дробная часть порога не усекается
-//! и не округляется промежуточной записью в `f32`.
-//! Уклонение аналогично загружает исходную константу `0.01_f32` в x87 и
-//! усекает только итоговое произведение с целым уроном.
-//! Стихийный множитель `Promotion` сначала перемножает два целых операнда,
-//! затем применяет исходную `0.001_f32` и также усекает лишь конечный результат.
-//! Беззнаковые `defense` и `element resistance` сохраняются как `u32`: перед
-//! x87 оригинал корректирует старший бит через `+2^32`, а обычную половину
-//! вычисляет логическим `SHR` до преобразования в целое повреждение.
-//! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
-//! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
-//! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
-//! добавления состояний. Коэффициент `PillarState` применяется в
-//! точке `PostDefense`, после обычного расчёта, но до множителей урона и PvP;
-//! произведение целого урона и сохранённого `f32`-коэффициента усекается к нулю
-//! при записи обратно в целое поле. Прочие ещё не восстановленные состояния не
-//! подменяются этой реализацией.
-//! Общий FISTP DWORD-адаптер (Zone `combat/rounding`) сначала усекает к нулю
-//! и лишь затем проверяет signed range: дробная часть выше INT_MAX ещё может
-//! усечься в INT_MAX. NaN, бесконечность и переполнение дают исходный
-//! indefinite INT_MIN.
-//!
-//! Точная пара: `GameServer/gameserver.exe` (SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
-//! `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`,
-//! age 2). Машинные статусы по дизассемблу тел точной пары:
-//!
-//! | функция | RVA | статус |
-//! |---|---|---|
-//! | `CFightDefense::CFightDefense` | `0x001B0970` | `VERIFIED_DISASSEMBLY` (id 0xA = `SKILL_BASE_DEFENSE`) |
-//! | `CFightDefense::~CFightDefense` | `0x001B09D0` | `VERIFIED_DISASSEMBLY` (sentinel = `UNKNOWN_SKILL_ID`) |
-//! | `CFightDefense::PreDefense` | `0x001B0A50` | `VERIFIED_DISASSEMBLY` skip-правила `530..=545 && != 544`; диспетчер щитов и само правило — `effects/defenseshield.rs` |
-//! | `CFightDefense::Defense` | `0x001B10E0` | `VERIFIED_DISASSEMBLY` |
-//! | `CFightDefense::PostDefense` | `0x001B1050` | `VERIFIED_DISASSEMBLY` (Pillar factor) |
-//!
-//! По `Defense` сверены: hit-таблицы по occupation, level-модификатор
-//! `(Δlevel − 3) * 15` через `shl 4` + `sub`, full-miss x87-ветвь без
-//! f32-промежутка, порядок RNG hit → blast, обнуление видов 1/3/4 при miss с
-//! сохранением Poison (`full_miss = 2`), логический SHR половины defense до
-//! float, критический множитель `−0.5f32`, один FISTP уклонения и PvP factor
-//! после clamp без повторного clamp. Safe/city-war гейты — у caller
-//! (`received_defense_allowed`, `game/periodicattack.rs` старого пакета),
-//! маркер city-war совпадает. Установленное расхождение f32-округления
-//! mp-фактора закрыто в Zone `effects/{shieldabsorption, lifeshield}`;
-//! формулы этого файла оно не затрагивает.
-//!
-//! Швы к владельцам старого пакета: RNG-состояние и `random(int)` остаются у владельца (параметр
-//! `&mut dyn FnMut(i32) -> i32` передаётся дословно); снимок
-//! `PlayerCombatProperties` производит hub `CPlayer` (`combat_properties()`),
-//! прежний путь типа в `appserver/player.rs` сохраняется re-export-переходником;
-//! `MonsterCombatProperties` — соседний снимок `combat/monsterformula`;
-//! setup — тот же `GlobeSetupSnapshot` ресурсов `nebokrai_shared`, что
-//! переиздаёт `setup/globesetup.rs` старого пакета; ветвь щитов до обычной
-//! защиты исполняет диспетчер Zone `effects::DefenseShieldState`, а живые
-//! Begin/restart/AI/End цепочки щитов остаются у переходного Game
-//! (`appserver/skills/shieldstate.rs`); допуск защиты, очистка attack и
-//! проекция war-soul маны — у caller `game/periodicattack.rs` старого пакета.
+//! Инварианты: полный промах обнуляет только physical/element/soul — poison
+//! остаётся для `ApplyFinalDamage`; PvP full-miss сравнивает целый RNG с
+//! x87-произведением без промежуточной f32-записи; unsigned `defense` и
+//! resistance сохраняются `u32` (старший бит компенсируется `+2^32`, половина —
+//! логическим SHR до float). Функции вызываются на стадии `Calculate` и не
+//! меняют число или порядок обращений к RNG; ветвь щитов исполняется в исходной
+//! точке `PreDefense` диспетчером `effects::DefenseShieldState`, `PillarState` —
+//! в `PostDefense` до множителей урона. Общий FISTP DWORD-адаптер — Zone
+//! `combat/rounding`. Safe/city-war гейты — у caller
+//! (`game/periodicattack.rs` старого пакета). Установленное расхождение
+//! f32-округления mp-фактора закрыто в `effects/{shieldabsorption, lifeshield}`
+//! и формул этого файла не касается.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#боевые-формулы
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 

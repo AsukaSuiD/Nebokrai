@@ -1,7 +1,7 @@
 //! Состояние сбора душ CSoulCollectState.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
-//! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
+//! идентификаторы —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
 //! Конструктор VA 0x005E1AD0, AddSoul 0x005E1BC0, Serialize 0x005E1D50,
 //! Unserialize 0x005E1E80, GetRemainedTime 0x00601200,
 //! GetAdditionalData 0x004D7090 (appserver/skills/soulcollectstate.cpp/.h).

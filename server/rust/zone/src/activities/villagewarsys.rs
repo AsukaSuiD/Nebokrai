@@ -1,59 +1,17 @@
-//! Владелец GameServer-снимка деревенских войн `CVillageWarSys` в Zone `activities/`.
+//! Владелец GameServer-снимка деревенских войн `CVillageWarSys` в Zone
+//! `activities/`. Исходник PDB: `organizingsystem/villagewarsys.cpp`; сверка по
+//! точной паре `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Snapshot/setup (`0x0005F320`), initial state (`0x0005E310`), faction update
-//! (`0x0005E480`) и фазовые callbacks `0x0005E5B0..0x0005E640`,
-//! `0x0005F510..0x0005F740` имеют статус `IMPLEMENTED,
-//! VERIFIED_DISASSEMBLY`; schedule queries `0x0005DA90..0x0005DB80` и
-//! `0x0005E830` — `IMPLEMENTED`. Остальные функции owner-а остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Исходник PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\villagewarsys.cpp`;
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
-//!
-//! Wire начинается с signed `long` количества. Для каждого положительного
-//! элемента исходник копирует prefix `tagVilWarSetup` длиной `0x8C`, затем
-//! читает signed count и ordered faction IDs. PDB подтверждает шесть пар
-//! `event ID + tagTime`, signed schedule/region/state и `std::list` с offset
-//! `0x88`; weekly flag по offset `0x94` в snapshot не входит. `BTreeMap` и
-//! `Vec` заменяют STL с тем же key/order-контрактом; повторный `lID` заменяет
-//! ранее декодированную запись, как `map::operator[]` с присваиванием.
-//!
-//! Четыре bytes stateless allocator-base внутри prefix сознательно читаются и
-//! отбрасываются. Event IDs сохраняются как wire `u32`, но в этом GameServer
-//! owner-е ни один достигнутый consumer их не читает. Недоставленный weekly
-//! flag выражен `None`, а не выдуманным значением. Exact EXE показывает внешний
-//! цикл `0x0045F4D3..0x0045F4DF` и общий `mov al,1` по `0x0045F4EF`.
-//! Безразмерный C++ pointer на short buffer уходил в неизвестный UB; safe Rust
-//! возвращает локальный `UnexpectedEnd`, сохраняя уже пройденный cursor и уже
-//! вставленные полные записи. STL tree/list allocation, SEH и cleanup отдельной
-//! Rust-семантики не имеют.
-//!
-//! Initial-state owner в map-order выбирает только closed interval
-//! `DeclarWarTime <= now <= WarEndTime`. Для war и village ID он отдельно ищет
-//! сначала `CGame::s_mapRegion`, а при miss/null — `FindProxyRegion`. Найденный
-//! war region получает virtual `ReSetWarState(war number, state)`. Если найдены
-//! оба региона, byte `CRegion::m_btCountry` offset `+0x74` копируется из village
-//! в war region уже после reset. Exact EXE подтверждает два stack-аргумента у
-//! vtable slot `+0xE8` и byte offsets `+0x74`; сырой `CGame/CServerRegion`
-//! остаётся внешним context-контрактом до собственного прохода.
-//! Faction-update всегда читает war ID, но при miss сразу возвращает `false`,
-//! не читая count. Hit очищает прежний list, принимает signed count и ordered
-//! IDs, затем ищет war region только в `s_mapRegion` без proxy fallback и при
-//! non-null вызывает virtual `UpdateContendPlayer()` slot `+0x104`. Safe short
-//! buffer сохраняет уже выполненные clear/append и cursor, не назначая старому
-//! UB дополнительный результат.
-//!
-//! Declare ставит `DUTH=1`, находит war и village независимо, затем перед
-//! `OnWarDeclare` переносит в war-region faction/union/country деревни. Start
-//! ставит `Fight=3`; end сперва очищает faction list и вызывает `OnWarEnd`
-//! только из `Fight`. Start/end допускают proxy, timeout намеренно ищет лишь
-//! основной war-region. Clear отдельно берёт основной village-region, шлёт
-//! `0xBF806(0xFFDAEDFE, 0, GS0127(region name))` и запускает вытеснение через
-//! 60000 ms. Region/message runtime остаётся явным context-контрактом.
-//!
-//! Query-поверхность сохраняет map-order, strict `now < end`, старую packed
-//! minute-формулу с x86 wrapping и main-then-proxy lookup имени. Выходной
-//! `std::string& + bool` представлен `Option<String>`. В отличие от города,
-//! village membership не читает недоставленный weekly flag.
+//! Wire аналогичен городскому: signed `long` количества, prefix `tagVilWarSetup`
+//! длиной `0x8C`, затем signed count и ordered faction IDs; недоставленный
+//! weekly flag выражен `None` (в отличие от города village membership его и не
+//! читает). Initial-state копирует byte страны из village в war region уже
+//! после reset; start/end допускают proxy, timeout намеренно ищет лишь основной
+//! war-region; clear шлёт `0xBF806(0xFFDAEDFE, 0, GS0127)` и запускает
+//! вытеснение через 60000 ms. Обрыв short buffer сохраняет выполненные
+//! clear/append и cursor. Остальные функции owner-а — `UNKNOWN`; region/message
+//! runtime остаётся явным context-контрактом.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#войны-и-расписания
 
 use std::collections::BTreeMap;
 use thiserror::Error;

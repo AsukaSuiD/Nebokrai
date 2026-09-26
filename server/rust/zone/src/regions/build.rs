@@ -1,41 +1,15 @@
 //! Данные и скалярные правила постройки `CBuild` (factory type `0x44C`).
 //! Исходный владелец — `appserver/build.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат `CBuild` остаётся в старом пакете, хранит те же колонки и
-//! делегирует сюда их поведение без изменения сигнатур; нематериальные
-//! accessor-ы чтения/записи полей и hub-публикация `BuildClientPublication`
-//! (`game.rs`) остаются у него.
+//! `gameserver.exe` + `GameServer.pdb`. Переходный агрегат `CBuild` остаётся в
+//! старом пакете, хранит те же колонки и делегирует сюда их поведение без
+//! изменения сигнатур; нематериальные accessor-ы полей и hub-публикация
+//! `BuildClientPublication` (`game.rs`) остаются у него.
 //!
-//! `symbols.py pubs` по этой паре даёт 54 символа семейства `CBuild`:
-//! собственные constructor `0x001DD570`, destructor `0x001DD640`, scalar
-//! deleting destructor `0x001DD690`, `AddToByteArray` `0x001DD140`,
-//! `DecordFromByteArray` `0x001DD180`, `SetAction` `0x001DD1C0`,
-//! `AI` `0x001DD210`, `GetFigure` `0x001DD280`, `SetTileXY` `0x001DD2B0`,
-//! `GetBeAttackedPoint` `0x001DD350`, `IsAttackAble` `0x001DD520`,
-//! `ApplyFinalDamage` `0x001DD270`, property-accessor-ы `GetHP`/`SetHP`/
-//! `GetMaxHP`/`GetDef`/`GetElementResistant` `0x001DD5F0`..`0x001DD630`,
-//! `SetScriptFile` `0x001DBAC0`, общие empty-thunk `OnBeenHurted`/
-//! `OnBeenMurdered` `0x000A8750` (`ret 8`) и `EnterCombatState`/
-//! `EnterPeaceState`/`UpdateCurrentState` `0x00085540`, vtable `0x0065E704` с
-//! RTTI-записями, внешний `CServerCountryRegion::UpdateBuildToClient`
-//! `0x001DAC80` и instantiation-ы `std::_Tree` карты `long → CBuild*`
-//! country-региона.
-//! Три тела разобраны по машинному коду, но не перенесены из-за
-//! недостижимости (подробный evidence и вызыватели — в блоках старого
-//! владельца): `GetAttackerDir` (`0x001DD300`, slot `+0x0B0`) — тело
-//! VERIFIED_DISASSEMBLY (8-way таблица знаков `GetDestDir`, quirk: `param_2`
-//! дважды в точку footprint), живые вызыватели с receiver CMoveShape не
-//! доказаны; одноаргументный `OnBeenAttacked` (`0x001DD6B0`, slot `+0x1B0`)
-//! — тело VERIFIED_DISASSEMBLY (пакеты `0xBF60A`/`0xBF60B`, death-ветвь с
-//! `SetKilledMeAttackInfo` и `SetAction(6)`), но virtual без единого
-//! call-сайта в `.text` — в этой сборке недостижим; `OnDied` (`0x001DD9D0`,
-//! slot `+0x178`) — тело VERIFIED_DISASSEMBLY (guard убийцы-игрока `0x190`,
-//! пустой у всех region-классов `OnSymbolDestroy`, script через
-//! `stRunScript`/`RunScript`), единственный вызыватель —
-//! `CBaseAI::OnBeenKilled`, а у постройки `CBaseAI` нет. Победу country-war
-//! обрабатывает `CountryWarSys` отдельно (`on_flag_destroy` `0x000EBE60` из
-//! `OnCountryMessage`), не тело `OnDied`.
+//! Три тела разобраны по машинному коду, но не перенесены из-за недостижимости
+//! в этой сборке: `GetAttackerDir`, одноаргументный `OnBeenAttacked` и `OnDied`
+//! (у постройки нет `CBaseAI`, а победу country-war обрабатывает `CountryWarSys`
+//! отдельно). Машинные основания — в evidence-документе.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
 use super::shape::{ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure};
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};

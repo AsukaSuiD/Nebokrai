@@ -1,29 +1,21 @@
-//! Equipment-upgrade plug GameServer в Zone `sessions/`: пятислотовый shadow
-//! и сессионный lifecycle upgrade-сессии.
+//! Equipment-upgrade plug GameServer в Zone `sessions/`: пятислотовый shadow и
+//! сессионный lifecycle upgrade-сессии. Прежняя форма:
+//! `src/gameserver/appserver/session/cequipmentupgrade.rs`. Типы подключаются из
+//! zone-владельцев: shadow-контейнер — Zone `items/cequipmentupgradeshadowcontainer.rs`,
+//! `CGoods` — Zone `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`,
+//! реестр — Zone `content/goodsfactory.rs`, `UpgradePriceListener` — Zone
+//! `items/cupgradepricelistener.rs`, `CGuid` — Shared. Исходный owner
+//! `appserver/session/cequipmentupgrade.cpp`; сверка по точной паре
+//! `gameserver.exe` + `GameServer.pdb`.
 //!
-//! Прежняя форма: `src/gameserver/appserver/session/cequipmentupgrade.rs`.
-//! Типы подключаются из других zone-владельцев: shadow-контейнер — Zone
-//! `items/cequipmentupgradeshadowcontainer.rs`, `CGoods` — Zone
-//! `items/cgoods.rs`, GAP-константы — Zone `content/goods.rs`, реестр
-//! `CGoodsFactory` — Zone `content/goodsfactory.rs`,
-//! `UpgradePriceListener` — Zone `items/cupgradepricelistener.rs`,
-//! `ShapeIdentity` — Zone `regions/identity.rs`, `CGuid` — Shared.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/session/cequipmentupgrade.cpp`. Plug хранит
-//! пятислотовый shadow: equipment, обязательный base gem и до трёх
-//! дополнительных gems. Живой `goodsmessage 0x8FC0F` старого пакета выполняет
-//! validation, оплату, общий MSVCRT RNG, ordinary-equipment mutation, расход
-//! shadow-goods, player/equipment callbacks, `0xBF918` и World audit;
-//! `0x8FC10` завершает session, очищает progress/shadow, отправляет `0xBF913`
-//! и освобождает session/plug registry. Gameplay-исполнение не переносится:
-//! здесь — типы plug-а и их операции над shadow-состоянием.
-//!
-//! MSVC listener/vtable plumbing заменён owned listener handle и concrete
-//! terminal session state. Наблюдаемые эффекты исполняются живым `CGame` в
-//! исходном порядке, а их результаты публикуются через `tracing`, не возвращаясь
-//! диагностическим деревом. Runtime-границей остаются combat property recompute
-//! и around effects снятого equipment.
+//! Живой `goodsmessage 0x8FC0F` старого пакета выполняет validation, оплату,
+//! общий MSVCRT RNG, mutation и публикации; `0x8FC10` завершает session и
+//! освобождает registry. Gameplay-исполнение не переносится: здесь — типы
+//! plug-а и их операции над shadow-состоянием. Наблюдаемые эффекты исполняются
+//! живым `CGame` в исходном порядке и публикуются через `tracing`;
+//! runtime-границей остаются combat property recompute и around effects
+//! снятого equipment.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#сессии-игрока
 
 use crate::content::goods::{
     GAP_GEM_PROBABILITY, GAP_GEM_UPGRADE_FAILED_RESULT, GAP_GEM_UPGRADE_SUCCEED_RESULT,

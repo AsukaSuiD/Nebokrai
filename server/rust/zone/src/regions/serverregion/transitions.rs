@@ -1,49 +1,19 @@
 //! Transition-семья смены области `CServerRegion`: immutable plan,
 //! staging-очереди area/region AI и ядро plan/commit. Исходный владелец —
-//! `appserver/serverregion.h/.cpp`; точная пара `gameserver.exe` +
-//! `GameServer/GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`; совпадение
-//! подтверждено оснасткой `.local/evidence/symbols.py identity`). Машинные
-//! статусы (прямой дизассембл тел точной пары):
+//! `appserver/serverregion.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`.
 //!
-//! | функция | RVA | статус |
-//! |---|---|---|
-//! | `plan_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
-//! | `commit_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
-//! | staging-очереди (`stage_*`, `staged_area_transitions`, `take_staged_region_transitions`) | — | `PARTIAL`: staging-сайт исходного region AI отдельным телом не дизассемблировался |
-//!
-//! `OnShapeChangeArea` сверен по всему телу (`0x004802A0-0x004808A2`): gate
-//! null-объекта и отсутствующего owner-link `[+0x60]` (`0x004802C4-
-//! 0x004802D7`), gate совпавшей области по `[+0x68]/[+0x6C]` против
-//! `[+0x44]/[+0x48]` (`0x004802DD-0x004802F7`), обход девяти-area окружения
-//! по таблице смещений `0x69FC38`/границей `0x69FC80` в исходном порядке
-//! (center-first row-major, значения совпадают с `NEIGHBOR_AREAS`),
-//! list-разность «новые без старых» через copy-ctor и `list::remove`
-//! (`0x0048046E-0x00480497`), skip пустых областей по `GetNumShapes`
-//! `0x00070B80` (`0x004805A5`), audience только для moving player
-//! (`0x004805C3` по `[+0x4] == 0x190`) с исключением самой фигуры
-//! (`0x00480623`), ordered per-area snapshots до membership mutation, затем
-//! commit-порядок `RemoveObject -> GetArea(next) -> AddObject -> m_pArea`
-//! (`0x0048076E/0x00480771-0x004807B5/0x004807BC/0x004807C6`) и player-only
-//! `PlayerEnter` `0x00075580` (`0x004807D1`).
-//!
-//! Частичный эффект пути ненайденной цели, сверенный по телу: оригинал
-//! выполняет `RemoveObject` прежней области
-//! (`0x0048076E`) до bounds-check цели (`GetArea(next)`
-//! `0x00480771-0x004807B5`) и завершается без `AddObject`
-//! (`0x004807BC`) и без сброса `m_pArea` (запись `0x004807C6` только на
-//! найденном пути; owner-link остаётся указывать на область, из которой
-//! фигура удалена). Ядро `commit_area_transition` исполняет этот порядок
-//! и докладывает частичный эффект вариантом
-//! `AreaTransitionOutcome::RemovedWithoutTargetArea`; обвязка старого
-//! пакета отображает его в прежнее булево «отказ», хуков и логирования на
-//! этой ветке машинное тело не содержит.
-//!
-//! Staging сохраняет pointer-unique append исходного region AI: marker
-//! сбрасывается caller-ом только после добавления, ordered snapshot берётся
-//! без очистки исходного list, cleanup очереди выполняет вызывающая сторона
-//! после применения всех `OnShapeChangeArea`. Owned-monster/NPC обвязки
-//! plan/commit остаются у переходного владельца generational hub-ов.
+//! Commit сохраняет частичный эффект пути ненайденной цели: оригинал выполняет
+//! `RemoveObject` прежней области до bounds-check цели и завершается без
+//! `AddObject` и без сброса `m_pArea`; ядро докладывает это вариантом
+//! `AreaTransitionOutcome::RemovedWithoutTargetArea`, а обвязка старого пакета
+//! отображает в прежнее булево «отказ». Staging сохраняет pointer-unique append
+//! исходного region AI: marker сбрасывается caller-ом только после добавления,
+//! ordered snapshot берётся без очистки списка (PARTIAL — staging-сайт region AI
+//! отдельным телом не дизассемблировался), cleanup очереди выполняет вызывающая
+//! сторона. Owned-monster/NPC обвязки plan/commit остаются у переходного
+//! владельца generational hub-ов.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#региональное-пространство
 
 use indexmap::IndexSet;
 

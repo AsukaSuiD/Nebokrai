@@ -1,38 +1,19 @@
 //! Контроллер повозки `CCarriage` (AI12): действие, секундная проверка
 //! хозяина, выход хозяина, повторная привязка, таймер исчезновения и план
-//! follow/stay-движения. Единственный класс без собственных `OnIdle`/
-//! `Tracing` (факт реестра `ai/monsterai.rs`).
-//!
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! (EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53` age 2, match; RVA истинные,
-//! VA − 0x400000). Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp`.
-//! Машинная сверка: разобраны расписания и lifecycle (4 из 4); ctor
-//! `0x005066D0`/dtor `0x00506700` построчно не читались — их известный
-//! эффект, нулевые lifecycle-поля, зафиксирован владельцем состояния):
-//!
-//! | правило | якорь | здесь | статус |
-//! |---|---|---|---|
-//! | `SetCurrentAction` — прямая запись `m_caAction` (`[+0x7C]`) | VA `0x00506710` | [`CarriageLifecycleState::set_action`], константы [`CARRIAGE_FOLLOWING`]/[`CARRIAGE_STAYING`] | `MATCH` |
-//! | follow-расписание `OnSchedule` (VA `0x00506A20`): пустой hook → умерший владелец при `GetState != 1` (vt `+0x74`) — журнал и `Evanish` (vt `+0x188`); затем ветвь действия, секундный (`0x3E8` мс) исходный timeGetTime-гейт `m_dwSeekMasterTimeStamp` и хвост master-проверки | VA `0x00506A20` | [`CarriageLifecycleState::begin_master_check`], [`CarriageLifecycleState::master_timed_out`]; журнал/Evanish/пакеты — hub | `MATCH` |
-//! | `OnFallowingSchedule`: очереди `[+0x14]`/`[+0x28]` пусты и `IsMoveable` (vt `+0x148`); хозяин `CPet::GetPetMaster`, тот же регион (vt `+0x44` `GetRegionID`), знаковая дистанция > 2, `FindPositionForCarriage` (`0x004CCFD0`) даёт клетку ровно в двух шагах сзади; при новой клетке: повторная проверка региона и **беззнаковая** дистанция `≤ dwCarriageStopDistance` (`0x00EF45D0`) → общий `MoveTo(run=0)` (AI vtable `+0x58`); иначе GS0008 владельцу-игроку и `m_caAction = STAYING`; при провале фильтров — `ASA_STAND(1000)` | VA `0x00506720` | [`plan_carriage_movement`] | `MATCH` |
-//! | `OnStayingSchedule`: хозяин в том же регионе и беззнаковая дистанция `≤ dwCarriageStopDistance` → GS0009 и `m_caAction = FALLOWING`; иначе `ASA_STAND(1000)` | VA `0x005068F0` | [`plan_carriage_movement`] | `MATCH` |
-//! | master-проверка: отсутствующий хозяин (> другого региона — тоже отсутствие) при первом пропадании переводит в `STAYING` и запускает таймер; дубликат `m_nCarriageID` хозяина вызывает Evanish до distance-хвоста (`0x00506CFE` → `0x00506D04`); возвращение хозяина — прямая запись `m_nCarriageID` и `FALLOWING`, тоже до таймера расстояния; `disappear` — GS0007 и Evanish | VA `0x00506A20`, RVA-хвост `0x00506CFE`/`0x00506D04` | [`CarriageLifecycleState::begin_master_check`], [`CarriageLifecycleState::master_timed_out`] | `MATCH` |
+//! follow/stay-движения. Единственный класс без собственных `OnIdle`/`Tracing`
+//! (факт реестра `ai/monsterai.rs`). Исходный владелец PDB:
+//! `appserver/ai/carriage.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb` (разобраны 4 из 4 расписаний; ctor/dtor построчно не
+//! читались — их нулевые lifecycle-поля зафиксированы владельцем состояния).
 //!
 //! Абсолютные wrapping DWORD deadlines хранятся буквально; каждое исходное
 //! чтение `timeGetTime` приходит отдельным вызовом `now` от делегата.
-//! Пространственное перемещение (`CBaseAI::MoveTo` со slip-шагом), журнал
-//! `0x6020E`, пакеты `GS0007`/`GS0008`/`GS0009`, фактический `Evanish`
-//! (`CMonster::Evanish` `0x004E7A60` → `0x004CD700`) и привязка `m_nCarriageID`
-//! игрока выполняются hub-владеющим lifecycle-входом поверх планов ниже.
-//! Остаются hub-владением: общий tick `Run` (`0x0060E250` → `CBaseAI::Run`
-//! `0x004C7D10`), очереди `CBaseAI` и выбранный hub-вход lifecycle повозки
-//! (`CGame`).
-//!
-//! Унаследованный `CPet::GetPetMaster` материализован общим pet-owner-ом;
-//! мост к pet-семье сведён к совместному владельцу `ai/pet.rs` (lifecycle FSM
-//! питомца) и не требует данных повозки.
+//! Пространственное перемещение, журнал `0x6020E`, пакеты `GS0007..GS0009`,
+//! фактический `Evanish` и привязка `m_nCarriageID` игрока выполняются
+//! hub-владеющим lifecycle-входом поверх планов ниже; унаследованный
+//! `CPet::GetPetMaster` материализован общим pet-owner-ом, и мост к pet-семье
+//! сведён к совместному владельцу `ai/pet.rs`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use crate::regions::shape::{CShape, ShapeAreaCoordinates};
 

@@ -3,8 +3,8 @@
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! классы `CAutomaticRestoreHpState`, `CAutomaticRestoreHpStateFight`,
 //! `CAutomaticRestoreMpState`, `CAutomaticRestoreMpStateFight`.
-//! EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
-//! PDB SHA-256 `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
+//! Идентификаторы точной пары —
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
 //! `AI` HP peace (VA `0x004FA8E0`) проверяет смерть, полноту HP и мирный
 //! режим до часов; при срабатывании читает живой объём восстановления,
 //! меняет HP и повторно читает часы. Состояние не владеет игроком или источником часов.

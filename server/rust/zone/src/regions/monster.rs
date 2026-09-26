@@ -1,34 +1,18 @@
 //! Скалярная база `CMonster`: script/tame/pet колонки и их правила. Исходный
-//! владелец — `appserver/monster.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат `CMonster` остаётся в старом пакете, хранит те же колонки и
-//! делегирует сюда их поведение без изменения сигнатур. Нематериальные
-//! accessor-ы чтения/записи полей (`master_info()`, `set_master_info()`,
-//! `hit_points()`, `original_name()`, `refresh_index()` и им подобные)
-//! остаются у переходного владельца.
+//! владелец — `appserver/monster.h/.cpp`; сверка по точной паре `gameserver.exe`
+//! + `GameServer.pdb`. Переходный агрегат `CMonster` остаётся в старом пакете,
+//! хранит те же колонки и делегирует сюда их поведение без изменения сигнатур;
+//! нематериальные accessor-ы полей (`master_info()`, `hit_points()` и им
+//! подобные) остаются у переходного владельца.
 //!
-//! Публичные символы семейства: `GetScriptFile` (RVA `0x00031410`),
-//! `SetScriptFile` (`0x00038C70`), `SetMasterInfo` (`0x000E63E0`),
-//! `GetMasterInfo` (`0x000E63F0`), `DoesCreatureBeenTamed` (`0x000E6460`),
-//! `IncreaseTameAttemptCount` (`0x000E6490`), `SetTamedSign` (`0x000E64A0`),
-//! `GetPetLevel` (`0x000E6CE0`), `GetPetExperience` (`0x000E6CF0`),
-//! `SetPetLevel` (`0x000E6D00`), `SetPetExperience` (`0x000E6D20`).
-//! Дизассемблирование пары подтверждает размещение и семантику колонок:
-//! знак приручения читается вместе с master type `400` и ненулевым master id
-//! (`+0x224`/`+0x22C`/`+0x230`), счётчик попыток наращивается DWORD-инкрементом
-//! (`+0x228`), `SetScriptFile` копирует байты до первого NUL в std::string
-//! без завершающего нуля (`+0x284`), pet level и experience живут смежными
-//! DWORD (`+0x254`/`+0x258`), а `MasterInfo` занимает десять DWORD от
-//! `+0x22C` до `+0x254`, совпадая с `zone/combat/masterinfo.rs`.
-//! Отдельного pub-символа `IsTamable` нет: её тело встроено в
-//! `SetTamedSign` как `dwTamable == 1 && tameAttemptCount < dwMaxTameAttemptCount`.
-//! Родной `SetTamedSign` повторяет ту же tamable-проверку и отказ перезаписи
-//! живой master-связи внутри записи знака; эти guard-ы переходный владелец
-//! оставляет координатору `skills/monstertaming.rs`, а здесь хранит только
-//! саму запись. Родной `SetPetLevel` отсекает запись уровня `10+`; переходный
-//! владелец намеренно сохраняет прежнее единое поведение пары setter без
-//! отсечения — известное расхождение, отложенное для pet-поведения.
+//! Строка script копируется до первого NUL без завершающего нуля; `MasterInfo`
+//! занимает десять DWORD и совпадает с `zone::combat::masterinfo`. Guard-ы
+//! tamable-проверки и отказа перезаписи живой master-связи переходный владелец
+//! назначает координатору `skills/monstertaming.rs`, здесь хранится только сама
+//! запись. Известное расхождение: родной `SetPetLevel` отсекает запись уровня
+//! 10+, а переходный владелец намеренно сохраняет прежнее единое поведение
+//! setter без отсечения — вопрос отложен для pet-поведения.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#npc-и-базовые-фигуры
 
 use nebokrai_shared::resources::MonsterProperties;
 

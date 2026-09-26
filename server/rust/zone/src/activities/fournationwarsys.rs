@@ -1,29 +1,17 @@
-//! GameServer startup-owner войны четырёх стран `CFourNationWarSys` в Zone `activities/`.
+//! GameServer startup-owner войны четырёх стран `CFourNationWarSys` в Zone
+//! `activities/`. Wire и startup side effects подтверждены точными
+//! `gameserver.exe + GameServer.pdb` и (парная сторона формата)
+//! `Nworldserver.exe + WorldServer.pdb`; исходные owners
+//! `organizingsystem/fournationwarsys.cpp/.h`.
 //!
-//! Wire и startup side effects подтверждены точными
-//! `gameserver.exe + GameServer.pdb` и `worldserver.exe + worldserver.pdb`;
-//! исходные owners `organizingsystem/fournationwarsys.cpp/.h`. Snapshot несёт
-//! signed count, 196-байтные setup records, затем signed count и 16-байтные
-//! `tagRECT`. World serializer и Game decoder используют одинаковый порядок.
-//!
-//! Decoder принимает повторный snapshot, пока setup vector остаётся пустым;
-//! при уже опубликованных setup оригинал удалял buffer и оставлял dangling
-//! pointers, поэтому Rust возвращает typed error без разрушения state. Rect
-//! count больше пяти в оригинале писал за static array и здесь блокируется
-//! после сохранения допустимого префикса. Malformed tail также сохраняет все
-//! полностью опубликованные records и cursor.
-//!
-//! `InitWarState` идёт по vector-order, ищет main region с proxy fallback,
-//! принимает только nation region, применяет `(index, region_state)` и копирует
-//! пять relive rectangles. Process singleton заменён owned-полем `CGame`.
-//! Полная фазовая цепочка `0x7FE3C..0x7FE45` сохраняет проверку индекса,
-//! DUTH/Mass/Fight, различия local/proxy lookup, очистку process-wide времени
-//! и morale, пятизначный signup payload и atomic take пяти результатов.
-//! Region/shape/NPC/player effects фаз исполняют concrete `CGame` и
-//! `ServerNationRegion`; отдельного process runtime у FourNation больше нет.
-//! Direct morale `0x7FE49` и replacement player-war-time `0x7FE47` принадлежат
-//! тому же game owner-у; остальные player-war-time queries ниже ещё сохраняют
-//! RAW.
+//! Decoder принимает повторный snapshot, пока setup vector пуст; dangling
+//! pointers оригинала при уже опубликованных setup выражены typed error без
+//! разрушения state; rect count больше пяти блокируется после сохранения
+//! допустимого префикса; malformed tail сохраняет все полностью опубликованные
+//! records и cursor. Фазовая цепочка сохраняет проверку индекса, DUTH/Mass/Fight
+//! и atomic take пяти результатов; process singleton заменён owned-полем
+//! `CGame`. Остальные player-war-time queries ниже сохраняют статус RAW.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#войны-и-расписания
 
 use std::collections::BTreeMap;
 use thiserror::Error;

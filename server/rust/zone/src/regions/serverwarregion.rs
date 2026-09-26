@@ -1,42 +1,22 @@
 //! Данные, wire-stream decoder-семья и скалярные операции общего war-региона
 //! `CServerWarRegion`. Исходный владелец — `appserver/serverwarregion.h/.cpp`;
-//! сверка по точной паре `gameserver.exe` + `GameServer.pdb` (идентификаторы
-//! сборки — `server/rust/src/manifest/_gameserver_export_manifest.toml`).
-//! Переходный агрегат `CServerWarRegion` остаётся в старом пакете: он хранит
-//! живой региональный реестр `CServerRegion`, а его contender/symbol колонки
-//! hub-потребители (decoder-ы city/godsbattle шимов, timeout aggregate city,
-//! `CGame`) читают и переписывают как поля. Этому модулю делегируются
-//! data-типы contender-ов и payload-логов, блокированные/typed-границы
+//! сверка по точной паре `gameserver.exe` + `GameServer.pdb`. Переходный агрегат
+//! остаётся в старом пакете: хранит живой региональный реестр `CServerRegion`,
+//! а contender/symbol колонки читают и переписывают hub-потребители. Сюда
+//! делегированы data-типы contender-ов и payload-логов, typed-границы
 //! арифметики, потоковые readers с `RegionDecodeInputBlock`, error-семейство
-//! `WarRegionDecodeError` и чистые context-контракты без hub-типов в
-//! сигнатурах. Decode-context (`ServerRegionDecodeContext`) и contend-context
-//! с `run_base_region_ai` над живым `CServerRegion` остаются у старого пакета
-//! вместе с методами агрегата.
+//! `WarRegionDecodeError` и чистые context-контракты; decode-contend-context
+//! над живым `CServerRegion` остаётся у старого пакета.
 //!
-//! Статус `IMPLEMENTED, VERIFIED_DISASSEMBLY` (унаследован от шапки старого
-//! владельца, без повышения): contender lifecycle `OnEnterContend` RVA
-//! `0x001D26F0`, `DecContendTime` `0x001D25F0`, `CancelContendByPlayerID`
-//! `0x001D2C40`, `AddContend` `0x001D2D80`, `AI` `0x001D31A0`,
-//! `SetFacWinSymbol` `0x001D33A0`, `CancelContendBySymbolID` `0x001D3460` и
-//! `OnContendTimeOver` `0x001D3820`, decoder `DecordFromByteArray`
-//! `0x001D3110`, `UpdateContendPlayer` `0x001D3530`, phase callbacks и
-//! clear/reset. PDB подтверждает `tagContend` размером `0x34`, ordered
-//! `m_listContend +0x24C`, `m_FacWinSymbol +0x258` и три signed counters
-//! `+0x264..+0x26C`.
-//!
-//! `Vec` и `BTreeMap` сохраняют list/map order. `DWORD`-время и signed
-//! умножения сохраняют wrapping. Единственный неопределённый x86-край
-//! `INT_MIN / -1` не получает придуманной реакции и возвращает локальный
-//! `ContendArithmeticBlock` (BLOCKED_MISSING_FACT наследия). Для NaN/inf и
-//! out-of-range x87 `fistp i32` точная реакция процесса не доказана: safe
-//! Rust не назначает ей saturating cast и возвращает
-//! `WarDamageArithmeticBlock`. Decoder читает три signed little-endian DWORD
-//! после base-prefix и обновляет только keys `0..total`: старые map-keys за
-//! новым total оригинал не очищает. Записи в `m_lVicSymbolNum` в
-//! constructor-е нет; его исходное значение до первого доказанного
-//! присваивания остаётся `UNKNOWN` — safe Rust хранит для него zero в
-//! `Default`, но это не утверждение о содержимом неинициализированной памяти
-//! оригинала.
+//! `DWORD`-время и signed умнения сохраняют wrapping. Неопределённый x86-край
+//! `INT_MIN / -1` возвращает локальный `ContendArithmeticBlock`, а недоказанная
+//! реакция x87 `fistp i32` на NaN/inf/out-of-range — `WarDamageArithmeticBlock`
+//! (BLOCKED_MISSING_FACT наследия, без придуманного saturating cast). Decoder
+//! обновляет только keys `0..total`: старые map-keys за новым total оригинал не
+//! очищает. Записей `m_lVicSymbolNum` в constructor-е нет — исходное значение
+//! остаётся `UNKNOWN` (zero в `Default` не утверждает содержимое
+//! неинициализированной памяти оригинала).
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#war-регионы
 
 use nebokrai_shared::protocol::LegacyReader;
 

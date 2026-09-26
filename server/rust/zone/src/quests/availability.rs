@@ -1,7 +1,7 @@
 //! Флаг доступности и время задания из `CPlayer` Game
 //! (`server/gameserver/appserver/player.cpp`).
-//! GameServer/gameserver.exe SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E;
-//! GameServer.pdb: RSDS 5bee6dd1-bf90-49b8-8be9-eb25c4038d53, age 2.
+//! Точная пара `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
+//! (идентификаторы — docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! `QuestTimeBegin` VA 0x0042DA20–0x0042DAAF, `QuestTimeClear`
 //! VA 0x0042DAC0–0x0042DB32, `SetQuestOn` VA 0x0042DB40–0x0042DBB4
 //! записывают поля игрока до создания клиентского сообщения.

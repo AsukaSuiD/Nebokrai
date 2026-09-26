@@ -1,37 +1,20 @@
 //! Spawn setup data-контракты `CServerRegion::AddNpc/AddMonsterRect` и
-//! batch-ядра их spawn-циклов: ядро инициализации создаваемого NPC,
-//! batch-циклы `AddNpc` и `AddMonsterRect` с телом `AddMonster`. Исходный
-//! владелец — `appserver/serverregion.h/.cpp`; сверка по точной паре
-//! `gameserver.exe` + `GameServer.pdb` (идентификаторы сборки —
-//! `server/rust/src/manifest/_gameserver_export_manifest.toml`). Переходный
-//! агрегат `CServerRegion` и доменные `CNpc`/`CMonster` остаются в старом
-//! пакете: агрегат хранит те же setup/monster колонки, factory-ветви
-//! `CreateObject(500/600, id)` остаются в `appserver/baseobject.rs`, а
-//! batch-ядра достигаются узкими trait-швами (`SpawnedNpcAccess`/
-//! `SpawnedMonsterAccess` над доменными объектами и store-трейты над
-//! переходными хранилищами) без изменения сигнатур методов переходного
-//! агрегата. Ядра читают монстр-реестр и skill-фабрику как уже zone/shared
-//! владельцев (`shared::resources::MonsterRegistry`,
-//! `skills::skillfactory::CSkillFactory`); startup decoder, lookup-семья
-//! NPC, AI refresh-фасады и context-обвязки log/send/guard не переносятся —
-//! impl-трейтов старого пакета перенаправляют исходные context-вызовы в том
-//! же порядке.
+//! batch-ядра их spawn-циклов: ядро инициализации создаваемого NPC, batch-циклы
+//! `AddNpc` и `AddMonsterRect` с телом `AddMonster`. Исходный владелец —
+//! `appserver/serverregion.h/.cpp`; сверка по точной паре `gameserver.exe` +
+//! `GameServer.pdb`. Переходный агрегат `CServerRegion` и доменные
+//! `CNpc`/`CMonster` остаются в старом пакете: factory-ветви
+//! `CreateObject(500/600, id)` остаются в `appserver/baseobject.rs`, batch-ядра
+//! достигаются узкими trait-швами (`SpawnedNpcAccess`/`SpawnedMonsterAccess` и
+//! store-трейты) без изменения сигнатур переходного агрегата. Ядра читают
+//! zone/shared владельцев (`shared::resources::MonsterRegistry`,
+//! `skills::skillfactory::CSkillFactory`); context-обвязки log/send/guard
+//! реализуются impl-трейтами старого пакета в исходном порядке вызовов.
 //!
-//! Pub `AddNpc@CServerRegion` из карты стены — VA `0x00480A40`
-//! (RVA `0x00080A40`, prototype `int __thiscall AddNpc(tagNpc*, bool, bool)`,
-//! `serverregion.cpp:1003`) — совпадает с метаданными исследовательской
-//! ведомости старого файла и с уже подтверждённой inline-записью
-//! script-колонки в Zone `regions/npc.rs`; парный `AddMonsterRect` —
-//! RVA `0x00084040` (`serverregion.cpp:672`, prototype
-//! `int __thiscall AddMonsterRect(tagMonster*, long, bool, bool)`) из той же
-//! ведомости. Ведомость ctor-инициализации
-//! `CNpc` (`+0x1D4` пустая MSVC-строка script, `+0x1F0` show_list=1, колонки
-//! live `+0x1F4`/born `+0x1F8` ctor не пишет) имеет статус VERIFIED в шапке
-//! `crate::regions::npc` и применяется здесь через generic trait-шов без
-//! нового утверждения. Перенесённые batch-тела сверены statement-в-statement
-//! с телом переходного владельца на момент переноса: различия только в
-//! pub-видимости, путях модулей и объявленных швах (store/SpawnedMonsterAccess/
-//! context-обвязки); статусы при переносе не повышались.
+//! Перенесённые batch-тела сверены statement-в-statement с телом переходного
+//! владельца на момент переноса; статусы не повышались. Ctor-инициализация
+//! `CNpc` применяется через generic шов из `crate::regions::npc`.
+//! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#региональное-пространство
 
 use nebokrai_shared::resources::{
     MonsterProperties, MonsterRegistry, get_monster_property_by_origin_name,
