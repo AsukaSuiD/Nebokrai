@@ -9,9 +9,11 @@
 //! в прежнем порядке. `CoInitialize/CoUninitialize` не имеют Linux
 //! runtime-аналога: действующие DB-owner-ы используют Tiberius, поэтому COM
 //! apartment был заменяемым техническим механизмом, а не наблюдаемым серверным
-//! контрактом. Единственный внешний hook — `SendErrLog` в Login — остаётся у
-//! прежнего owner-а в game.rs и приходит closure-параметром, потому что его
-//! `CMessage`-edge принадлежит Realm `app/worldserver` (волна monitoring-message завершена).
+//! контрактом. Единственный внешний hook — `SendErrLog` в Login
+//! (`send_err_log_to_login`) — принадлежит Realm `app/worldserver` (волна
+//! monitoring-message завершена), поэтому волна C5-B свернула его вызов прямо
+//! в тело worker-входа; результат `CMessage::Send` исходно игнорировался и
+//! сохранён в `_legacy_result`, а generic-делегат старого пакета снят.
 //!
 //! Guards фиксируют точки исходных unlock: `release` замещает unlock успешного
 //! пути, `stop_outer_owner` — blocked-ветку, которая исходно не достигала
@@ -27,13 +29,13 @@
 //! в [`crate::app::world_save_reports`] (волна C5-A); старый пакет закрепляет
 //! их generic-формы alias-ами на `CGame` до её волны.
 
-use nebokrai_shared::network::ClientSendQueue;
-
 use crate::activities::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
 };
 use crate::activities::rsjjcsys::RsJjcSysOwner;
-use crate::app::worldserver::{WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest};
+use crate::app::worldserver::{
+    WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, send_err_log_to_login,
+};
 use crate::characters::honorranks::CHonorRanks;
 use crate::characters::player::CPlayer;
 use crate::content::dbgoods::DbGoodsOwner;
@@ -52,7 +54,7 @@ use crate::persistence::savedb::{
     DoSaveDataLifecycleReport, SaveDataFinalDisposition, SaveDataFinalReport,
     SaveDataLifecycleState, SaveDataLogEvent, SaveDataLogPublishBlock,
     SaveDataLogPublishDisposition, SaveDataLogSink, SaveDataLogTarget,
-    SaveDataMonitoringReport, SaveDataMonitoringSnapshot, WorldSaveThreadJob,
+    SaveDataMonitoringSnapshot, WorldSaveThreadJob,
     do_save_data_lifecycle,
 };
 use crate::regions::rsregion::RsRegionOwner;
@@ -158,7 +160,6 @@ pub async fn save_thread_func<
     PublishState,
     ReleaseSerialization,
     GetMonitoring,
-    SendErrLog,
 >(
     save: &'save mut WorldSaveDataOwner,
     settings: &WorldDatabaseSettings,
@@ -185,7 +186,6 @@ pub async fn save_thread_func<
     publish_state: PublishState,
     release_serialization: ReleaseSerialization,
     get_monitoring: GetMonitoring,
-    send_err_log: SendErrLog,
 ) -> WorldSaveThreadReport<'save>
 where
     S: VariableListSaveSource,
@@ -205,7 +205,6 @@ where
     PublishState: FnMut(SaveDataLifecycleState),
     ReleaseSerialization: FnOnce(),
     GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
-    SendErrLog: FnOnce(Option<&ClientSendQueue>, &SaveDataMonitoringReport),
 {
     let guard = WorldSaveThreadGuard { save };
     let start_log = match log_sink.publish(&save_thread_log_event(b"SaveThread Starting...")) {
@@ -247,7 +246,15 @@ where
             log_sink,
             publish_state,
             get_monitoring,
-            |monitoring| send_err_log(login_sender, monitoring),
+            |monitoring| {
+                let _legacy_result = send_err_log_to_login(
+                    login_sender,
+                    monitoring.message_type,
+                    monitoring.server_id,
+                    monitoring.world_number_bits as i32,
+                    Some(&monitoring.text),
+                );
+            },
         )
         .await
     };

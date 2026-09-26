@@ -44,8 +44,8 @@ pub mod world_game_view; // узкий game-view обработчиков мир
 pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры (волна C5-A).
 pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты и organizing player-контексты (волна C5-A).
 pub mod world_message; // wire-сообщение направлений Login/Game<->World.
-pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration и typed-доставка его событий
-pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, INI-замена, build error MainLoop DB-stage
+pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration, typed-доставка его событий и runtime-контракт Init с region-load швом dyn RegionParameterLoadTarget (impl у process-owner-а; волна C5-B)
+pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, runtime-швы с worker-мостами и process-impl (волна C5-B), INI-замена, build error MainLoop DB-stage
 pub mod world_main_loop_data; // данные хода MainLoop World: stage-отчёты, конфигурация, JJC/LeiTing worker-адаптеры и связка StateOwners/Owners/Callbacks/Block/Report; rs_player/largess/Game входят generic-параметрами (волна C5-A).
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view; // узкие organizing-view мировых диспетчеров.

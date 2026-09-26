@@ -36,15 +36,15 @@ use crate::dbaccess::worlddb::rsjjcsys::TiberiusRsJjcSys;
 use crate::dbaccess::worlddb::rsplayer::{
     TiberiusPlayerLoadData, TiberiusRsPlayer,
 };
-use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 pub(crate) use nebokrai_realm::app::world_network::{
     WorldProcessNetworkError, WorldProcessNetworkTurn, report_world_network_turn,
 };
 pub(crate) use nebokrai_realm::app::world_init_context::*;
 pub(crate) use nebokrai_realm::app::world_main_loop_contexts::*;
 use nebokrai_realm::app::world_network::WorldProcessNetworkRuntime as RealmProcessNetworkRuntime;
+use nebokrai_realm::persistence::saveworker::save_thread_func;
 use crate::dbaccess::worlddb::rsregion::{
-    RegionParametersLoadOutcome, RsRegionOwner, TiberiusRsRegion,
+    RegionParameterLoadTarget, RegionParametersLoadOutcome, RsRegionOwner, TiberiusRsRegion,
 };
 use crate::dbaccess::worlddb::rssetup::{
     LoadedSetupIds, TiberiusRsSetup, WorldDatabaseSettings, WorldTdsClient,
@@ -113,12 +113,11 @@ use crate::worldserver::appworld::misc::CopyNumberTimerState;
 use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 
 use super::game::{
-    CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
+    CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner,
     WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
     WorldCollectPlayerDataRequestState, WorldGameInitWorkerKind, WorldGameReleaseContext,
     WorldGameReleaseDatabaseOwner, WorldGameReleaseOptionalOwner, WorldGameReleaseVoidOwner,
-    WorldJjcRuntimeContext,
-    WorldLeiTingRuntimeContext, WorldMainLoopClockState, WorldMainLoopInitializationState,
+    WorldMainLoopClockState, WorldMainLoopInitializationState,
     WorldGameThreadRuntime, WorldMainLoopBlock, WorldMainLoopCallbacks,
     WorldMainLoopConfiguration, WorldMainLoopOwners, WorldMainLoopResourceContext,
     WorldMainLoopResourceSnapshot, WorldRefreshExternalCounts,
@@ -127,7 +126,7 @@ use super::game::{
     WorldPlayerLoadDataAdapter, WorldPlayerRanksRequestState, WorldProcessMessageStageState,
     WorldRegionOwner, WorldReloadContext, WorldReloadProfileFlags, WorldRunSaveTriggerState,
     WorldSaveRuntimeContext, WorldSaveThreadHandleState,
-    WorldSaveThreadJob, WorldSaveThreadLaunchRequest, WorldSaveThreadReport, save_thread_func,
+    WorldSaveThreadJob, WorldSaveThreadLaunchRequest, WorldSaveThreadReport,
 };
 use super::honorranks::CHonorRanks;
 use super::playerranks::{CPlayerRanks, PlayerRanksReleaseReport};
@@ -136,12 +135,8 @@ use super::savedb::{
     SaveDataLifecycleState, SaveDataLocalTime, SaveDataLogPublisher,
     SaveDataMonitoringSnapshot,
 };
-use super::jjcmaintenanceworker::{
-    WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
-};
-use super::leitingresetworker::{
-    WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
-};
+use super::jjcmaintenanceworker::WorldJjcWeekClearWorker;
+use super::leitingresetworker::WorldLeiTingResetWorker;
 use super::playerloadworker::WorldPlayerDataLoadOwner;
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
 
@@ -1181,41 +1176,9 @@ impl WorldProcessInitContext {
     }
 }
 
-impl WorldJjcRuntimeContext for WorldJjcProcessContext {
-    fn on_week_clear_spawn_failed(&mut self, error: io::Error) {
-        eprintln!("WorldServer: не создан JJC week-clear worker: {error}");
-    }
-
-    fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent) {
-        eprintln!("WorldServer: JJC DB worker: {event:?}");
-    }
-}
-
-
-impl WorldLeiTingRuntimeContext for WorldLeiTingProcessContext {
-    fn on_database_reset_spawn_failed(
-        &mut self,
-        request: LeiTingDatabaseResetRequest,
-        error: io::Error,
-    ) {
-        eprintln!(
-            "WorldServer: не создан LeiTing DB worker для kind {} stamp {}: {error}",
-            request.update_kind, request.stamp
-        );
-    }
-
-    fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent) {
-        match event {
-            WorldLeiTingResetWorkerEvent::Started(_) => {
-                self.add_log(b"Strictest Enforcement update thread begin.")
-            }
-            WorldLeiTingResetWorkerEvent::Finished { outcome, .. } => {
-                eprintln!("WorldServer: LeiTing DB worker завершён: {outcome:?}")
-            }
-        }
-    }
-}
-
+// JJC/LeiTing runtime-швы (`WorldJjcRuntimeContext`/`WorldLeiTingRuntimeContext`),
+// их worker-мосты и process-impl перенесены в Realm `app/world_main_loop_contexts`
+// волной C5-B к самим process-контекстам; доступны через glob-реэкспорт выше.
 
 /// Долгоживущие concrete контексты трёх последовательных MainLoop DB-stage.
 /// Все они строятся только после успешного `CGame::Init` из тех же setup,
@@ -1457,11 +1420,11 @@ impl WorldGameInitContext for WorldProcessInitContext {
         Ok(ids)
     }
 
-    async fn load_region_parameters(&mut self, game: &mut CGame) -> bool {
+    async fn load_region_parameters(&mut self, target: &mut dyn RegionParameterLoadTarget) -> bool {
         matches!(self.region
             .as_mut()
             .expect("CRsRegion создаётся до LoadRegionParam")
-            .load_region_parameters(game)
+            .load_region_parameters(target)
             .await, RegionParametersLoadOutcome::ReturnedTrue { .. })
     }
 
@@ -2188,6 +2151,7 @@ impl WorldGameReleaseContext for WorldProcessRuntime {
 }
 
 impl WorldGameThreadRuntime for WorldProcessRuntime {
+    type Game = CGame;
     type InitBlock = Infallible;
     type MainLoopBlock = WorldProcessMainLoopBlock;
 

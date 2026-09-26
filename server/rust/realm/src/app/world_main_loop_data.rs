@@ -1,8 +1,8 @@
 //! Данные хода `CGame::MainLoop` WorldServer без самой игры, перенесённые из
 //! `src/worldserver/worldserver/game.rs` волной C5-A (hub-data уровень):
 //! stage-отчёты (timer/AI/session-factory/faction-war/db-misc/net-session/
-//! minute/bai-tan-jjc/save/tail/ping), конфигурация хода, JJC/LeiTing
-//! worker-адаптеры и связка `StateOwners`/`Owners`/`Callbacks`/`Block`/`Report`.
+//! minute/bai-tan-jjc/save/tail/ping), конфигурация хода и связка
+//! `StateOwners`/`Owners`/`Callbacks`/`Block`/`Report`.
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
 //! RSDS совпадает).
@@ -17,11 +17,11 @@
 //! process-цепочки, точки которой (`process_message`/`process_world_message`/
 //! `route_loaded_player`) держат прежнюю конкретную декларацию до следующей
 //! порции. Глубокие timer-контексты (`WorldTimerHandler` и effect-адаптеры
-//! countdown/phase) и worker-адаптеры `WorldJjcWorkerContext`/
-//! `WorldLeiTingWorkerContext` с trait-связкой остаются у владельца стадий:
-//! их impl-ы process-контекстов живут в запрещённом этой волне runtime.rs, и
-//! переезд trait-ов без них ломал бы orphan-rule (отложено до волны
-//! process-worker-а).
+//! countdown/phase) остаются у владельца стадий; worker-адаптеры
+//! `WorldJjcWorkerContext`/`WorldLeiTingWorkerContext` с trait-связкой
+//! (`WorldJjcRuntimeContext`/`WorldLeiTingRuntimeContext`) уехали в
+//! [`crate::app::world_main_loop_contexts`] волной C5-B вместе с impl-ами
+//! process-контекстов (единая волна сохранила orphan-rule).
 
 use std::convert::Infallible;
 use std::sync::Arc;

@@ -16,6 +16,14 @@
 //! события typed (`JjcLogEvent`, worker events). Новых Send-обязательств
 //! перенос не вводит: dyn-совместимость сохраняется по правилу ADR-0013, а
 //! форма владения detached worker-ами остаётся у модулей `activities/`.
+//!
+//! Волной C5-B сюда переехали также runtime-швы `WorldJjcRuntimeContext` и
+//! `WorldLeiTingRuntimeContext` с их worker-мостами (`WorldJjcWorkerContext`,
+//! `WorldLeiTingWorkerContext`) из `worldserver/worldserver/game.rs` и
+//! process-impl этих швов из `runtime.rs` — все одной волной: после переезда
+//! самих process-контекстов прежняя посадка impl дала бы orphan-нарушение.
+//! Мосты конструируются старым пакетом через `new`; glue-строки impl перенесены
+//! без изменений (JjcLogEvent-подход наблюдаемости исходно принят).
 
 use std::error::Error;
 use std::fmt;
@@ -32,10 +40,14 @@ use nebokrai_shared::resources::LeiTingLocalTime;
 use crate::activities::jjcsystem::{
     JjcLocalTime, JjcLogEvent, JjcRank, JjcRunContext, JjcSystemTime,
 };
-use crate::activities::jjcmaintenanceworker::WorldJjcWeekClearWorker;
+use crate::activities::jjcmaintenanceworker::{
+    WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
+};
 use crate::activities::leiting::LeiTingContext;
 use crate::activities::leitingreset::LeiTingDatabaseResetRequest;
-use crate::activities::leitingresetworker::WorldLeiTingResetWorker;
+use crate::activities::leitingresetworker::{
+    WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
+};
 use crate::activities::rsjjcsys::{RsJjcSysOwner, TiberiusRsJjcSys};
 use crate::app::world_message::CMessage;
 use crate::app::worldserver::{WorldLogLocalTime, WorldLogTextOwner};
@@ -290,6 +302,104 @@ impl JjcRunContext for WorldJjcProcessContext {
     }
 }
 
+/// Platform/log дополнение к `JjcRunContext`, необходимое concrete DB-worker-у.
+/// Сам доменный `CJJcSystem` по-прежнему не знает о Tokio либо system threads.
+///
+/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B вместе с
+/// worker-мостом и process-impl ниже: прежняя посадка impl в `runtime.rs` стала
+/// бы orphan-нарушением, потому что process-контекст уже живёт здесь.
+pub trait WorldJjcRuntimeContext: JjcRunContext {
+    fn on_week_clear_spawn_failed(&mut self, error: io::Error);
+    fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent);
+}
+
+/// Узкий adapter, связывающий подтверждённый `CJJcSystem::Run` с одним
+/// `WorldJjcWeekClearWorker`, не передавая mutable game-owner в поток.
+/// Конструируется старым пакетом через `new`; поля остаются приватными.
+pub struct WorldJjcWorkerContext<'a, Context> {
+    context: &'a mut Context,
+    worker: &'a WorldJjcWeekClearWorker,
+    runtime: tokio::runtime::Handle,
+}
+
+impl<'a, Context> WorldJjcWorkerContext<'a, Context> {
+    pub fn new(
+        context: &'a mut Context,
+        worker: &'a WorldJjcWeekClearWorker,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            context,
+            worker,
+            runtime,
+        }
+    }
+}
+
+impl<Context: WorldJjcRuntimeContext> JjcRunContext for WorldJjcWorkerContext<'_, Context> {
+    fn current_time_seconds(&mut self) -> i32 {
+        self.context.current_time_seconds()
+    }
+
+    fn local_time(&mut self, timestamp: i32) -> JjcLocalTime {
+        self.context.local_time(timestamp)
+    }
+
+    fn system_time(&mut self) -> JjcSystemTime {
+        self.context.system_time()
+    }
+
+    fn tick_count_ms(&mut self) -> u32 {
+        self.context.tick_count_ms()
+    }
+
+    fn load_jjc_rank(&mut self, ranks: &mut Vec<JjcRank>) -> bool {
+        self.context.load_jjc_rank(ranks)
+    }
+
+    fn start_jjc_week_clear(&mut self) -> bool {
+        match self.worker.dispatch(self.runtime.clone()) {
+            Ok(()) => true,
+            Err(error) => {
+                self.context.on_week_clear_spawn_failed(error);
+                false
+            }
+        }
+    }
+
+    fn clear_jjc_season(&mut self) -> bool {
+        let returned = self.worker.clear_season(self.runtime.clone());
+        while let Some(event) = self.worker.try_next_event() {
+            self.context.on_week_clear_worker_event(event);
+        }
+        returned
+    }
+
+    fn write_private_profile_string(
+        &mut self,
+        section: &[u8],
+        key: &[u8],
+        value: &[u8],
+    ) -> bool {
+        self.context
+            .write_private_profile_string(section, key, value)
+    }
+
+    fn log(&mut self, event: JjcLogEvent) {
+        self.context.log(event);
+    }
+}
+
+impl WorldJjcRuntimeContext for WorldJjcProcessContext {
+    fn on_week_clear_spawn_failed(&mut self, error: io::Error) {
+        eprintln!("WorldServer: не создан JJC week-clear worker: {error}");
+    }
+
+    fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent) {
+        eprintln!("WorldServer: JJC DB worker: {event:?}");
+    }
+}
+
 pub struct WorldLeiTingProcessContext {
     runtime: tokio::runtime::Handle,
     sender: Option<ServerCommandHandle>,
@@ -381,6 +491,114 @@ impl LeiTingContext for WorldLeiTingProcessContext {
 
     fn add_update_end_log(&mut self) {
         self.log.add(b"LeiTing All Update End");
+    }
+}
+
+/// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
+/// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
+///
+/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B вместе с
+/// worker-мостом и process-impl ниже: прежняя посадка impl в `runtime.rs` стала
+/// бы orphan-нарушением, потому что process-контекст уже живёт здесь.
+pub trait WorldLeiTingRuntimeContext: LeiTingContext {
+    fn on_database_reset_spawn_failed(
+        &mut self,
+        request: LeiTingDatabaseResetRequest,
+        error: io::Error,
+    );
+
+    fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent);
+}
+
+/// Узкий adapter, связывающий подтверждённый `CLeiTing::Run` с одним
+/// `WorldLeiTingResetWorker`, не передавая mutable game-owner в поток.
+/// Конструируется старым пакетом через `new`; поля остаются приватными.
+pub struct WorldLeiTingWorkerContext<'a, Context> {
+    context: &'a mut Context,
+    worker: &'a WorldLeiTingResetWorker,
+    runtime: tokio::runtime::Handle,
+}
+
+impl<'a, Context> WorldLeiTingWorkerContext<'a, Context> {
+    pub fn new(
+        context: &'a mut Context,
+        worker: &'a WorldLeiTingResetWorker,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            context,
+            worker,
+            runtime,
+        }
+    }
+}
+
+impl<Context: WorldLeiTingRuntimeContext> LeiTingContext
+    for WorldLeiTingWorkerContext<'_, Context>
+{
+    type Block = Context::Block;
+
+    fn add_update_start_log(&mut self) {
+        self.context.add_update_start_log();
+    }
+
+    fn local_time_from_timestamp(
+        &mut self,
+        timestamp: u32,
+    ) -> Result<LeiTingLocalTime, Self::Block> {
+        self.context.local_time_from_timestamp(timestamp)
+    }
+
+    fn current_week_day(&mut self) -> u16 {
+        self.context.current_week_day()
+    }
+
+    fn send_all(&mut self, message: &CMessage) {
+        self.context.send_all(message);
+    }
+
+    fn add_database_begin_log(&mut self) {
+        self.context.add_database_begin_log();
+    }
+
+    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block> {
+        self.context.mktime(local_time)
+    }
+
+    fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32) {
+        let request = LeiTingDatabaseResetRequest { update_kind, stamp };
+        if let Err(error) = self.worker.dispatch(request, self.runtime.clone()) {
+            self.context
+                .on_database_reset_spawn_failed(request, error);
+        }
+    }
+
+    fn add_update_end_log(&mut self) {
+        self.context.add_update_end_log();
+    }
+}
+
+impl WorldLeiTingRuntimeContext for WorldLeiTingProcessContext {
+    fn on_database_reset_spawn_failed(
+        &mut self,
+        request: LeiTingDatabaseResetRequest,
+        error: io::Error,
+    ) {
+        eprintln!(
+            "WorldServer: не создан LeiTing DB worker для kind {} stamp {}: {error}",
+            request.update_kind, request.stamp
+        );
+    }
+
+    fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent) {
+        match event {
+            WorldLeiTingResetWorkerEvent::Started(_) => {
+                self.add_log(b"Strictest Enforcement update thread begin.")
+            }
+            WorldLeiTingResetWorkerEvent::Finished { outcome, .. } => {
+                eprintln!("WorldServer: LeiTing DB worker завершён: {outcome:?}")
+            }
+        }
     }
 }
 

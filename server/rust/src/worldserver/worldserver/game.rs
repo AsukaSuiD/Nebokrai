@@ -28,13 +28,11 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::{Path};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
 use nebokrai_realm::app::world_game_view::{
     WorldCountryKingGateBlock, WorldCountryView, WorldCountryWarGate,
     WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess, WorldDeleteRoleCountryGate,
@@ -44,13 +42,12 @@ use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptResources, normalize_script_path,
 };
 
-use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
-use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
+use crate::dbaccess::worlddb::dbcountry::CountrySaveSnapshot;
 use crate::dbaccess::worlddb::dbmisc::{
     CDbMisc, DbMiscContext, DbMiscDeliveryContext, DbMiscDoneOutBlock,
 };
 use crate::dbaccess::worlddb::largess::{
-    CostDatabaseSettings, CostDatabaseSettingsParts, LargessOwner, LoadLargessBlock,
+    CostDatabaseSettings, CostDatabaseSettingsParts, LoadLargessBlock,
     LoadLargessReport, TiberiusLargess,
 };
 use crate::dbaccess::worlddb::playerdataqueue::CPlayerDataQueue;
@@ -61,24 +58,19 @@ use crate::dbaccess::worlddb::playerloadqueue::{
 use crate::dbaccess::worlddb::rsenemyfactions::{
     EnemyFactionSaveSnapshot, RsEnemyFactionsOwner,
 };
-use crate::dbaccess::worlddb::rsfaction::RsFactionOwner;
-use crate::dbaccess::worlddb::rsgenvar::RsGenVarOwner;
 use crate::dbaccess::worlddb::rsgodsbattle::{
     GodsBattleFactionXydSnapshot, GodsBattleNpcFactionSnapshot, RsGodsBattleOwner,
     TiberiusRsGodsBattle,
 };
-use crate::dbaccess::worlddb::rsjjcsys::RsJjcSysOwner;
 use crate::dbaccess::worlddb::rsplayer::{
     PlayerRanksStatOutcome, RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rsregion::{
-    RegionDatabaseParameters, RegionParameterLoadTarget, RegionSaveSnapshot, RsRegionOwner,
+    RegionDatabaseParameters, RegionParameterLoadTarget, RegionSaveSnapshot,
 };
 use crate::dbaccess::worlddb::rssetup::{
-    LoadedSetupIds, RsSetupOwner, WorldDatabaseSettings, WorldDatabaseSettingsParts,
-    WorldTdsClient,
+    LoadedSetupIds, WorldDatabaseSettings, WorldDatabaseSettingsParts, WorldTdsClient,
 };
-use crate::dbaccess::worlddb::rsunion::RsUnionOwner;
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_ipv4_word};
 use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHandlers};
@@ -149,7 +141,7 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::goodswarmember::{CGoodsWarMember, GoodsWarDeliveryContext};
 use crate::worldserver::appworld::jjcsystem::{
-    CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH, JjcConfigurationLoadReport, JjcLocalTime, JjcLogEvent, JjcRank, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcSystemTime,
+    CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH, JjcConfigurationLoadReport, JjcRunBlock, JjcRunConfig, JjcRunContext,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationWarCallbackContext,
@@ -158,7 +150,7 @@ use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     FourNationWarReloadDisposition, FourNationWarResultContext,
 };
 use crate::worldserver::appworld::leiting::{
-    CLeiTing, LeiTingBlock, LeiTingContext, LeiTingLocalTime, LeiTingRunReport,
+    CLeiTing, LeiTingBlock, LeiTingLocalTime, LeiTingRunReport,
 };
 use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactoryCacheLoadReport, SkillFactoryCacheResource,
@@ -226,7 +218,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     COrganizingCtrl, OrganizingDisbandOutcome, OrganizingDisbandPlayer, OrganizingSaveDataBlock, OrganizingNameLookupBlock, FreeFactionLookup, FreePlayerLookup,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
-    COrganizingParam, OrganizingParamLoadError, OrganizingParamReleaseReport, OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
+    COrganizingParam, OrganizingParamLoadError, OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
 };
 use crate::worldserver::appworld::organizingsystem::union::{CUnion, UnionFormatArgument};
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
@@ -236,9 +228,7 @@ use crate::worldserver::appworld::player::{
     CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate, PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport, PlayerLoadDataOutcome, PlayerLoadDataOwner, PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport, PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::CRegion;
-use crate::worldserver::appworld::script::variablelist::{
-    CVariableList, VariableListSaveSource,
-};
+use crate::worldserver::appworld::script::variablelist::CVariableList;
 use crate::worldserver::appworld::session::csessionfactory::{CSessionFactory};
 use crate::worldserver::appworld::worldcityregion::CWorldCityRegion;
 use crate::worldserver::appworld::worldcountrywarregion::WorldCountryWarRegion;
@@ -246,23 +236,17 @@ use crate::worldserver::appworld::worldregion::{CWorldRegion, WorldRegionLoadedC
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
 use crate::worldserver::worldserver::honorranks::{CHonorRanks};
 use crate::worldserver::worldserver::playerranks::{
-    CPlayerRanks, PlayerRanksInitializationConfig, PlayerRanksReleaseReport,
+    CPlayerRanks, PlayerRanksInitializationConfig,
 };
-use crate::worldserver::worldserver::savedb::{
-    SaveDataLifecycleState, SaveDataLogSink, SaveDataMonitoringSnapshot,
-};
+use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
 use crate::worldserver::worldserver::worldserver::{
     AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent, WorldRefreshInfoHighWater, WorldRefreshSaveState, refresh_info_text,
 };
 use crate::worldserver::worldserver::loginreconnectworker::{
     WorldLoginReconnectWorker, WorldLoginReconnectWorkerCompletion,
 };
-use crate::worldserver::worldserver::leitingresetworker::{
-    WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
-};
-use crate::worldserver::worldserver::jjcmaintenanceworker::{
-    WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
-};
+use crate::worldserver::worldserver::leitingresetworker::WorldLeiTingResetWorker;
+use crate::worldserver::worldserver::jjcmaintenanceworker::WorldJjcWeekClearWorker;
 use crate::worldserver::worldserver::playerloadworker::{
     WorldGameInitWorkerHandleState, WorldPlayerDataLoadOwner, WorldPlayerLoadBatchBlock,
     WorldPlayerLoadBatchReport, WorldPlayerLoadWorkerBlock, WorldPlayerLoadWorkerPool,
@@ -275,9 +259,7 @@ use crate::worldserver::worldserver::writelogworker::{
 // Драйвер потока игры World (`GameThreadFunc` со связкой init/release
 // data-типов) перенесён в Realm `app::world_runtime` (world runtime,
 // слайс C). `CGame` и тела context-реализаций остаются у process-owner-а
-// (`runtime.rs`), поэтому ниже переходный реэкспорт для старого пакета;
-// `WorldGameInitContext` и исходная форма `WorldGameThreadRuntime`
-// сохраняют CGame-типизированные подписи до волны самого `CGame`.
+// (`runtime.rs`), поэтому ниже переходный реэкспорт для старого пакета.
 pub(crate) use nebokrai_realm::app::world_runtime::{
     PlayerRanksStatRunBlock, PlayerRanksStatRunReport, WorldClientInitialization, WorldClientInitializationError, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitBlock, WorldGameInitBlockReason, WorldGameInitBooleanOwner, WorldGameInitEvent, WorldGameInitOperatorNotice, WorldGameInitReport, WorldGameInitResult, WorldGameInitVoidOwner, WorldGameInitWorkerKind, WorldGameReleaseBlock, WorldGameReleaseContext, WorldGameReleaseDatabaseOwner, WorldGameReleaseEvent, WorldGameReleaseLiveList, WorldGameReleaseOptionalOwner, WorldGameReleaseReport, WorldGameReleaseResult, WorldGameReleaseVoidOwner, WorldNetworkInitializationError, WorldRegionOwner, WorldSaveCityRegionBlock, WorldServerSetupLoadReport, WorldSetupLoadReport, WorldSetupOpenError, WorldSetupSource, WorldStringTableEncodingBlock,
 };
@@ -296,66 +278,12 @@ pub(crate) use nebokrai_realm::app::world_hub_data::{
     ProcessedWorldEvent, RoutedWorldMessage, WorldCityTransferTerminalDispatch, WorldConfederationCreationTerminalDispatch, WorldGameInitAttackCityContext, WorldGameInitCallbacks, WorldGameInitEnemyMutationEffects, WorldLoadedPlayerRouteOrder, WorldMainLoopAiStageReport, WorldMainLoopClockState, WorldMainLoopFactionWarBlock, WorldMainLoopFactionWarEffects, WorldMainLoopInitializationState, WorldMainLoopLargessState, WorldMainLoopLoginReleaseState, WorldMainLoopProfileState, WorldMainLoopSessionFactoryStageReport, WorldMainLoopTailClockState, WorldMessageOwner, WorldMessageSource, WorldProcessMessageOutcome, WorldProcessMessageStageState, WorldStringTableLoadReport, WorldStringTableUpdateCompletion, WorldStringTableUpdateReport, WorldUnionApplicationRuntimeReport, WorldUnionApplicationTerminalDispatch, WorldUnionInvitationTerminalDispatch,
 };
 
-pub(crate) trait WorldGameInitContext {
-    type Block;
-    type PlayerDatabase: RsPlayerOwner<CPlayer> + nebokrai_realm::characters::honorranks::HonorRanksDbOwner;
-    type EnemyFactionsDatabase: RsEnemyFactionsOwner;
-    type GeneralVariableDatabase: RsGenVarOwner;
-    type UnionDatabase: RsUnionOwner;
-    type FactionDatabase: RsFactionOwner;
-    type CountryDatabase: DbCountryOwner;
-    type PlayerLoadDatabase: WorldPlayerDataLoadOwner<CPlayer> + Send + 'static;
-    type PlayerLoadLargess: FnMut(&mut CPlayer) + Send + 'static;
-    type PlayerLoadClock: FnMut() -> u32 + Send + 'static;
-
-    fn install_crash_reporter(&mut self);
-    fn current_time_seconds(&mut self) -> i64;
-    fn seed_random(&mut self, seed: u32);
-    fn random(&mut self, upper_bound: i32) -> i32;
-    fn put_debug_string(&mut self, payload: &[u8]);
-    fn claim_single_instance(&mut self, title: &[u8]) -> bool;
-    fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
-
-    fn initialize_database_layer(
-        &mut self,
-        initialization: WorldGameDatabaseInitialization,
-    ) -> Result<(), Self::Block>;
-    async fn create_database_owner(
-        &mut self,
-        owner: WorldGameDatabaseOwner,
-    ) -> Result<(), Self::Block>;
-    async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
-
-    async fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
-    fn player_database(
-        &mut self,
-    ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
-    fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
-    fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
-    fn organizing_databases(&mut self) -> (&mut Self::UnionDatabase, &mut Self::FactionDatabase);
-    fn country_database(
-        &mut self,
-    ) -> (&mut Self::CountryDatabase, Option<&mut WorldTdsClient>);
-    fn goods_war_database_connection(&mut self) -> Option<&mut WorldTdsClient>;
- /// Возвращает созданный `CRSGodsBattle`; до соответствующего create-event
- /// owner закономерно отсутствует.
-    fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle>;
-    fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
-    fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
- /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
- /// внутри единственного `CGame` и освобождается его Release.
-    fn player_load_worker_runtime(
-        &mut self,
-        worker_index: u32,
-    ) -> (
-        tokio::runtime::Handle,
-        Self::PlayerLoadDatabase,
-        Self::PlayerLoadLargess,
-        Self::PlayerLoadClock,
-    );
-    fn write_log_worker_runtime(&mut self) -> tokio::runtime::Handle;
-    fn report_worker_spawn_error(&mut self, kind: WorldGameInitWorkerKind, error: &io::Error);
-}
+// Init-контракт хода перенесён в Realm `app/world_init_context` волной C5-B:
+// CGame-типизированный параметр `load_region_parameters` заменён там готовым
+// швом `&mut dyn RegionParameterLoadTarget` (`regions/rsregion.rs`), impl
+// остаётся у process-owner-а (`runtime.rs`) до дорожки C5-DB. Здесь реэкспорт
+// для generic-связок init-стадий пакета.
+pub(crate) use nebokrai_realm::app::world_init_context::WorldGameInitContext;
 
 
 // Alias бывшего двухпараметрического отчёта над generic-формой Realm
@@ -364,29 +292,12 @@ pub(crate) trait WorldGameInitContext {
 pub(crate) type WorldGameThreadReport<InitBlock, MainLoopBlock> =
     nebokrai_realm::app::world_runtime::WorldGameThreadReport<CGame, InitBlock, MainLoopBlock>;
 
-pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
-    type InitBlock;
-    type MainLoopBlock;
-
-    fn initialize_game<'game>(
-        &'game mut self,
-        game: &'game mut CGame,
-    ) -> Pin<Box<dyn Future<Output = WorldGameInitResult<Self::InitBlock>> + 'game>>;
-    fn game_thread_exit_requested(&self) -> bool;
-    fn run_main_loop<'game>(
-        &'game mut self,
-        game: &'game mut CGame,
-    ) -> Pin<Box<dyn Future<Output = Result<i32, Self::MainLoopBlock>> + 'game>>;
-    fn wait_for_save_barrier(&mut self);
-    fn take_goods_war_member(&mut self) -> CGoodsWarMember;
-    fn restore_goods_war_member(&mut self, owner: CGoodsWarMember);
-    fn take_increment_log(&mut self) -> CIncrementLog;
-    fn restore_increment_log(&mut self, owner: CIncrementLog);
-    fn take_skill_factory(&mut self) -> CSkillFactory;
-    fn restore_skill_factory(&mut self, owner: CSkillFactory);
-    fn signal_game_thread_exit(&mut self);
-    fn request_window_close(&mut self);
-}
+// Runtime-контракт потока игры Realm `app::world_runtime` теперь реализуется
+// process-owner-ом напрямую с `type Game = CGame` (foreign-трейт + локальный
+// тип легальны): CGame-типизированный локальный дубликат и его адаптер сняты
+// волной C5-B. Здесь переходный реэкспорт для impl в `runtime.rs` и обёртки
+// `game_thread_func` ниже.
+pub(crate) use nebokrai_realm::app::world_runtime::WorldGameThreadRuntime;
 
 // Контракты reconnect-семейства LoginServer (итог попытки, snapshot endpoint,
 // итог worker-а и restart-итоги) вместе с ошибкой попытки перенесены в Realm
@@ -1411,135 +1322,15 @@ pub(crate) use nebokrai_realm::app::world_main_loop_data::{
     WorldMainLoopStateOwners, WorldMainLoopTailStageReport, WorldRefreshExternalCounts,
 };
 
-pub(crate) trait WorldJjcRuntimeContext: JjcRunContext {
-    fn on_week_clear_spawn_failed(&mut self, error: io::Error);
-    fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent);
-}
-
-struct WorldJjcWorkerContext<'a, Context> {
-    context: &'a mut Context,
-    worker: &'a WorldJjcWeekClearWorker,
-    runtime: tokio::runtime::Handle,
-}
-
-impl<Context: WorldJjcRuntimeContext> JjcRunContext for WorldJjcWorkerContext<'_, Context> {
-    fn current_time_seconds(&mut self) -> i32 {
-        self.context.current_time_seconds()
-    }
-
-    fn local_time(&mut self, timestamp: i32) -> JjcLocalTime {
-        self.context.local_time(timestamp)
-    }
-
-    fn system_time(&mut self) -> JjcSystemTime {
-        self.context.system_time()
-    }
-
-    fn tick_count_ms(&mut self) -> u32 {
-        self.context.tick_count_ms()
-    }
-
-    fn load_jjc_rank(&mut self, ranks: &mut Vec<JjcRank>) -> bool {
-        self.context.load_jjc_rank(ranks)
-    }
-
-    fn start_jjc_week_clear(&mut self) -> bool {
-        match self.worker.dispatch(self.runtime.clone()) {
-            Ok(()) => true,
-            Err(error) => {
-                self.context.on_week_clear_spawn_failed(error);
-                false
-            }
-        }
-    }
-
-    fn clear_jjc_season(&mut self) -> bool {
-        let returned = self.worker.clear_season(self.runtime.clone());
-        while let Some(event) = self.worker.try_next_event() {
-            self.context.on_week_clear_worker_event(event);
-        }
-        returned
-    }
-
-    fn write_private_profile_string(
-        &mut self,
-        section: &[u8],
-        key: &[u8],
-        value: &[u8],
-    ) -> bool {
-        self.context
-            .write_private_profile_string(section, key, value)
-    }
-
-    fn log(&mut self, event: JjcLogEvent) {
-        self.context.log(event);
-    }
-}
-
-/// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
-/// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
-pub(crate) trait WorldLeiTingRuntimeContext: LeiTingContext {
-    fn on_database_reset_spawn_failed(
-        &mut self,
-        request: LeiTingDatabaseResetRequest,
-        error: io::Error,
-    );
-
-    fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent);
-}
-
-/// Узкий adapter, связывающий подтверждённый `CLeiTing::Run` с одним
-/// `WorldLeiTingResetWorker`, не передавая mutable game-owner в поток.
-struct WorldLeiTingWorkerContext<'a, Context> {
-    context: &'a mut Context,
-    worker: &'a WorldLeiTingResetWorker,
-    runtime: tokio::runtime::Handle,
-}
-
-impl<Context: WorldLeiTingRuntimeContext> LeiTingContext
-    for WorldLeiTingWorkerContext<'_, Context>
-{
-    type Block = Context::Block;
-
-    fn add_update_start_log(&mut self) {
-        self.context.add_update_start_log();
-    }
-
-    fn local_time_from_timestamp(
-        &mut self,
-        timestamp: u32,
-    ) -> Result<LeiTingLocalTime, Self::Block> {
-        self.context.local_time_from_timestamp(timestamp)
-    }
-
-    fn current_week_day(&mut self) -> u16 {
-        self.context.current_week_day()
-    }
-
-    fn send_all(&mut self, message: &CMessage) {
-        self.context.send_all(message);
-    }
-
-    fn add_database_begin_log(&mut self) {
-        self.context.add_database_begin_log();
-    }
-
-    fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block> {
-        self.context.mktime(local_time)
-    }
-
-    fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32) {
-        let request = LeiTingDatabaseResetRequest { update_kind, stamp };
-        if let Err(error) = self.worker.dispatch(request, self.runtime.clone()) {
-            self.context
-                .on_database_reset_spawn_failed(request, error);
-        }
-    }
-
-    fn add_update_end_log(&mut self) {
-        self.context.add_update_end_log();
-    }
-}
+// JJC/LeiTing runtime-швы, их worker-мосты и process-impl перенесены в Realm
+// `app/world_main_loop_contexts` волной C5-B (там же живут сами
+// process-контексты; прежняя посадка impl в `runtime.rs` дала бы
+// orphan-нарушение). Здесь реэкспорт для main-loop стадий пакета; мосты
+// конструируются через `new`.
+pub(crate) use nebokrai_realm::app::world_main_loop_contexts::{
+    WorldJjcRuntimeContext, WorldJjcWorkerContext, WorldLeiTingRuntimeContext,
+    WorldLeiTingWorkerContext,
+};
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginTimeoutTeamExit;
 
@@ -8496,11 +8287,7 @@ impl CGame {
         }
         let current = get_local_time();
         let result = {
-            let mut worker_context = WorldLeiTingWorkerContext {
-                context,
-                worker: reset_worker,
-                runtime,
-            };
+            let mut worker_context = WorldLeiTingWorkerContext::new(context, reset_worker, runtime);
             lei_ting.run(current, self, globe_setup, &mut worker_context)
         };
         while let Some(event) = reset_worker.try_next_event() {
@@ -8784,11 +8571,7 @@ impl CGame {
         }
         let bai_tan = self.done_bai_tan_list();
         let jjc = {
-            let mut worker_context = WorldJjcWorkerContext {
-                context,
-                worker: week_clear_worker,
-                runtime,
-            };
+            let mut worker_context = WorldJjcWorkerContext::new(context, week_clear_worker, runtime);
             jjc_system.run(self, jjc_config, &mut worker_context)?
         };
         while let Some(event) = week_clear_worker.try_next_event() {
@@ -13398,11 +13181,8 @@ impl RegionParameterLoadTarget for CGame {
 }
 
 // Связка старого пакета с драйвером Realm `app::world_runtime`, пока `CGame`
-// живёт у этого owner-а: локальный адаптер делегирует исходный 12-методный
-// runtime-контракт (foreign-трейт нельзя реализовать на голом type-параметре),
-// драйверу передаётся фабричный owner и его `Release` через shim-трейт.
-// После волны самого `CGame` переходный блок снимается вместе с локальным
-// `WorldGameThreadRuntime`.
+// живёт у этого owner-а: драйверу передаётся фабричный owner и его `Release`
+// через shim-трейт. После волны самого `CGame` переходный блок снимается.
 impl nebokrai_realm::app::world_runtime::WorldGameThreadGame for CGame {
     fn release<Context: WorldGameReleaseContext>(
         &mut self,
@@ -13415,137 +13195,15 @@ impl nebokrai_realm::app::world_runtime::WorldGameThreadGame for CGame {
     }
 }
 
-struct WorldGameThreadRuntimeAdapter<'a, Runtime: WorldGameThreadRuntime>(&'a mut Runtime);
-
-impl<Runtime: WorldGameThreadRuntime> WorldGameReleaseContext
-    for WorldGameThreadRuntimeAdapter<'_, Runtime>
-{
-    fn put_debug_string(&mut self, payload: &'static [u8]) {
-        WorldGameReleaseContext::put_debug_string(self.0, payload)
-    }
-
-    fn save_city_region(&mut self, region_id: i32, region: &mut WorldRegionOwner) {
-        WorldGameReleaseContext::save_city_region(self.0, region_id, region)
-    }
-
-    fn exit_network_server_worker(&mut self, server: &mut CMyNetServer) {
-        WorldGameReleaseContext::exit_network_server_worker(self.0, server)
-    }
-
-    fn exit_network_client_worker(&mut self, client: &mut CMyNetClient) {
-        WorldGameReleaseContext::exit_network_client_worker(self.0, client)
-    }
-
-    fn release_void_owner(&mut self, owner: WorldGameReleaseVoidOwner) {
-        WorldGameReleaseContext::release_void_owner(self.0, owner)
-    }
-
-    fn release_optional_owner(&mut self, owner: WorldGameReleaseOptionalOwner) -> bool {
-        WorldGameReleaseContext::release_optional_owner(self.0, owner)
-    }
-
-    fn release_database_owner(&mut self, owner: WorldGameReleaseDatabaseOwner) -> bool {
-        WorldGameReleaseContext::release_database_owner(self.0, owner)
-    }
-
-    fn release_player_ranks(&mut self) -> PlayerRanksReleaseReport {
-        WorldGameReleaseContext::release_player_ranks(self.0)
-    }
-
-    fn release_organizing_parameters(&mut self) -> OrganizingParamReleaseReport {
-        WorldGameReleaseContext::release_organizing_parameters(self.0)
-    }
-
-    fn join_save_worker(&mut self) -> WorldSaveThreadHandleState {
-        WorldGameReleaseContext::join_save_worker(self.0)
-    }
-}
-
-impl<Runtime: WorldGameThreadRuntime>
-    nebokrai_realm::app::world_runtime::WorldGameThreadRuntime
-    for WorldGameThreadRuntimeAdapter<'_, Runtime>
-{
-    type Game = CGame;
-    type InitBlock = <Runtime as WorldGameThreadRuntime>::InitBlock;
-    type MainLoopBlock = <Runtime as WorldGameThreadRuntime>::MainLoopBlock;
-
-    fn initialize_game<'game>(
-        &'game mut self,
-        game: &'game mut CGame,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = WorldGameInitResult<<Runtime as WorldGameThreadRuntime>::InitBlock>,
-                > + 'game,
-        >,
-    > {
-        WorldGameThreadRuntime::initialize_game(self.0, game)
-    }
-
-    fn game_thread_exit_requested(&self) -> bool {
-        WorldGameThreadRuntime::game_thread_exit_requested(self.0)
-    }
-
-    fn run_main_loop<'game>(
-        &'game mut self,
-        game: &'game mut CGame,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<i32, <Runtime as WorldGameThreadRuntime>::MainLoopBlock>,
-                > + 'game,
-        >,
-    > {
-        WorldGameThreadRuntime::run_main_loop(self.0, game)
-    }
-
-    fn wait_for_save_barrier(&mut self) {
-        WorldGameThreadRuntime::wait_for_save_barrier(self.0)
-    }
-
-    fn take_goods_war_member(&mut self) -> CGoodsWarMember {
-        WorldGameThreadRuntime::take_goods_war_member(self.0)
-    }
-
-    fn restore_goods_war_member(&mut self, owner: CGoodsWarMember) {
-        WorldGameThreadRuntime::restore_goods_war_member(self.0, owner)
-    }
-
-    fn take_increment_log(&mut self) -> CIncrementLog {
-        WorldGameThreadRuntime::take_increment_log(self.0)
-    }
-
-    fn restore_increment_log(&mut self, owner: CIncrementLog) {
-        WorldGameThreadRuntime::restore_increment_log(self.0, owner)
-    }
-
-    fn take_skill_factory(&mut self) -> CSkillFactory {
-        WorldGameThreadRuntime::take_skill_factory(self.0)
-    }
-
-    fn restore_skill_factory(&mut self, owner: CSkillFactory) {
-        WorldGameThreadRuntime::restore_skill_factory(self.0, owner)
-    }
-
-    fn signal_game_thread_exit(&mut self) {
-        WorldGameThreadRuntime::signal_game_thread_exit(self.0)
-    }
-
-    fn request_window_close(&mut self) {
-        WorldGameThreadRuntime::request_window_close(self.0)
-    }
-}
-
 /// Выполняет `CreateGame -> Init -> MainLoop -> Release -> DeleteGame`.
 ///
 /// Fatal `_exit(1)` и typed safe-blocks возвращают live `Box<CGame>`, поэтому
 /// Rust не приписывает им исходно отсутствовавший Release/DeleteGame. Только
 /// штатный конец публикует exit-event, затем window-close request и код `0`.
-pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
+pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime<Game = CGame>>(
     runtime: &mut Runtime,
 ) -> WorldGameThreadReport<Runtime::InitBlock, Runtime::MainLoopBlock> {
-    let mut adapter = WorldGameThreadRuntimeAdapter(runtime);
-    nebokrai_realm::app::world_runtime::game_thread_func(&mut adapter, new_world_game).await
+    nebokrai_realm::app::world_runtime::game_thread_func(runtime, new_world_game).await
 }
 
 fn new_world_game() -> Box<CGame> {
@@ -17434,121 +17092,10 @@ pub(crate) type WorldRunSavePreGateReport<'game> =
 pub(crate) type WorldRunSaveTriggerReport<'game> =
     nebokrai_realm::app::world_save_reports::WorldRunSaveTriggerReport<'game, CGame>;
 
-/// Делегирует один системный `SaveThreadFunc` worker-у Realm
-/// `persistence/saveworker` с прежней сигнатурой старого call-site.
-///
-/// Единственный внешний hook — `SendErrLog` в Login (`send_err_log_to_login`)
-/// — принадлежит Realm `app/worldserver` (monitoring-message волна завершила
-/// его перенос) и передаётся последним closure-параметром в прежней форме;
-/// результат `CMessage::Send` исходно игнорировался и сохранён в
-/// `_legacy_result` тем же оператором.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "SaveThreadFunc передаёт прежние process-global owner-ы явно"
-)]
-pub(crate) async fn save_thread_func<
-    'save,
-    S,
-    O,
-    V,
-    P,
-    J,
-    G,
-    U,
-    F,
-    R,
-    B,
-    E,
-    C,
-    L,
-    Log,
-    PublishState,
-    ReleaseSerialization,
-    GetMonitoring,
->(
-    save: &'save mut WorldSaveDataOwner,
-    settings: &WorldDatabaseSettings,
-    state: &mut SaveDataLifecycleState,
-    variables: &S,
-    registry: &GoodsBasePropertiesRegistry,
-    honor_ranks: &mut CHonorRanks,
-    gods_battle_faction_xyd: GodsBattleFactionXydSnapshot,
-    gods_battle_npc_factions: &[GodsBattleNpcFactionSnapshot],
-    use_old_save_largess_way: bool,
-    setup_database: &mut O,
-    variable_database: &mut V,
-    player_database: &mut P,
-    jjc_database: &mut J,
-    goods_database: &mut G,
-    union_database: &mut U,
-    faction_database: &mut F,
-    region_database: &mut R,
-    gods_battle_database: &mut B,
-    enemy_factions_database: &mut E,
-    country_database: &mut C,
-    largess: &mut L,
-    log_sink: &mut Log,
-    publish_state: PublishState,
-    release_serialization: ReleaseSerialization,
-    get_monitoring: GetMonitoring,
-) -> WorldSaveThreadReport<'save>
-where
-    S: VariableListSaveSource,
-    O: RsSetupOwner,
-    V: RsGenVarOwner,
-    P: RsPlayerOwner<CPlayer>,
-    J: RsJjcSysOwner,
-    G: DbGoodsOwner<CPlayer>,
-    U: RsUnionOwner,
-    F: RsFactionOwner,
-    R: RsRegionOwner,
-    B: RsGodsBattleOwner,
-    E: RsEnemyFactionsOwner,
-    C: DbCountryOwner,
-    L: LargessOwner,
-    Log: SaveDataLogSink,
-    PublishState: FnMut(SaveDataLifecycleState),
-    ReleaseSerialization: FnOnce(),
-    GetMonitoring: FnOnce() -> SaveDataMonitoringSnapshot,
-{
-    nebokrai_realm::persistence::saveworker::save_thread_func(
-        save,
-        settings,
-        state,
-        variables,
-        registry,
-        honor_ranks,
-        gods_battle_faction_xyd,
-        gods_battle_npc_factions,
-        use_old_save_largess_way,
-        setup_database,
-        variable_database,
-        player_database,
-        jjc_database,
-        goods_database,
-        union_database,
-        faction_database,
-        region_database,
-        gods_battle_database,
-        enemy_factions_database,
-        country_database,
-        largess,
-        log_sink,
-        publish_state,
-        release_serialization,
-        get_monitoring,
-        |login_sender, monitoring| {
-            let _legacy_result = send_err_log_to_login(
-                login_sender,
-                monitoring.message_type,
-                monitoring.server_id,
-                monitoring.world_number_bits as i32,
-                Some(&monitoring.text),
-            );
-        },
-    )
-    .await
-}
+// Делегат `save_thread_func` снят волной C5-B: worker-вход Realm
+// `persistence/saveworker` свернул hook `SendErrLog` (`send_err_log_to_login`,
+// уже Realm `app/worldserver`) в своё тело, поэтому runtime-owner вызывает его
+// напрямую с прежним списком аргументов.
 
 pub(crate) fn reload_conf_log<GetLocalTime>(
     game: &CGame,

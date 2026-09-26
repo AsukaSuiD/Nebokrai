@@ -19,10 +19,12 @@
 //! [`WorldGameThreadRuntime`] ассоциированным `type Game`, а его создание
 //! отсечено фабричным параметром `fn() -> Box<Game>` у edge-оболочки
 //! `process/worldserver.rs`. Тела реализаций context-ов живут у владельца
-//! `worldserver/worldserver/runtime.rs`; старый пакет держит переходный
-//! реэкспорт, alias бывшего двухпараметрического отчёта и связку blanket-impl.
-//! `WorldGameInitContext` с CGame-типизированным `load_region_parameters` и
-//! исходная форма `WorldGameThreadRuntime` переезжают вместе с волной `CGame`.
+//! `worldserver/worldserver/runtime.rs`: он реализует этот трейт напрямую с
+//! `type Game = CGame` и старый пакет держит переходный реэкспорт плюс alias
+//! бывшего двухпараметрического отчёта. `WorldGameInitContext` переехал в
+//! [`crate::app::world_init_context`] волной C5-B (шов `&mut dyn
+//! RegionParameterLoadTarget` вместо CGame-typed `load_region_parameters`); его
+//! impl остаётся у process-owner-а до дорожки C5-DB.
 
 use std::error::Error;
 use std::fmt;

@@ -17,7 +17,15 @@
 //! static-методом старого `CGame` и подставляется callback-ом, поэтому этот
 //! файл не тянет игровой владелец и сохраняет reload-aware чтение Globe
 //! snapshot.
+//!
+//! Волной C5-B сюда перенесён и сам контракт [`WorldGameInitContext`] из
+//! `worldserver/worldserver/game.rs`. Единственный CGame-типизированный метод
+//! исходной формы, `load_region_parameters`, получил готовый шов `&mut dyn
+//! RegionParameterLoadTarget` (`regions/rsregion.rs`): process owner пробрасывает
+//! target напрямую в `RsRegionOwner::load_region_parameters`, не зная типа игры.
+//! Impl контракта остаётся у старого владельца (`runtime.rs`) до дорожки C5-DB.
 
+use std::io;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,15 +33,30 @@ use parking_lot::RwLock;
 
 use nebokrai_shared::resources::{CPlayerList, CThingSetup, GlobeSetupSnapshot};
 
+use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
+use crate::app::world_runtime::{
+    WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitOperatorNotice,
+    WorldGameInitWorkerKind,
+};
 use crate::auction::auctionnode::CGoodsNode;
-use crate::characters::player::PlayerPropertyCoefficients;
+use crate::characters::honorranks::HonorRanksDbOwner;
+use crate::characters::player::{CPlayer, PlayerPropertyCoefficients};
+use crate::characters::playerloadworker::WorldPlayerDataLoadOwner;
 use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::organizations::dbcountry::DbCountryOwner;
+use crate::organizations::rsenemyfactions::RsEnemyFactionsOwner;
+use crate::organizations::rsfaction::RsFactionOwner;
+use crate::organizations::rsunion::RsUnionOwner;
 use crate::persistence::dbmisc::{
     AuctionGoodsLoadOutcome, AuctionMoneyLoadOutcome, DbMiscOutputPublisher,
     TiberiusDbMiscCallbacks, TiberiusDbMiscContext, TiberiusDbMiscDatabase,
     TiberiusDbMiscRuntimeEvent,
 };
+use crate::persistence::rsgenvar::RsGenVarOwner;
+use crate::persistence::rsplayer::RsPlayerOwner;
+use crate::persistence::rssetup::{LoadedSetupIds, WorldTdsClient};
 use crate::persistence::writelogqueue::WorldWriteLogQueue;
+use crate::regions::rsregion::RegionParameterLoadTarget;
 
 #[derive(Clone)]
 pub struct WorldPlayerLoadSnapshot {
@@ -186,4 +209,81 @@ pub fn report_db_misc_runtime_event(event: TiberiusDbMiscRuntimeEvent<'_>) {
             eprintln!("WorldServer: список владельцев аукциона не загружен: {error:?}")
         }
     }
+}
+
+/// Контракт process-уровня `CGame::Init` между драйвером хода
+/// (`app/world_runtime`) и concrete owner-ами процесса.
+///
+/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B. CGame-typed
+/// параметр `load_region_parameters` исходной формы заменён готовым швом
+/// `&mut dyn RegionParameterLoadTarget`; impl остаётся у старого process
+/// owner-а (`runtime.rs`) до дорожки C5-DB.
+#[allow(
+    async_fn_in_trait,
+    reason = "буквальный перенос pub(crate)-контракта init-стадий: единственные \
+              потребители — драйвер хода и impl process-owner-а; dyn-объект и \
+              Send-ограничения контрактом не требуются"
+)]
+pub trait WorldGameInitContext {
+    type Block;
+    type PlayerDatabase: RsPlayerOwner<CPlayer> + HonorRanksDbOwner;
+    type EnemyFactionsDatabase: RsEnemyFactionsOwner;
+    type GeneralVariableDatabase: RsGenVarOwner;
+    type UnionDatabase: RsUnionOwner;
+    type FactionDatabase: RsFactionOwner;
+    type CountryDatabase: DbCountryOwner;
+    type PlayerLoadDatabase: WorldPlayerDataLoadOwner<CPlayer> + Send + 'static;
+    type PlayerLoadLargess: FnMut(&mut CPlayer) + Send + 'static;
+    type PlayerLoadClock: FnMut() -> u32 + Send + 'static;
+
+    fn install_crash_reporter(&mut self);
+    fn current_time_seconds(&mut self) -> i64;
+    fn seed_random(&mut self, seed: u32);
+    fn random(&mut self, upper_bound: i32) -> i32;
+    fn put_debug_string(&mut self, payload: &[u8]);
+    fn claim_single_instance(&mut self, title: &[u8]) -> bool;
+    fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
+
+    fn initialize_database_layer(
+        &mut self,
+        initialization: WorldGameDatabaseInitialization,
+    ) -> Result<(), Self::Block>;
+    async fn create_database_owner(
+        &mut self,
+        owner: WorldGameDatabaseOwner,
+    ) -> Result<(), Self::Block>;
+    async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
+
+    async fn load_region_parameters(
+        &mut self,
+        target: &mut dyn RegionParameterLoadTarget,
+    ) -> bool;
+    fn player_database(
+        &mut self,
+    ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
+    fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
+    fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
+    fn organizing_databases(&mut self) -> (&mut Self::UnionDatabase, &mut Self::FactionDatabase);
+    fn country_database(
+        &mut self,
+    ) -> (&mut Self::CountryDatabase, Option<&mut WorldTdsClient>);
+    fn goods_war_database_connection(&mut self) -> Option<&mut WorldTdsClient>;
+ /// Возвращает созданный `CRSGodsBattle`; до соответствующего create-event
+ /// owner закономерно отсутствует.
+    fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle>;
+    fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
+    fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
+ /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
+ /// внутри единственного `CGame` и освобождается его Release.
+    fn player_load_worker_runtime(
+        &mut self,
+        worker_index: u32,
+    ) -> (
+        tokio::runtime::Handle,
+        Self::PlayerLoadDatabase,
+        Self::PlayerLoadLargess,
+        Self::PlayerLoadClock,
+    );
+    fn write_log_worker_runtime(&mut self) -> tokio::runtime::Handle;
+    fn report_worker_spawn_error(&mut self, kind: WorldGameInitWorkerKind, error: &io::Error);
 }

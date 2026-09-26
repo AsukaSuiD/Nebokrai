@@ -12,9 +12,11 @@
 //! через объявленные швы [`WorldGameView`] и [`WorldPlayerFactionInfoUpdateView`]
 //! (прецедент — `WorldFactionWarDeclarationEffects` в
 //! [`crate::organizations::organizingctrl`]); старый пакет специализирует их
-//! своим `CGame`. CGame-типизированные `WorldGameInitContext`/
-//! `WorldGameThreadRuntime` и route-контракты загрузки игроков остаются у
-//! process-owner-а до волны самого `CGame`. Ветвь `0x60103` пишется в
+//! своим `CGame`. `WorldGameInitContext`/`WorldGameThreadRuntime` уехали в
+//! [`crate::app::world_init_context`]/[`crate::app::world_runtime`] волной C5-B
+//! (объявленные швы вместо CGame-typed подписей), а route-контракты загрузки
+//! игроков остаются у process-owner-а до волны самого `CGame`. Ветвь `0x60103`
+//! пишется в
 //! `ProcessedWorldEvent` напрямую generic-формой realm
 //! `OrganizingCreateFactionDispatchBlock<FactionCreationBlock>` — прежний alias
 //! старого пакета развёрнут без смены типа.
