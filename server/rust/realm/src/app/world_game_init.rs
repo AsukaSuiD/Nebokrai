@@ -127,7 +127,7 @@ impl CGame {
     }
 
     pub const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
-        self.player_id = loaded.player_id;
+        self.player_registry.player_id = loaded.player_id;
         self.leave_word_id = loaded.leave_world_id;
     }
 
@@ -1475,8 +1475,8 @@ impl CGame {
     }
 
     pub(crate) fn clear_map_player(&mut self) -> usize {
-        let entries = self.players.len();
-        while let Some((_player_id, player)) = self.players.pop_first() {
+        let entries = self.player_registry.players.len();
+        while let Some((_player_id, player)) = self.player_registry.players.pop_first() {
             drop(player);
         }
         entries
@@ -1526,21 +1526,21 @@ impl CGame {
         }
 
         macro_rules! clear_live_list {
-            ($field:ident, $owner:expr) => {{
-                let entries = self.$field.len();
-                self.$field.clear();
+            ($list:expr, $owner:expr) => {{
+                let entries = $list.len();
+                $list.clear();
                 events.push(WorldGameReleaseEvent::LiveListCleared {
                     owner: $owner,
                     entries,
                 });
             }};
         }
-        clear_live_list!(creation_players, WorldGameReleaseLiveList::Creation);
-        clear_live_list!(restore_players, WorldGameReleaseLiveList::Restore);
-        clear_live_list!(deletion_players, WorldGameReleaseLiveList::Deletion);
-        clear_live_list!(online_players, WorldGameReleaseLiveList::Online);
-        clear_live_list!(offline_players, WorldGameReleaseLiveList::Offline);
-        clear_live_list!(login_players, WorldGameReleaseLiveList::Login);
+        clear_live_list!(self.player_registry.creation_players, WorldGameReleaseLiveList::Creation);
+        clear_live_list!(self.player_registry.restore_players, WorldGameReleaseLiveList::Restore);
+        clear_live_list!(self.player_registry.deletion_players, WorldGameReleaseLiveList::Deletion);
+        clear_live_list!(self.player_registry.online_players, WorldGameReleaseLiveList::Online);
+        clear_live_list!(self.player_registry.offline_players, WorldGameReleaseLiveList::Offline);
+        clear_live_list!(self.player_registry.login_players, WorldGameReleaseLiveList::Login);
 
         let entries = self.clear_map_player();
         events.push(WorldGameReleaseEvent::PlayerMapCleared { entries });
@@ -1982,23 +1982,23 @@ impl CGame {
             .setup
             .world_number
             .ok_or(WorldCdkeySnapshotError::MissingWorldNumber)?;
-        let declared_online_players = u32::try_from(self.online_players.len()).map_err(|_| {
+        let declared_online_players = u32::try_from(self.player_registry.online_players.len()).map_err(|_| {
             WorldCdkeySnapshotError::OnlinePlayerCountOutsideLegacyRange {
-                count: self.online_players.len(),
+                count: self.player_registry.online_players.len(),
             }
         })?;
 
         let mut snapshot = CMessage::new(0x0001_FE02);
         snapshot.base_mut().add_ulong(world_number);
         snapshot.base_mut().add_ulong(declared_online_players);
-        for &player_id in &self.online_players {
+        for &player_id in &self.player_registry.online_players {
             // World owner выполнял
             // чтение поля по смещению +0x744 через найденный объект; при отсутствии
             // записи указатель оставался нулевым.
             // Достижимость/реакция null-dereference не определена; safe Rust не
             // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
             let player = self
-                .players
+                .player_registry.players
                 .get(&player_id)
                 .ok_or(WorldCdkeySnapshotError::MissingPlayerOwner { player_id })?;
             add_legacy_c_string(snapshot.base_mut(), player.get_account());

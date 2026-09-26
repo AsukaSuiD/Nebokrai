@@ -775,7 +775,7 @@ impl CGame {
             }
             let online = friend_player_id != 0;
             let updated = self
-                .players
+                .player_registry.players
                 .get_mut(&player_id)
                 .expect("selected player остаётся опубликованным")
                 .set_friend_online(friend_index, online);
@@ -993,7 +993,7 @@ impl CGame {
                             &mut get_tick,
                         );
                     let friend_updates = self.update_published_player_friends(player_id);
-                    self.players
+                    self.player_registry.players
                         .get_mut(&player_id)
                         .expect("direct route сохраняет опубликованного player-owner-а")
                         .reset_selected_login_flags();
@@ -1331,9 +1331,9 @@ impl CGame {
             });
         }
 
-        let online_players = u32::try_from(self.online_players.len()).map_err(|_| {
+        let online_players = u32::try_from(self.player_registry.online_players.len()).map_err(|_| {
             WorldMainLoopPingError::OnlinePlayerCountOutsideLegacyRange {
-                count: self.online_players.len(),
+                count: self.player_registry.online_players.len(),
             }
         })?;
         self.ping_in_progress = false;
@@ -1513,11 +1513,11 @@ impl CGame {
         GetTick: FnMut() -> u32,
     {
         let snapshot_tick_ms = get_tick();
-        let mut entries = Vec::with_capacity(self.login_players.len());
+        let mut entries = Vec::with_capacity(self.player_registry.login_players.len());
         let mut login_index = 0;
 
-        while login_index < self.login_players.len() {
-            let login = self.login_players[login_index];
+        while login_index < self.player_registry.login_players.len() {
+            let login = self.player_registry.login_players[login_index];
             let elapsed_ms = snapshot_tick_ms.wrapping_sub(login.login_time_ms);
             if release_interval_ms >= elapsed_ms {
                 entries.push(WorldLoginTimeoutEntryOutcome::Waiting {
@@ -1570,7 +1570,7 @@ impl CGame {
                 owner_id,
             );
 
-            let removed = self.login_players.remove(login_index);
+            let removed = self.player_registry.login_players.remove(login_index);
             debug_assert_eq!(removed.map(|entry| entry.player_id), Some(login.player_id));
 
             let online_removal = self.remove_online_player(organizing, login.player_id);
@@ -2865,15 +2865,15 @@ impl CGame {
         let Some(net_server) = self.net_server.as_ref() else {
             return Ok(None);
         };
-        let map_players = legacy_refresh_count("m_mPlayer", self.players.len())? as i32;
-        let online_players = legacy_refresh_count("m_lOnlinePlayer", self.online_players.len())?;
-        let offline_players = legacy_refresh_count("m_lOfflinePlayer", self.offline_players.len())?;
-        let login_players = legacy_refresh_count("m_lLoginPlayer", self.login_players.len())?;
+        let map_players = legacy_refresh_count("m_mPlayer", self.player_registry.players.len())? as i32;
+        let online_players = legacy_refresh_count("m_lOnlinePlayer", self.player_registry.online_players.len())?;
+        let offline_players = legacy_refresh_count("m_lOfflinePlayer", self.player_registry.offline_players.len())?;
+        let login_players = legacy_refresh_count("m_lLoginPlayer", self.player_registry.login_players.len())?;
         let creation_players =
-            legacy_refresh_count("m_lCreationPlayer", self.creation_players.len())?;
+            legacy_refresh_count("m_lCreationPlayer", self.player_registry.creation_players.len())?;
         let deletion_players =
-            legacy_refresh_count("m_lDeletionPlayer", self.deletion_players.len())?;
-        let restore_players = legacy_refresh_count("m_lRestorePlayer", self.restore_players.len())?;
+            legacy_refresh_count("m_lDeletionPlayer", self.player_registry.deletion_players.len())?;
+        let restore_players = legacy_refresh_count("m_lRestorePlayer", self.player_registry.restore_players.len())?;
         let saving_players = {
             let db_data = self.db_data.lock();
             legacy_refresh_count("m_stDBData.mDBPlayer", db_data.players.len())? as i32

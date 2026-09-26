@@ -423,6 +423,7 @@ impl CountryExileResultContext for WorldCountryExileResultEffects<'_> {
 impl CountryPlayersListContext for WorldCountryPlayersListEffects<'_> {
     fn online_players(&mut self) -> Vec<CountryOnlinePlayer> {
         self.game
+            .player_registry
             .online_players
             .iter()
             .filter_map(|&player_id| self.game.map_player(player_id))

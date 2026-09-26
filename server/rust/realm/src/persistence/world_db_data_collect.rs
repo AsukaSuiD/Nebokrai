@@ -127,7 +127,7 @@ impl CGame {
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<(), WorldGenerateDbDataBlock> {
         let leave_word_id = self.leave_word_id;
-        let player_id = self.player_id;
+        let player_id = self.player_registry.player_id;
 
         {
             let mut db_data = self.db_data.lock();
@@ -136,6 +136,7 @@ impl CGame {
         }
 
         let creation_ids = self
+            .player_registry
             .creation_players
             .iter()
             .map(|player_id| *player_id as u32)
@@ -151,13 +152,13 @@ impl CGame {
         self.db_data
             .lock()
             .restore_players
-            .extend(self.restore_players.iter().copied());
+            .extend(self.player_registry.restore_players.iter().copied());
 
-        for entry in self.deletion_players.iter().copied() {
+        for entry in self.player_registry.deletion_players.iter().copied() {
             self.db_data.lock().deletion_players.push_back(entry);
         }
 
-        let player_ids = self.players.keys().copied().collect::<Vec<_>>();
+        let player_ids = self.player_registry.players.keys().copied().collect::<Vec<_>>();
         for player_id in player_ids {
             if let Some(player) =
                 self.clone_map_player(player_id, registry, organizing_ctrl, coefficients)?

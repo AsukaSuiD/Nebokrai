@@ -1,14 +1,18 @@
 //! Записи и транспортные контексты таблиц состояния WorldServer (hub-data
 //! уровень): materialized-регион, системная рассылка `tagSysBroadcast` и её
-//! AI-отчёт, деньги аукциона с точным x87-усечением, записи `tagGameServer` и
-//! login-игрока, отчёты origin-снаряжения и organizing/доставка-контексты
-//! обновления faction-информации игрока. Источник контракта — та же точная
-//! пара, что у [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
+//! AI-отчёт, деньги аукциона с точным x87-усечением, записи `tagGameServer`,
+//! отчёты origin-снаряжения и organizing/доставка-контексты обновления
+//! faction-информации игрока. Источник контракта — та же точная пара, что у
+//! [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
 //! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
 //! Organizing-контексты реализуют realm-трейты [`PlayerOrganizingUpdater`] и
 //! [`PlayerFactionInfoContext`]; `CGame` сюда не тянется — маршрут доставки
 //! фиксируется полем сессии до извлечения player owner-а из map.
+//!
+//! Запись присутствия login-игрока перенесена владельцу
+//! [`crate::characters::worldplayers`] и re-export-ируется здесь для прежних
+//! consumers.
 
 use std::collections::BTreeMap;
 
@@ -171,11 +175,7 @@ pub struct WorldGameServerEntry {
     pub received_player_data: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WorldLoginPlayerEntry {
-    pub player_id: u32,
-    pub login_time_ms: u32,
-}
+pub use crate::characters::worldplayers::WorldLoginPlayerEntry;
 
 #[derive(Debug)]
 pub struct WorldOriginGoodsReport {

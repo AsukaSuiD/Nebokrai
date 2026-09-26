@@ -11,21 +11,23 @@
 //!
 //! Статус по модели `app` — **переходный агрегат-шов (decomposition seam),
 //! а не чистая оркестрация и не образец app-модуля**. Структура физически
-//! хранит первичные domain stores канонических владельцев: реестр `players`
-//! и счётчик `player_id` — целевой владелец `characters`; transitional
-//! workflow/presence state (`creation/restore/deletion/online/offline/
-//! login_players`) — физически здесь, целевой владелец `characters`, а не
-//! постоянная оркестрация; индекс `team_session_ids` — session/team
-//! projection, целевой владелец `sessions`; реестры `regions`/`game_servers`
-//! и ping-индекс — `regions`; `system_broadcasts`/`goods_links` — `social`;
-//! `leave_word_id` — `organizations`; `honor_eliminate_list` — активности/
-//! рейтинги; `bai_tan` — исторический анти-флуд член, владелец назначается
-//! при разборе. Процессные и сетевые поля (`setup`, net-края, workers,
-//! очереди write-log/load, time-маркеры) и composition handle-ы — накопитель
-//! сохранения (`persistence::savedata::WorldSaveDataAccumulator`) и мировые
-//! контентные каталоги (`content::WorldContentCatalogs` в `content_catalogs`,
-//! прежние pub accessors ниже делегируют ему) — остаются законной
-//! композиционной частью `app`. Дублирования состояния с domain-модулями нет: эти группы
+//! хранит первичные domain stores канонических владельцев: индекс
+//! `team_session_ids` — session/team projection, целевой владелец
+//! `sessions`; реестры `regions`/`game_servers` и ping-индекс — `regions`;
+//! `system_broadcasts`/`goods_links` — `social`; `leave_word_id` —
+//! `organizations`; `honor_eliminate_list` — активности/рейтинги;
+//! `bai_tan` — исторический анти-флуд член, владелец назначается при
+//! разборе. Процессные и сетевые поля (`setup`, net-края, workers, очереди
+//! write-log/load, time-маркеры) и composition handle-ы — накопитель
+//! сохранения (`persistence::savedata::WorldSaveDataAccumulator`), мировой
+//! реестр игроков и присутствие
+//! (`characters::worldplayers::WorldPlayerRegistry` в `player_registry`;
+//! typed dup-операции и счётчик перенесены владельцу, остальные
+//! очередные/маповые мутации остаются оркестрацией app через его публичные
+//! поля) и мировые контентные каталоги (`content::WorldContentCatalogs` в
+//! `content_catalogs`, прежние pub accessors ниже делегируют ему) —
+//! остаются законной композиционной частью `app`. Дублирования состояния
+//! с domain-модулями нет: эти группы
 //! существуют только здесь и перейдут к владельцам предметной
 //! reconstruction-работой, а не comment-правкой; новые domain-поля в этот
 //! агрегат не добавляются.
@@ -77,6 +79,7 @@ use crate::characters::playerdataqueue::CPlayerDataQueue;
 use crate::characters::playerloadqueue::{CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome, PlayerLoadQueueEntry};
 use crate::characters::playerloadworker::{WorldPlayerDataLoadOwner, WorldPlayerLoadWorkerPool};
 use crate::characters::playerranks::CPlayerRanks;
+use crate::characters::worldplayers::WorldPlayerRegistry;
 use crate::content::WorldContentCatalogs;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::cgoodsfactory::{GoodsOriginalNameIndex};
@@ -109,7 +112,6 @@ use nebokrai_shared::resources::{CCiQingSetup, CContributeSetup, CDupliRegionSet
 use nebokrai_shared::runtime::{AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, CTimer, CalendarTimerRegistration, TimerCallbackInvocation, TimerCallbackSource, TimerId, put_string_to_file};
 use nebokrai_shared::values::TagTime;
 use parking_lot::Mutex;
-use std::fmt;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
@@ -1065,45 +1067,10 @@ pub enum WorldOwnedCityRefreshOutcome {
     Refreshed(WorldOwnedCityRefreshReport),
 }
 
-pub enum WorldCreationPlayerAppendOutcome {
-    Inserted {
-        player_id: u32,
-    },
-    DuplicateReleased {
-        player_id: u32,
-    },
-    ExistingMapOwnerKept {
-        player_id: u32,
-        incoming: Box<CPlayer>,
-    },
-}
-
-pub enum WorldMapPlayerAppendOutcome {
-    Inserted {
-        player_id: u32,
-    },
-    ExistingOwnerKept {
-        player_id: u32,
-        incoming: Box<CPlayer>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorldCreationPlayerAppendLog {
-    Duplicate { player_id: u32 },
-    ExistingMapOwner,
-}
-
-impl fmt::Display for WorldCreationPlayerAppendLog {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Duplicate { player_id } => {
-                write!(formatter, "{player_id} Player Is In CreationPlayerList.")
-            }
-            Self::ExistingMapOwner => formatter.write_str("MapPlayer Not Found or NULL."),
-        }
-    }
-}
+// Исходы append-операций creation/map перенесены владельцу реестра игроков и присутствия; прежний путь через `app::world_game` сохраняет re-export.
+pub use crate::characters::worldplayers::{
+    WorldCreationPlayerAppendLog, WorldCreationPlayerAppendOutcome, WorldMapPlayerAppendOutcome,
+};
 
 pub struct CGame {
     pub(crate) setup: WorldSetup,
@@ -1121,16 +1088,9 @@ pub struct CGame {
     pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) player_data_queue: CPlayerDataQueue<CPlayer>,
     pub(crate) player_load_queue: CPlayerLoadQueue,
-    pub(crate) players: BTreeMap<u32, Box<CPlayer>>,
+    pub(crate) player_registry: WorldPlayerRegistry,
     pub(crate) team_session_ids: BTreeMap<u32, i32>,
-    pub(crate) creation_players: VecDeque<i32>,
-    pub(crate) restore_players: VecDeque<u32>,
-    pub(crate) deletion_players: VecDeque<DeletionPlayerSnapshot>,
-    pub(crate) player_id: u32,
     pub(crate) leave_word_id: i32,
-    pub(crate) online_players: VecDeque<u32>,
-    pub(crate) offline_players: VecDeque<u32>,
-    pub(crate) login_players: VecDeque<WorldLoginPlayerEntry>,
     pub(crate) db_responses: i32,
     pub(crate) db_data: WorldSaveDataAccumulator,
     pub(crate) ping_game_servers: Vec<WorldPingGameServerInfo>,
@@ -2406,16 +2366,9 @@ impl CGame {
             write_log_queue: WorldWriteLogQueue::default(),
             player_data_queue: CPlayerDataQueue::new(),
             player_load_queue: CPlayerLoadQueue::new(),
-            players: BTreeMap::new(),
+            player_registry: WorldPlayerRegistry::new(),
             team_session_ids: BTreeMap::new(),
-            creation_players: VecDeque::new(),
-            restore_players: VecDeque::new(),
-            deletion_players: VecDeque::new(),
-            player_id: 0,
             leave_word_id: 0,
-            online_players: VecDeque::new(),
-            offline_players: VecDeque::new(),
-            login_players: VecDeque::new(),
             db_responses: 0,
             db_data: WorldSaveDataAccumulator::new(),
             ping_game_servers: Vec::new(),
@@ -2562,22 +2515,21 @@ impl CGame {
     }
 
     pub fn allocate_player_id(&mut self) -> i32 {
-        self.player_id = self.player_id.wrapping_add(1);
-        self.player_id as i32
+        self.player_registry.allocate_player_id()
     }
 
     pub fn clear_restore_player(&mut self) {
-        self.restore_players.clear();
+        self.player_registry.restore_players.clear();
     }
 
     pub fn clear_deletion_player(&mut self) {
-        self.deletion_players.clear();
+        self.player_registry.deletion_players.clear();
     }
 
     pub fn clear_map_player_for_offline(&mut self) {
-        let online_players = &self.online_players;
-        let login_players = &self.login_players;
-        self.players.retain(|player_id, _| {
+        let online_players = &self.player_registry.online_players;
+        let login_players = &self.player_registry.login_players;
+        self.player_registry.players.retain(|player_id, _| {
             online_players.contains(player_id)
                 || login_players
                     .iter()
@@ -2586,51 +2538,51 @@ impl CGame {
     }
 
     pub fn delete_restore_player(&mut self, player_id: u32) {
-        if let Some(index) = self
+        if let Some(index) = self.player_registry
             .restore_players
             .iter()
             .position(|existing| *existing == player_id)
         {
-            self.restore_players.remove(index);
+            self.player_registry.restore_players.remove(index);
         }
     }
 
     pub fn is_restore_player_exist(&self, player_id: u32) -> bool {
-        self.restore_players.contains(&player_id)
+        self.player_registry.restore_players.contains(&player_id)
     }
 
     pub fn deletion_player_time(&self, player_id: u32) -> i32 {
-        self.deletion_players
+        self.player_registry.deletion_players
             .iter()
             .find(|entry| entry.player_id == player_id)
             .map_or(0, |entry| entry.deletion_time)
     }
 
     pub fn delete_deletion_player(&mut self, player_id: u32) {
-        if let Some(index) = self
+        if let Some(index) = self.player_registry
             .deletion_players
             .iter()
             .position(|entry| entry.player_id == player_id)
         {
-            self.deletion_players.remove(index);
+            self.player_registry.deletion_players.remove(index);
         }
     }
 
     pub fn append_restore_player(&mut self, player_id: u32) {
-        if !self.restore_players.contains(&player_id) {
-            self.restore_players.push_back(player_id);
+        if !self.player_registry.restore_players.contains(&player_id) {
+            self.player_registry.restore_players.push_back(player_id);
         }
     }
 
     pub fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32) {
-        if self
+        if self.player_registry
             .deletion_players
             .iter()
             .any(|entry| entry.player_id == player_id)
         {
             return;
         }
-        self.deletion_players.push_back(DeletionPlayerSnapshot {
+        self.player_registry.deletion_players.push_back(DeletionPlayerSnapshot {
             player_id,
             deletion_time,
         });
@@ -2650,7 +2602,7 @@ impl CGame {
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
         let region_types = self.player_organizing_region_types();
-        let Some(source) = self.players.get_mut(&player_id) else {
+        let Some(source) = self.player_registry.players.get_mut(&player_id) else {
             return Ok(None);
         };
 
@@ -2676,7 +2628,7 @@ impl CGame {
         organizing_ctrl: &COrganizingCtrl,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
-        if !self
+        if !self.player_registry
             .creation_players
             .iter()
             .any(|creation_id| *creation_id as u32 == player_id)
@@ -2692,7 +2644,7 @@ impl CGame {
     /// bool сообщает caller-у только наблюдаемый факт наличия, которого старый
     /// void API наружу не выдавал.
     pub fn delete_map_player(&mut self, player_id: u32) -> bool {
-        self.players.remove(&player_id).is_some()
+        self.player_registry.players.remove(&player_id).is_some()
     }
 
     pub fn clone_saving_player(
@@ -3041,7 +2993,7 @@ impl CGame {
     }
 
     pub fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
-        self.players.get(&player_id).map(Box::as_ref)
+        self.player_registry.players.get(&player_id).map(Box::as_ref)
     }
 
     /// Повторяет `ValidatePlayerIDinCdkey`: lookup идёт только по live map,
@@ -3077,7 +3029,7 @@ impl CGame {
         level: u8,
         jjc_level: u32,
     ) -> bool {
-        let Some(player) = self.players.get_mut(&player_id) else {
+        let Some(player) = self.player_registry.players.get_mut(&player_id) else {
             return false;
         };
         player.set_jjc_identity(level, jjc_level);
@@ -3092,7 +3044,7 @@ impl CGame {
         jjc_score: u32,
         counters: [u8; 0x10],
     ) -> bool {
-        let Some(player) = self.players.get_mut(&player_id) else {
+        let Some(player) = self.player_registry.players.get_mut(&player_id) else {
             return false;
         };
         player.set_jjc_snapshot(level, jjc_level, jjc_score, counters);
@@ -3100,7 +3052,7 @@ impl CGame {
     }
 
     pub fn player_map_keys(&self) -> Vec<u32> {
-        self.players.keys().copied().collect()
+        self.player_registry.players.keys().copied().collect()
     }
 
     pub fn update_map_player_lei_ting<Clock: PlayerLeiTingClock>(
@@ -3114,7 +3066,7 @@ impl CGame {
         Option<PlayerLeiTingUpdateReport>,
         PlayerLeiTingUpdateBlock<Clock::Block>,
     > {
-        let Some(player) = self.players.get_mut(&map_key) else {
+        let Some(player) = self.player_registry.players.get_mut(&map_key) else {
             return Ok(None);
         };
         player
@@ -3135,14 +3087,14 @@ impl CGame {
         player_id: i32,
     ) -> Option<OrganizingDisbandPlayer> {
         let player_id = player_id as u32;
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return None;
         }
-        self.players.get_mut(&player_id).map(|player| {
+        self.player_registry.players.get_mut(&player_id).map(|player| {
             let player = player.as_mut();
             let snapshot = OrganizingDisbandPlayer {
                 player_id: player.get_id(),
@@ -3158,14 +3110,14 @@ impl CGame {
         player_id: u32,
         increment: i32,
     ) -> Option<PlayerExploitUpdate> {
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .map(|player| player.add_exploit_wrapping(increment))
     }
 
     pub fn map_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
-        self.players
+        self.player_registry.players
             .iter()
             .find_map(|(&player_id, player)| {
                 legacy_c_string_prefix(player.get_name())
@@ -3175,25 +3127,18 @@ impl CGame {
             .unwrap_or(0)
     }
 
+    /// Делегирует владельцу `player_registry`; log-callback caller-а
+    /// передаётся без обёртки — текст и точки вызова сохраняются.
     pub fn append_map_player(
         &mut self,
         incoming: Box<CPlayer>,
-        mut add_log_text: impl FnMut(&'static str),
+        add_log_text: impl FnMut(&'static str),
     ) -> WorldMapPlayerAppendOutcome {
-        let player_id = incoming.get_id() as u32;
-        if self.players.contains_key(&player_id) {
-            add_log_text("MapPlayer Not Found or NULL.");
-            return WorldMapPlayerAppendOutcome::ExistingOwnerKept {
-                player_id,
-                incoming,
-            };
-        }
-        self.players.insert(player_id, incoming);
-        WorldMapPlayerAppendOutcome::Inserted { player_id }
+        self.player_registry.append_map_player(incoming, add_log_text)
     }
 
     pub fn online_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
-        let is_online = self
+        let is_online = self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id);
@@ -3210,7 +3155,7 @@ impl CGame {
         account: &[u8],
     ) -> Option<WorldOnlineAccountPlayerRoute> {
         let account = legacy_c_string_prefix(account);
-        for &online_id in &self.online_players {
+        for &online_id in &self.player_registry.online_players {
             let Some(player) = self.map_player(online_id) else {
                 continue;
             };
@@ -3243,7 +3188,7 @@ impl CGame {
         let region_types = self.player_organizing_region_types();
         let game_server_id = self.game_server_number_by_player_id(player_id);
         let sender = self.current_game_server_sender();
-        let Some(player) = self.players.get(&(player_id as u32)) else {
+        let Some(player) = self.player_registry.players.get(&(player_id as u32)) else {
             return Ok(None);
         };
         let outcome = {
@@ -3270,7 +3215,7 @@ impl CGame {
         let region_types = self.player_organizing_region_types();
         let game_server_id = self.game_server_number_by_player_id(player_id);
         let sender = self.current_game_server_sender();
-        let Some(player) = self.players.get(&(player_id as u32)) else {
+        let Some(player) = self.player_registry.players.get(&(player_id as u32)) else {
             return Ok(None);
         };
         let mut context = WorldDetachedFactionInfoContext {
@@ -3290,14 +3235,14 @@ impl CGame {
         requested_country: u8,
         country_exists: impl FnOnce(u8) -> bool,
     ) -> Option<PlayerCountryChangeReport> {
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return None;
         }
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .map(|player| player.change_country(requested_country, country_exists))
     }
@@ -3307,14 +3252,14 @@ impl CGame {
         player_id: u32,
         silience_time: i32,
     ) -> Option<i32> {
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return None;
         }
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .map(|player| player.replace_silience_time(silience_time))
     }
@@ -3323,14 +3268,14 @@ impl CGame {
         &mut self,
         player_id: u32,
     ) -> Option<PlayerMurderCounterUpdate> {
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return None;
         }
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .map(|player| player.increment_murder_counters())
     }
@@ -3339,10 +3284,10 @@ impl CGame {
         &mut self,
         player_id: u32,
     ) -> Option<PlayerMurderCounterReset> {
-        if !self.online_players.iter().any(|&online_id| online_id == player_id) {
+        if !self.player_registry.online_players.iter().any(|&online_id| online_id == player_id) {
             return None;
         }
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .map(|player| player.reset_murder_counters())
     }
@@ -3355,14 +3300,14 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<bool, PlayerCodecError> {
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return Ok(false);
         }
-        let Some(player) = self.players.get_mut(&player_id) else {
+        let Some(player) = self.player_registry.players.get_mut(&player_id) else {
             return Ok(false);
         };
         let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
@@ -3387,10 +3332,10 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<Option<WorldRegionChangePlayerTransition>, PlayerCodecError> {
-        if !self.online_players.contains(&requested_player_id) {
+        if !self.player_registry.online_players.contains(&requested_player_id) {
             return Ok(None);
         }
-        let Some(player) = self.players.get_mut(&requested_player_id) else {
+        let Some(player) = self.player_registry.players.get_mut(&requested_player_id) else {
             return Ok(None);
         };
 
@@ -3431,14 +3376,14 @@ impl CGame {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<bool, PlayerCodecError> {
-        if !self
+        if !self.player_registry
             .online_players
             .iter()
             .any(|&online_id| online_id == player_id)
         {
             return Ok(false);
         }
-        let Some(player) = self.players.get_mut(&player_id) else {
+        let Some(player) = self.player_registry.players.get_mut(&player_id) else {
             return Ok(false);
         };
         player.decode_byte_array_lei_ting(source, cursor)?;
@@ -3447,11 +3392,11 @@ impl CGame {
 
     pub fn online_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
-        for (&player_id, player) in &self.players {
+        for (&player_id, player) in &self.player_registry.players {
             if !legacy_c_string_prefix(player.get_name()).eq_ignore_ascii_case(name) {
                 continue;
             }
-            if self
+            if self.player_registry
                 .online_players
                 .iter()
                 .any(|&online_id| online_id == player_id)
@@ -3464,11 +3409,11 @@ impl CGame {
 
     pub fn online_player_by_cdkey(&self, cdkey: &[u8]) -> Option<&CPlayer> {
         let cdkey = legacy_c_string_prefix(cdkey);
-        for (&player_id, player) in &self.players {
+        for (&player_id, player) in &self.player_registry.players {
             if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(cdkey) {
                 continue;
             }
-            if self
+            if self.player_registry
                 .online_players
                 .iter()
                 .any(|&online_id| online_id == player_id)
@@ -3480,7 +3425,7 @@ impl CGame {
     }
 
     pub fn online_player_count(&self) -> usize {
-        self.online_players.len()
+        self.player_registry.online_players.len()
     }
 
     pub fn append_online_player(
@@ -3497,10 +3442,10 @@ impl CGame {
         player_id: i32,
     ) -> WorldOnlinePlayerAppendOutcome {
         let online_id = player_id as u32;
-        let inserted = if self.online_players.contains(&online_id) {
+        let inserted = if self.player_registry.online_players.contains(&online_id) {
             false
         } else {
-            self.online_players.push_back(online_id);
+            self.player_registry.online_players.push_back(online_id);
             true
         };
         let organizing = organizing.on_player_enter_game(self, player_id);
@@ -3518,7 +3463,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<WorldReconnectedPlayerDecode, PlayerCodecError> {
-        if let Some(player) = self.players.get_mut(&requested_player_id) {
+        if let Some(player) = self.player_registry.players.get_mut(&requested_player_id) {
             let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
             return Ok(WorldReconnectedPlayerDecode {
                 requested_player_id,
@@ -3531,7 +3476,7 @@ impl CGame {
         let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
         let decoded_player_id = player.get_id();
         let decoded_key = decoded_player_id as u32;
-        let replaced_existing_decoded_id = self.players.insert(decoded_key, player).is_some();
+        let replaced_existing_decoded_id = self.player_registry.players.insert(decoded_key, player).is_some();
         let offline_inserted = self.append_offline_player_id(decoded_key);
         Ok(WorldReconnectedPlayerDecode {
             requested_player_id,
@@ -3551,7 +3496,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<WorldServerSnapshotPlayerDecode, PlayerCodecError> {
-        if let Some(player) = self.players.get_mut(&requested_player_id) {
+        if let Some(player) = self.player_registry.players.get_mut(&requested_player_id) {
             let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
             return Ok(WorldServerSnapshotPlayerDecode {
                 requested_player_id,
@@ -3564,8 +3509,8 @@ impl CGame {
         let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
         let decoded_player_id = player.get_id();
         let decoded_key = decoded_player_id as u32;
-        let replaced_existing_decoded_id = self.players.remove(&decoded_key).is_some();
-        self.players.insert(decoded_key, player);
+        let replaced_existing_decoded_id = self.player_registry.players.remove(&decoded_key).is_some();
+        self.player_registry.players.insert(decoded_key, player);
         Ok(WorldServerSnapshotPlayerDecode {
             requested_player_id,
             decoded_player_id,
@@ -3586,7 +3531,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<WorldReturnedPlayerDecode, PlayerCodecError> {
-        if let Some(player) = self.players.get_mut(&requested_player_id) {
+        if let Some(player) = self.player_registry.players.get_mut(&requested_player_id) {
             let _ = player.decord_from_byte_array(source, cursor, true, registry, coefficients)?;
             player.clear_uncreated_pets();
             player.set_faction_data_received(false);
@@ -3603,8 +3548,8 @@ impl CGame {
         player.set_faction_data_received(false);
         let decoded_player_id = player.get_id();
         let decoded_key = decoded_player_id as u32;
-        let replaced_existing_decoded_id = self.players.remove(&decoded_key).is_some();
-        self.players.insert(decoded_key, player);
+        let replaced_existing_decoded_id = self.player_registry.players.remove(&decoded_key).is_some();
+        self.player_registry.players.insert(decoded_key, player);
         let login_removed = self.remove_login_player(decoded_key);
         let online_removal = self.remove_online_player(organizing, decoded_key);
         let offline_inserted = self.append_offline_player_id(decoded_key);
@@ -3672,10 +3617,10 @@ impl CGame {
         organizing: &mut COrganizingCtrl,
         player_id: u32,
     ) -> WorldOnlinePlayerRemoveOutcome {
-        let old_len = self.online_players.len();
-        self.online_players
+        let old_len = self.player_registry.online_players.len();
+        self.player_registry.online_players
             .retain(|online_id| *online_id != player_id);
-        let removed_occurrences = old_len - self.online_players.len();
+        let removed_occurrences = old_len - self.player_registry.online_players.len();
         let organizing = organizing.on_player_exit_game(self, player_id as i32);
         WorldOnlinePlayerRemoveOutcome {
             removed_occurrences,
@@ -3720,15 +3665,15 @@ impl CGame {
             })
             .collect::<Vec<_>>();
 
-        let candidate_ids = self
+        let candidate_ids = self.player_registry
             .online_players
             .iter()
             .copied()
-            .chain(self.login_players.iter().map(|entry| entry.player_id))
+            .chain(self.player_registry.login_players.iter().map(|entry| entry.player_id))
             .collect::<Vec<_>>();
         let mut affected_players = Vec::<(u32, Vec<u8>)>::new();
         for player_id in candidate_ids {
-            let Some(player) = self.players.get(&player_id) else {
+            let Some(player) = self.player_registry.players.get(&player_id) else {
                 continue;
             };
             if !affected_region_ids.contains(&player.get_region_id())
@@ -3782,7 +3727,7 @@ impl CGame {
     }
 
     pub fn login_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
-        let is_login = self
+        let is_login = self.player_registry
             .login_players
             .iter()
             .any(|login_player| login_player.player_id == player_id);
@@ -3813,7 +3758,7 @@ impl CGame {
         registry: &GoodsBasePropertiesRegistry,
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<Option<Vec<u8>>, PlayerCodecError> {
-        let Some(mut player) = self.players.remove(&map_key) else {
+        let Some(mut player) = self.player_registry.players.remove(&map_key) else {
             return Ok(None);
         };
         let region_types = self.player_organizing_region_types();
@@ -3831,7 +3776,7 @@ impl CGame {
                 coefficients,
             )
         };
-        self.players.insert(map_key, player);
+        self.player_registry.players.insert(map_key, player);
         encoded.map(|_| Some(payload))
     }
 
@@ -3845,7 +3790,7 @@ impl CGame {
 
     pub fn login_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
-        for login_player in &self.login_players {
+        for login_player in &self.player_registry.login_players {
             let Some(player) = self.map_player(login_player.player_id) else {
                 continue;
             };
@@ -3860,7 +3805,7 @@ impl CGame {
         &self,
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
-        for player in self.players.values() {
+        for player in self.player_registry.players.values() {
             // lower-case-ит player-buffer раньше requested-buffer.
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
             let requested_name = copy_name_for_legacy_lowercase(name);
@@ -3875,11 +3820,11 @@ impl CGame {
         &self,
         name: &[u8],
     ) -> Result<Option<&CPlayer>, WorldPlayerNameLookupError> {
-        for (&player_id, player) in &self.players {
+        for (&player_id, player) in &self.player_registry.players {
             // сохраняет обратный порядок двух ToStrlwr-вызовов.
             let requested_name = copy_name_for_legacy_lowercase(name);
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
-            if player_name == requested_name && self.creation_players.contains(&(player_id as i32))
+            if player_name == requested_name && self.player_registry.creation_players.contains(&(player_id as i32))
             {
                 return Ok(Some(player.as_ref()));
             }
@@ -3949,7 +3894,7 @@ impl CGame {
             }
         };
 
-        let Some(player) = self.players.get(&player_id) else {
+        let Some(player) = self.player_registry.players.get(&player_id) else {
             return Ok(report(
                 requested_name.unwrap_or_default(),
                 1,
@@ -4028,7 +3973,7 @@ impl CGame {
             ));
         }
 
-        self.players
+        self.player_registry.players
             .get_mut(&player_id)
             .expect("эксклюзивный CGame borrow сохраняет map-owner через DB await")
             .set_validated_name(requested_name);
@@ -4042,17 +3987,17 @@ impl CGame {
     }
 
     pub fn clear_creation_player(&mut self) {
-        self.creation_players.clear();
+        self.player_registry.creation_players.clear();
     }
 
     pub fn creation_player_count_in_cdkey(&self, cdkey: &[u8]) -> u8 {
         let cdkey = legacy_c_string_prefix(cdkey);
         let mut count = 0_u8;
-        for (&player_id, player) in &self.players {
+        for (&player_id, player) in &self.player_registry.players {
             if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(cdkey) {
                 continue;
             }
-            for &creation_id in &self.creation_players {
+            for &creation_id in &self.player_registry.creation_players {
                 if creation_id as u32 == player_id {
                     count = count.wrapping_add(1);
                 }
@@ -4064,11 +4009,11 @@ impl CGame {
     pub fn creation_player_ids_by_cdkey(&self, cdkey: &[u8]) -> Vec<u32> {
         let cdkey = legacy_c_string_prefix(cdkey);
         let mut player_ids = Vec::new();
-        for (&player_id, player) in &self.players {
+        for (&player_id, player) in &self.player_registry.players {
             if !legacy_c_string_prefix(player.get_account()).eq_ignore_ascii_case(cdkey) {
                 continue;
             }
-            for &creation_id in &self.creation_players {
+            for &creation_id in &self.player_registry.creation_players {
                 if creation_id as u32 == player_id {
                     player_ids.push(player_id);
                 }
@@ -4077,40 +4022,17 @@ impl CGame {
         player_ids
     }
 
-    /// Передаёт уникального creation-игрока владеющему map после list-вставки.
-    ///
-    /// На обеих collision-ветвях синхронно передаёт точный payload исходного
-    /// `AddLogText`; duplicate уничтожается только после возврата callback-а.
+    /// Делегирует владельцу `player_registry`: уникальный creation-игрок
+    /// переходит владеющему map после list-вставки, collision-ветви синхронно
+    /// передают точный payload исходного `AddLogText`, а duplicate
+    /// уничтожается только после возврата callback-а.
     pub fn append_creation_player(
         &mut self,
         incoming: Box<CPlayer>,
-        mut add_log_text: impl FnMut(WorldCreationPlayerAppendLog),
+        add_log_text: impl FnMut(WorldCreationPlayerAppendLog),
     ) -> WorldCreationPlayerAppendOutcome {
-        let signed_player_id = incoming.get_id();
-        let player_id = signed_player_id as u32;
-        if self.creation_players.contains(&signed_player_id) {
-            add_log_text(WorldCreationPlayerAppendLog::Duplicate { player_id });
-            // удаляет incoming до исходного UAF.
-            // Box::drop сохраняет destruction; typed outcome запрещает caller-у
-            // продолжить с уже уничтоженным non-owning alias.
-            drop(incoming);
-            return WorldCreationPlayerAppendOutcome::DuplicateReleased { player_id };
-        }
-
-        self.creation_players.push_back(signed_player_id);
-        if self.players.contains_key(&player_id) {
-            add_log_text(WorldCreationPlayerAppendLog::ExistingMapOwner);
-            // Original уже добавил list-ID, оставил старый map-owner и вернул
-            // incoming pointer caller-у. Box выражает именно это непринятое
-            // владение; дальнейшая судьба объекта принадлежит OnLogMessage.
-            return WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept {
-                player_id,
-                incoming,
-            };
-        }
-
-        self.players.insert(player_id, incoming);
-        WorldCreationPlayerAppendOutcome::Inserted { player_id }
+        self.player_registry
+            .append_creation_player(incoming, add_log_text)
     }
 
     /// Выполняет list-order `AddOrginGoodsToPlayer`; reject одного slot-а
@@ -4144,31 +4066,31 @@ impl CGame {
     }
 
     pub fn append_offline_player_id(&mut self, player_id: u32) -> bool {
-        if self.offline_players.contains(&player_id) {
+        if self.player_registry.offline_players.contains(&player_id) {
             return false;
         }
-        self.offline_players.push_back(player_id);
+        self.player_registry.offline_players.push_back(player_id);
         true
     }
 
     pub fn clear_offline_player(&mut self) {
-        self.offline_players.clear();
+        self.player_registry.offline_players.clear();
     }
 
     pub fn remove_offline_player(&mut self, player_id: u32) {
-        self.offline_players
+        self.player_registry.offline_players
             .retain(|offline_id| *offline_id != player_id);
     }
 
     pub fn append_login_player(&mut self, player_id: u32, login_time_ms: u32) {
-        if self
+        if self.player_registry
             .login_players
             .iter()
             .any(|login_player| login_player.player_id == player_id)
         {
             return;
         }
-        self.login_players.push_back(WorldLoginPlayerEntry {
+        self.player_registry.login_players.push_back(WorldLoginPlayerEntry {
             player_id,
             login_time_ms,
         });
@@ -4181,7 +4103,7 @@ impl CGame {
         account: &[u8],
     ) -> Option<WorldLoginAccountPlayer> {
         let account = legacy_c_string_prefix(account);
-        for login in &self.login_players {
+        for login in &self.player_registry.login_players {
             let Some(player) = self.map_player(login.player_id) else {
                 continue;
             };
@@ -4230,14 +4152,14 @@ impl CGame {
     }
 
     pub fn remove_login_player(&mut self, player_id: u32) -> bool {
-        let Some(index) = self
+        let Some(index) = self.player_registry
             .login_players
             .iter()
             .position(|login_player| login_player.player_id == player_id)
         else {
             return false;
         };
-        let _ = self.login_players.remove(index);
+        let _ = self.player_registry.login_players.remove(index);
         true
     }
 
@@ -4593,7 +4515,7 @@ impl CGame {
     }
 
     pub fn reset_honor_eliminate_info(&mut self, rank_mask: u32) -> bool {
-        for player in self.players.values_mut() {
+        for player in self.player_registry.players.values_mut() {
             player.reset_honor_eliminate_info(rank_mask);
         }
         self.honor_eliminate_list.clear();

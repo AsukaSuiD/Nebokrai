@@ -10,3 +10,4 @@ pub mod playerexploit; // снимок обновления exploit игрока
 pub mod playerloadqueue; // FIFO запросов загрузки игроков.
 pub mod playerloadworker; // контракт и пул фоновых DB worker-ов загрузки игроков.
 pub mod playerranks; // рейтинг игроков CPlayerRanks.
+pub mod worldplayers; // мировой реестр игроков и присутствие (login/online/offline/creation/restore/deletion): primary state и typed-операции владельца.
