@@ -17,14 +17,6 @@
 //! target/current skill, `Tracing`, `CheckCast` и отсутствие обычного
 //! attack-speed gate.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp
-
-// COMPONENT_VARIANT_END: GameServer
-
 use super::guardtarget::select_nearest_player_or_pet;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};

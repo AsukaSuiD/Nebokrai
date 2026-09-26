@@ -44,33 +44,5 @@ pub(crate) type RestoreHpState = super::restorestate::RestoreStateData<RESTORE_H
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp
 
 // ============================================================================
-// FUNCTION: CRestoreHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:60
-// RVA: 0x000F8520
-// ADDRESS: 004f8520
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRestoreHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:69
-// RVA: 0x000F85B0
-// ADDRESS: 004f85b0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 
 // COMPONENT_VARIANT_END: GameServer

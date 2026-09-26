@@ -23,34 +23,6 @@ pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargefullmissstate.cpp
 
 // ============================================================================
-// FUNCTION: CUseGoodsEnlargeFullMissState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargefullmissstate.cpp:75
-// RVA: 0x001D4770
-// ADDRESS: 005d4770
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeFullMissState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargefullmissstate.cpp:86
-// RVA: 0x001D4810
-// ADDRESS: 005d4810
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 
 // COMPONENT_VARIANT_END: GameServer

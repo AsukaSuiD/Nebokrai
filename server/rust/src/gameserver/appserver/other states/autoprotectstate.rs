@@ -20,34 +20,6 @@ pub(crate) use nebokrai_zone::effects::AUTO_PROTECT_STATE_ID;
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp
 
 // ============================================================================
-// FUNCTION: CAutoProtectState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:85
-// RVA: 0x001D4340
-// ADDRESS: 005d4340
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// ============================================================================
-// FUNCTION: CAutoProtectState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:111
-// RVA: 0x001D4410
-// ADDRESS: 005d4410
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 
 // COMPONENT_VARIANT_END: GameServer

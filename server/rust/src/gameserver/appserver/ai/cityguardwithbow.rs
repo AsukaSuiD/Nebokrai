@@ -13,43 +13,6 @@
 //! Диапазон OnSchedule 0x0060B890 теперь проверяется общим dispatcher-ом
 //! стационарной семьи до Begin; проверка прямого пути принадлежит навыку.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:26
-// RVA: 0x0020B890
-// ADDRESS: 0060b890
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::SearchEnemyGuildCarriage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:350
-// RVA: 0x0020DFC0
-// ADDRESS: 0060dfc0
-// PROTOTYPE: CMoveShape * __thiscall SearchEnemyGuildCarriage(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
-
 use super::cityguardwithsword::select_city_guard_enemy;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::CGame;

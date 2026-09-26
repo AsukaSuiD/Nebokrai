@@ -27,34 +27,6 @@ pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargeelmdefstate.cpp
 
 // ============================================================================
-// FUNCTION: CUseGoodsEnlargeElmDefState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargeelmdefstate.cpp:76
-// RVA: 0x001D4BC0
-// ADDRESS: 005d4bc0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeElmDefState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargeelmdefstate.cpp:87
-// RVA: 0x001D4C60
-// ADDRESS: 005d4c60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 
 // COMPONENT_VARIANT_END: GameServer

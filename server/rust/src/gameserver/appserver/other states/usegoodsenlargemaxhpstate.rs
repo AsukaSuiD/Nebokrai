@@ -32,34 +32,6 @@ pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp
 
 // ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:78
-// RVA: 0x001D5A30
-// ADDRESS: 005d5a30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:89
-// RVA: 0x001D5AD0
-// ADDRESS: 005d5ad0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 
 // COMPONENT_VARIANT_END: GameServer

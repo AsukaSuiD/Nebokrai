@@ -27,29 +27,6 @@
 //! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
 //! порядка и фильтров достигнутого selector-а.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp
-
-// ============================================================================
-// FUNCTION: CCityGuardWithSword::SearchEnemyGuildCarriage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp:218
-// RVA: 0x0020E780
-// ADDRESS: 0060e780
-// PROTOTYPE: CMoveShape * __thiscall SearchEnemyGuildCarriage(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
-
 use super::guardtarget::{
     GuardDistanceTarget, consider_guard_distance_target, select_guard_target_groups,
 };

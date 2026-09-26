@@ -16,49 +16,6 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp
 // `OnSchedule` сопоставлен с RVA 0x0020B890.
 
-// ============================================================================
-// FUNCTION: CVilCouGuardWithBow::CVilCouGuardWithBow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp:13
-// RVA: 0x0020C750
-// ADDRESS: 0060c750
-// PROTOTYPE: undefined __thiscall CVilCouGuardWithBow(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CVilCouGuardWithBow::~CVilCouGuardWithBow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp:17
-// RVA: 0x0020C770
-// ADDRESS: 0060c770
-// PROTOTYPE: void __thiscall ~CVilCouGuardWithBow(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CVilCouGuardWithBow::SearchEnemyCarriage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp:333
-// RVA: 0x0020CDB0
-// ADDRESS: 0060cdb0
-// PROTOTYPE: CMoveShape * __thiscall SearchEnemyCarriage(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 use super::vilcouguardwithsword::select_village_country_guard_enemy;
