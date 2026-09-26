@@ -9,6 +9,24 @@
 //! лежат в соседних файлах `world_game_init`, `world_main_loop`, `world_reload`,
 //! `world_dispatch` и `persistence::world_db_data_collect`.
 //!
+//! Статус по модели `app` — **переходный агрегат-шов (decomposition seam),
+//! а не чистая оркестрация и не образец app-модуля**. Структура физически
+//! хранит первичные domain stores канонических владельцев: реестр `players`
+//! и счётчик `player_id` + очередь `team_session_ids` и присутствие
+//! (`creation/restore/deletion/online/offline/login_players`) — целевой
+//! владелец `characters`; реестры `regions`/`game_servers` и ping-индекс —
+//! `regions`; накопитель `db_data: WorldDbData` — `persistence`;
+//! `quest_system`, `script_resources` и setup/resource-таблицы — `content`
+//! (конкретные потребители); `system_broadcasts`/`goods_links` — `social`;
+//! `leave_word_id` — `organizations`; `honor_eliminate_list` — активности/
+//! рейтинги; `bai_tan` — исторический анти-флуд член, владелец назначается
+//! при разборе. Процессные и сетевые поля (`setup`, net-края, workers,
+//! очереди write-log/load, time-маркеры) остаются законной композиционной
+//! частью `app`. Дублирования состояния с domain-модулями нет: эти группы
+//! существуют только здесь и перейдут к владельцам предметной
+//! reconstruction-работой, а не comment-правкой; новые domain-поля в этот
+//! агрегат не добавляются.
+//!
 //! Имена и проекции типов здесь — Realm/Shared формы оригинальных
 //! (`organizations`, `activities`, `characters`, `content`, `regions`,
 //! `sessions`, `billing`, `auction`, `persistence`, `crate::app::world_*`,

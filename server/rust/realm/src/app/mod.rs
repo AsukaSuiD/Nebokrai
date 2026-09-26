@@ -40,7 +40,7 @@ pub mod servermessage; // диспетчер server-сообщений World.
 pub mod teammessage; // входящий team-диспетчер 0x600xx World.
 pub mod world_client; // исходящий клиент World->Login.
 pub mod world_game_view; // узкий game-view обработчиков мировых сообщений.
-pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов.
+pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов; переходный агрегат, физически хранящий первичные states канонических владельцев (decomposition seam, не образец app-модуля).
 pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers.
 pub mod world_dispatch; // process_world_message: диспетчер мировых сообщений, drain union runtime, country/organizing effect-glue и DeleteRole/CreateRole мосты.
 pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры.
