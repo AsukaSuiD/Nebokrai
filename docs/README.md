@@ -17,6 +17,18 @@ Nebokrai восстанавливает серверное поведение «
 
 Подробные страницы ниже — основные места хранения контрактов. Обзоры объясняют маршрут чтения и не создают второй набор формул или спецификаций.
 
+## Карта папок
+
+| Папка | Ключевые файлы-входы |
+| --- | --- |
+| [`architecture/`](architecture/) | [Realm, Zone и Shared](architecture/realm-and-zone.md), [карта проекта](architecture/workspace.md) |
+| [`gameplay/`](gameplay/) | [Симуляция](gameplay/simulation.md) и далее по подсистемам |
+| [`reconstruction/`](reconstruction/) | [Обзор метода](reconstruction/overview.md), [правила evidence](reconstruction/evidence-and-contracts.md) |
+| [`operations/`](operations/) | [Сборка](operations/build.md), [локальный стенд](operations/hybrid-runtime.md), [диагностика](operations/diagnostics.md) |
+| [`status/`](status/) | [Аудит проекта](status/audit.md) |
+
+Остальные разделы: прочтение проекта — [`overview/`](overview/), протокол — [`protocol/`](protocol/), процессы и runtime — [`server/`](server/), принятые решения — [`decisions/`](decisions/).
+
 ## Архитектура и код
 
 | Вопрос | Где читать |
