@@ -21,6 +21,8 @@ pub mod cgoodsrepairlistener; // visitor ремонта всех ремонто�
 pub mod cgoodsrepairpricelistener; // GoodsRepairPrice: accumulator полной стоимости ремонта.
 pub mod cgoodsshadowcontainer; // CGoodsShadowContainer: metadata/query core теней player-источника с resolver-швом.
 pub mod cjifen; // CJiFen: JiFen-вариант однослотового currency-контейнера.
+pub mod cs2ccontainerobjectamountchange; // CS2CContainerObjectAmountChange: build-only кодек изменения количества 0xC0102.
+pub mod cs2ccontainerobjectmove; // CS2CContainerObjectMove: SetOperation подкоды, self-move normalization и build-only кодек 0xC0101 с sender-швом доставки.
 pub mod cseekgoodslistener; // SeekGoodsListener: visitor поиска товаров по catalog index.
 pub mod cshadowwallet; // generic однослотовая currency shadow-проекция (CShadowCurrencyContainer) и CShadowWallet.
 pub mod cshadowyuanbao; // CShadowYuanBao: YuanBao-вариант currency shadow-проекции.
