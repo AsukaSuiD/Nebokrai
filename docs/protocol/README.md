@@ -19,6 +19,7 @@
 - [Вход в Login: `0x2FD01` и `0x2FD0B`](login-auth.md).
 - [Ответ Game при входе: `0xBF401`](game-login.md).
 - [Движение и навыки](game-actions.md).
+- [Исходящие команды клиента: матрица dispatch-покрытия](client-outgoing-catalog.md).
 
 ## Изменить или восстановить пакет
 

@@ -1,0 +1,7 @@
+# Идентификация локального evidence source; не поставка бинарников.
+component = "NebokraiClient"
+artifact = ".exe/Nebokrai.exe (без PDB; RSDS ссылается на недоступный GameClient.pdb)"
+exe_sha256 = "5B41EBFCEA8C40AB8756E3FB676C8E03EC1F45FBA527F33BC163B084CF520971"
+timestamp = "2016-04-28T05:29:09Z"
+status = "machine-only analysis; no matching PDB"
+ghidra_version = "12.1.2"
