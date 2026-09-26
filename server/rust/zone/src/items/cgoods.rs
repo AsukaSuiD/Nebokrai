@@ -6,8 +6,9 @@
 //! швы переноса (не расхождения): `CShape` живого типа — Zone `regions/shape.rs`,
 //! GAP-константы и `CGoodsBaseProperties` — Zone `content/goods.rs`, lookup
 //! реестра базовых свойств типизирован trait-швом [`GoodsBasePropertiesLookup`]
-//! ниже (реализация прежнего владельца — `CGoodsFactory` старого пакета до его
-//! собственной волны), журнал эффектов `fairy_exp_up` — шов `FairyGrowEffectSink`,
+//! ниже (реализация владельца реестра — `CGoodsFactory` Zone
+//! `content/goodsfactory.rs`, волна Z-G0b), журнал эффектов `fairy_exp_up` —
+//! шов `FairyGrowEffectSink`,
 //! см. `fairyproperties.rs`. Невостребованный приватный реликт переходной
 //! реконструкции `read_goods_wire` (мёртвый уже в старом пакете, где dead_code
 //! скрыт blanket-allow) не перенесён, чтобы Zone сохранял нуль предупреждений.
@@ -69,8 +70,8 @@ use crate::regions::ShapeIdentity;
 use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
-/// Шов переноса: lookup реестра базовых свойств товара. Реализация прежнего
-/// владельца — `CGoodsFactory` старого пакета до его собственной волны;
+/// Шов переноса: lookup реестра базовых свойств товара. Реализация владельца
+/// реестра — `CGoodsFactory` Zone `content/goodsfactory.rs` (волна Z-G0b);
 /// имя операции сохраняет исходный `QueryGoodsBaseProperties`.
 pub trait GoodsBasePropertiesLookup {
     fn query_goods_base_properties(&self, goods_id: u32) -> Option<&CGoodsBaseProperties>;

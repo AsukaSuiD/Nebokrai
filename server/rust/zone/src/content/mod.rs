@@ -3,6 +3,7 @@
 pub mod countryparam; // CCountryParam: GameServer-владелец параметров стран.
 mod functions; // реестр имён сценарных команд (LoadFunction).
 pub mod goods; // базовые свойства товара и их startup wire-decoder.
+pub mod goodsfactory; // CGoodsFactory: реестр товаров, цены, создание/улучшение экземпляров и DaKong-алгоритм камней.
 pub mod honorranks; // CHonorRanks: startup snapshot рангов чести.
 mod quests; // полученный каталог заданий.
 mod scripts; // function/variable/script ресурсы сценариев.
