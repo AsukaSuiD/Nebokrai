@@ -5,14 +5,16 @@
 //! `CAutomaticRestoreMpState`, `CAutomaticRestoreMpStateFight`.
 //! Идентификаторы точной пары —
 //! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
-//! `AI` HP peace (VA `0x004FA8E0`) проверяет смерть, полноту HP и мирный
+//! `AI` HP peace проверяет смерть, полноту HP и мирный
 //! режим до часов; при срабатывании читает живой объём восстановления,
 //! меняет HP и повторно читает часы. Состояние не владеет игроком или источником часов.
-//! Таблицы всех четырёх классов вызывают общие тела Serialize/Unserialize:
-//! VA `0x005ECE70` / `0x004F9D80`. PDB называет общие тела по другим состояниям;
+//! Таблицы всех четырёх классов вызывают общие тела Serialize/Unserialize.
+//! PDB называет общие тела по другим состояниям;
 //! принадлежность здесь определяется vtable, а не именем символа.
 //! Проекция из снимка `PlayerCombatProperties` расположена здесь (а не в
 //! переходном адаптере старого пакета), потому что оба типа локальны Zone.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 

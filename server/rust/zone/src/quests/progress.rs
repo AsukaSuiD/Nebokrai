@@ -1,17 +1,18 @@
 //! Карта прогресса из `CPlayer` Game (`server/gameserver/appserver/player.cpp`).
 //! Точная пара `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
 //! (идентификаторы — docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
-//! `AddQuestDataByteArray` VA 0x00433310–0x0043339F: count, затем
+//! `AddQuestDataByteArray` пишет count, затем
 //! упорядоченные u16 ID и u8 state. `AddQuestDataByteArray_ForClient`
-//! VA 0x0043E204–0x0043E229 пропускает state 1 и неизвестные каталогу ID.
-//! `CPlayer::AddQuest` VA 0x00445397–0x00445531 удаляет прежнее ненулевое
+//! пропускает state 1 и неизвестные каталогу ID.
+//! `CPlayer::AddQuest` удаляет прежнее ненулевое
 //! состояние до поиска определения и только затем вставляет новый ноль.
-//! `CPlayer::RunQuestCompleteScript` VA 0x00458940–0x004589AA допускает
+//! `CPlayer::RunQuestCompleteScript` допускает
 //! только запись с нулевым byte state, затем ищет определение и передаёт
 //! его complete-script в общий исполнитель.
-//! Клиентские ветви `OnOrgasysMessage` VA 0x0048AE0C–0x0048AED2 и
-//! 0x0048AED7–0x0048AF9D проверяют нулевое состояние перед поиском
-//! complete/disband-script; запуск сценария принадлежит Game.
+//! Клиентские ветви `OnOrgasysMessage` проверяют нулевое состояние перед
+//! поиском complete/disband-script; запуск сценария принадлежит Game.
+//! Доказательства:
+//! docs/reconstruction/gameserver-npc-and-regions.md#квестовые-записи-и-wire-снимки-cplayer
 
 use nebokrai_shared::resources::CQuestSystem;
 use std::collections::BTreeMap;

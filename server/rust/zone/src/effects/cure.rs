@@ -1,7 +1,8 @@
 //! Данные, срок и сохраняемая запись CCureState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/curestate.cpp/.h;
-//! конструктор 0x005E9E50, Serialize 0x005F51E0,
-//! Unserialize 0x005EAAC0, AI 0x005D5BA0.
+//! Serialize/Unserialize/AI общие с Blind-семейством состояний.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

@@ -2,9 +2,10 @@
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/agilitystate.cpp`, `naturalstate.cpp`, `rapturestate .cpp`,
 //! `agilitystate2.cpp` и соответствующие `.h`.
-//! Конструкторы VA `0x005F4195/0x005F3795/0x005F3C85` задают ID;
-//! vtable `0x00660774/0x006606B4/0x00660714` связывают общий writer
-//! `0x005F3E40`, reader `0x005F4420` и отдельные property callbacks.
+//! Конструкторы задают свой ID; vtable классов связывают общие writer и
+//! reader и отдельные property callbacks.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

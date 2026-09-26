@@ -1,14 +1,13 @@
 //! Данные и 124-байтная запись `CHBYState` (ID `0x37`) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/chbystate.cpp/.h.
-//! Конструктор VA `0x005DAC90` записывает ID без чтения часов и оставляет
-//! накопленный список навыков пустым. Vtable `0x0065E41C`: AI
-//! `0x005DAAA0` (при нулевом сроке часов не читает, иначе один clock и
-//! строгое unsigned-сравнение), End `0x005DA240`, OnUpdateProperties
-//! `0x005DA0F0`, GetRemainedTime `0x005DA030`, Serialize `0x005DA080`,
-//! Unserialize `0x005DA0C0` (clock до 120-байтного блока, затем
-//! `online = true`). Живые Begin/restart/End, visual, навыки и hotkeys
-//! остаются у переходного Game.
+//! Конструктор записывает ID без чтения часов и оставляет
+//! накопленный список навыков пустым. AI при нулевом сроке часов не читает,
+//! иначе один clock и строгое unsigned-сравнение. Unserialize читает clock
+//! до 120-байтного блока и затем ставит `online = true`. Живые
+//! Begin/restart/End, visual, навыки и hotkeys остаются у переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::change_body_client_state_time;
 

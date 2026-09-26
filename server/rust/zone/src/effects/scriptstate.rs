@@ -2,16 +2,14 @@
 //! пять UseGoods, ImproveExp и AutoProtect.
 //! Источник: gameserver.exe + GameServer.pdb, moveshape.cpp и
 //! other states/{usegoodsenlarge*,improveexp,autoprotect}state.cpp/.h.
-//! Конструкторы не читают часы (started и счётчик нулевые). Vtable:
-//! AutoProtect `0x0065E00C` (End `0x005D44E0`, Serialize `0x005F51E0` —
-//! 8 байт ID/remaining), пять UseGoods (End `0x005D5B80` с ended-флагом,
-//! Serialize `0x005D4D10` — 12 байт ID/remaining/coefficient, getter
-//! `0x005F2CD0`) и ImproveExp (getter `0x005D5F30`, Serialize
-//! `0x005E7330` — 12 байт, AI `0x005D60B0`). Readers
-//! `0x004F9D80`/`0x005D6190`/`0x005EAAC0` читают clock после внешнего ID,
-//! до срока и коэффициента. Save не меняет живой keep. Живые
-//! Begin/restart/AI/End, property-формулы и пакеты остаются у
+//! Конструкторы не читают часы (started и счётчик нулевые). AutoProtect —
+//! 8-байтная запись ID/remaining; пять UseGoods — 12-байтная
+//! ID/remaining/coefficient, ImproveExp — 12-байтная. Readers читают clock
+//! после внешнего ID, до срока и коэффициента. Save не меняет живой keep.
+//! Живые Begin/restart/AI/End, property-формулы и пакеты остаются у
 //! переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};

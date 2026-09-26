@@ -1,13 +1,13 @@
 //! Данные, срок и сохраняемая запись CPromotionState (0x142) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/promotionstate.cpp/.h.
-//! Конструктор с параметрами VA 0x005F2BC0 записывает срок и оба
+//! Конструктор с параметрами записывает срок и оба
 //! WORD-коэффициента из аргументов без чтения часов; конструктор по
-//! умолчанию VA 0x005F2C40 задаёт оба коэффициента равными 1. Vtable
-//! 0x006605F4: AI VA 0x005D5BA0, End VA 0x005FD420 и GetRemainedTime
-//! VA 0x005F2CD0 общие с семейством; Restart VA 0x005FD450 обновляет
-//! только часы. Serialize VA 0x005F2E90 пишет ID, вызывает getter срока
+//! умолчанию задаёт оба коэффициента равными 1; Restart обновляет
+//! только часы. Serialize пишет ID, вызывает getter срока
 //! и добавляет оба WORD (атака +0x3C, лечение +0x3E); Unserialize
-//! VA 0x005F2FB0 после внешнего ID читает часы и затем три поля записи.
+//! после внешнего ID читает часы и затем три поля записи.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

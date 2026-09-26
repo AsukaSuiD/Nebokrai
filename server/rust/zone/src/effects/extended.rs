@@ -1,17 +1,19 @@
 //! Данные и записи extended-state `CExState` (0x32) / `CExStateNew` (0x33) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/{exstate,exstatenew}.cpp/.h.
-//! Конструкторы VA `0x005D9230`/`0x005D9990` часов не читают (base timestamp
-//! и New.last_item_tick нулевые). Serialize VA `0x005D9510`/`0x005D9BB0`
+//! Конструкторы часов не читают (base timestamp
+//! и New.last_item_tick нулевые). Serialize
 //! записывают ID, вызывают GetRemainedTime и кладут остаток в живой keep
-//! (+0x40), затем добавляют блок 0x28/0x34 байта. Unserialize VA
-//! `0x005D9550`/`0x005D9BF0` после внешнего ID читают clock до блока;
-//! New ставит его и в started, и в item timestamp. AI VA
-//! `0x005D94E0`/`0x005D9FB0` сравнивают абсолютный wrapping-deadline строго
+//! (+0x40), затем добавляют блок 0x28/0x34 байта. Unserialize
+//! после внешнего ID читают clock до блока;
+//! New ставит его и в started, и в item timestamp. AI
+//! сравнивает абсолютный wrapping-deadline строго
 //! с текущим tick. Getter Original — общий с CHBYState (после истечения
-//! ненулевого срока возвращает 1), New — `0x005D6320` (нулевой срок без
-//! часов). Живые Add/Del/Begin/End и periodic use_item остаются у
+//! ненулевого срока возвращает 1), New — нулевой срок без
+//! часов. Живые Add/Del/Begin/End и periodic use_item остаются у
 //! переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::{change_body_client_state_time, guarded_client_state_time};
 

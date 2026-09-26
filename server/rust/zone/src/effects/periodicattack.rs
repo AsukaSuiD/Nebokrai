@@ -3,11 +3,9 @@
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/poisonarrowstate.cpp` и `kerosenestate.cpp`
 //! (соответствующие `.h` задают исходные классы).
-//! PoisonArrow Serialize VA `0x005E93C0`, Unserialize VA `0x005E3500`,
-//! AI VA `0x005E3730`; Kerosene Unserialize VA `0x005EB800`.
-//! BloodLoss Serialize/Unserialize VA `0x005E3B40/0x005E3C70`,
-//! LeafCut Serialize VA `0x005F0820`, LeafCut2 Unserialize VA `0x005EBF20`.
 //! Живой владелец, рассылка и применение атаки остаются у Game-адаптера.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use crate::combat::MasterInfo;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};

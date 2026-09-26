@@ -1,16 +1,12 @@
 //! Данные, срок и сохраняемая запись периодического лечения в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/{healstate,
 //! healstate2,superhealstate,superhealstate2}.cpp/.h. Четыре класса имеют
-//! одинаковый payload и различаются только ID: CHealState VA
-//! 0x005F8940/0x005F89D0 (vtable 0x00660D9C, ID 0xD3), CHeal2State VA
-//! 0x005EFAC0/0x005EFB50 (vtable 0x0066024C, ID 0xE3), CSuperHealState VA
-//! 0x005F63B0/0x005F6440 (vtable 0x00660A64, ID 0xD9), CSuperHeal2State VA
-//! 0x005EE960/0x005EE9F0 (vtable 0x00660134, ID 0xE4).
-//! Все четыре vtable разделяют AI VA 0x005EEDF0, End VA 0x005EEBA0,
-//! GetRemainedTime VA 0x005F2CD0, Serialize VA 0x005F65F0 и Unserialize
-//! VA 0x005EEC70. Writer записывает ID, вызывает getter срока и добавляет
-//! частоту и объём; reader после внешнего ID сначала читает часы и лишь
-//! затем три оставшихся DWORD.
+//! одинаковый payload и различаются только ID и разделяют общие AI, End,
+//! GetRemainedTime, Serialize и Unserialize. Writer записывает ID, вызывает
+//! getter срока и добавляет частоту и объём; reader после внешнего ID
+//! сначала читает часы и лишь затем три оставшихся DWORD.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

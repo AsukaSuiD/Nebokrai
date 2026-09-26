@@ -3,18 +3,19 @@
 //! `CRestoreMpState` (ID `100001`).
 //! Источник: gameserver.exe + GameServer.pdb, appserver/player.cpp и
 //! appserver/other states/{restorehpstate,restorempstate}.cpp/.h.
-//! Конструкторы VA `0x004F8410`/`0x004F87B0` копируют keep/frequency/gain,
-//! оставляя count и timestamp нулевыми без чтения часов. Vtable
-//! `0x0065355C`/`0x006535BC` разделяют с семейством Heal Serialize
-//! `0x005F65F0` (ID, остаток через getter, frequency, gain — четыре DWORD,
-//! живой keep не меняется), Unserialize `0x005EEC70` (свой clock после
-//! внешнего ID, до трёх полей), GetRemainedTime `0x005F2CD0` и
-//! additional `0x00601200` (ноль). AI VA `0x004F8650`/`0x004F8AA0`:
+//! Конструкторы копируют keep/frequency/gain,
+//! оставляя count и timestamp нулевыми без чтения часов. Обе таблицы
+//! разделяют с семейством Heal Serialize (ID, остаток через getter,
+//! frequency, gain — четыре DWORD, живой keep не меняется), Unserialize
+//! (свой clock после внешнего ID, до трёх полей), GetRemainedTime и
+//! additional (ноль). AI:
 //! один шаг при строгом `frequency * count + started < now`, count
 //! увеличивается до записи ресурса, второй clock проверяет
 //! `keep + started < now`; смерть приостанавливает оба действия.
 //! Живые Begin/restart/AI/End и применение ресурса остаются у
 //! переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

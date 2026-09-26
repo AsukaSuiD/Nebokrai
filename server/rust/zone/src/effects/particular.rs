@@ -1,13 +1,14 @@
 //! Данные и 8-байтная запись CParticularState (0x186A5) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/particularstate.cpp/.h.
-//! Конструктор VA 0x004F9440 принимает любой DWORD additional (vtable
-//! 0x00653684); goods/duplicate-gates — ответственность вызывающего.
-//! Serialize VA 0x005E23D0 и Unserialize VA 0x00601350 сохраняют
-//! ID + additional без часов, включая additional=0 при загрузке.
-//! AI VA 0x004F9900 после границы интервала проверяет товар у игрока;
-//! checkstamp всегда нулевой и не продвигается. Живые Begin/End и visual
-//! остаются у переходного Game.
+//! Конструктор принимает любой DWORD additional;
+//! goods/duplicate-gates — ответственность вызывающего.
+//! Serialize/Unserialize сохраняют ID + additional без часов, включая
+//! additional=0 при загрузке. AI после границы интервала проверяет товар у
+//! игрока; checkstamp всегда нулевой и не продвигается. Живые Begin/End и
+//! visual остаются у переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

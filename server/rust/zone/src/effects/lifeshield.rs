@@ -1,12 +1,10 @@
 //! Данные и поглощение урона щитом жизни Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/lifeshieldstate.cpp/.h;
-//! Serialize 0x005E2C60, Unserialize 0x005E2E30, AI 0x005E2D90,
-//! CFightDefense::PreDefense 0x005B0E64–0x005B1030.
-//! Произведение MP-фактора — MATCH по якорю 0x5B0F55–0x5B0F83 (ветвь ID 0x220):
-//! умножение идёт неокруглённым x87-продуктом `mp*0.01`; f32-копия
-//! (`fst [esp+0x1C]`) создаётся только для деления mana-ветви. Прежняя
-//! реконструкция округляла фактор до f32 до умножения (установленное
-//! расхождение, здесь исправлено).
+//! защитная ветвь ID 0x220 — в `CFightDefense::PreDefense`.
+//! Произведение MP-фактора идёт неокруглённым x87-продуктом `mp*0.01`;
+//! f32-копия создаётся только для деления mana-ветви.
+//! Машинные якоря и история поправки округления:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use crate::combat::{AttackPower, truncate_original};

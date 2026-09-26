@@ -2,10 +2,8 @@
 //! тело Summon CSnowStorm.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/snowstorm.cpp и snowstormphalanx.cpp/.h.
-//! Summon VA 0x00584060, конструктор VA 0x005F9040,
-//! Initialize 0x005F8D70,
-//! EncodeToByteArray 0x005F8ED0, CalculateAttackPower 0x005F92D0,
-//! Attack 0x005F93B0, AI 0x005F94B0.
+//! Опорные адреса Summon/инициализации/расчётов —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 //! Композит `CSnowStormPhalanx` (CShape + область) и тела
 //! `summon_snow_storm`/`apply_snow_storm_attack` следуют старым адаптеру и
 //! клею без новых машинных оснований. Summon сохраняет Master(country0) и

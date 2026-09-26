@@ -1,9 +1,10 @@
 //! Постоянная прибавка к полному уклонению.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/enlargefullmissstate.cpp` и `enlargefullmissstate.h`.
-//! Конструктор VA `0x005E2090` задаёт ID `0x25B`; vtable `0x0065F044`
-//! связывает property callback `0x005E2120`, writer `0x005E23D0`
-//! и reader `0x00601350`.
+//! Конструктор задаёт ID `0x25B`; vtable
+//! связывает его property callback, writer и reader.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

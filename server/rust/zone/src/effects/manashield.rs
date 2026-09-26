@@ -1,7 +1,8 @@
 //! Данные мана-щита и его защитная ветвь Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/manashieldstate.cpp/.h;
-//! Serialize 0x005F3380, Unserialize 0x005F3520, AI 0x005F34B0,
-//! CFightDefense::PreDefense 0x005B0ABC–0x005B0C72.
+//! защитная ветвь — в `CFightDefense::PreDefense`.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::shieldabsorption::absorb_shield_damage;
 use super::time::timed_client_state_time;

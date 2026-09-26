@@ -1,14 +1,16 @@
 //! Данные и wire-кодек `CRideState` (ID `100004`) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/ridestate.h/.cpp.
-//! Serialize VA `0x004F8F60` пишет четыре DWORD (ID, type, level,
+//! Serialize пишет четыре DWORD (ID, type, level,
 //! roleLimit) и C-string имени без часов и мутации. Safe Unserialize
-//! VA `0x004F93B0` читает три DWORD и требует NUL в пределах стекового
+//! читает три DWORD и требует NUL в пределах стекового
 //! буфера: запись, которая переполнила бы стек C++, отклоняется, а не
-//! обрезается. AI VA `0x004F9110` не обновляет timestamp проверки товара,
+//! обрезается. AI не обновляет timestamp проверки товара,
 //! поэтому после первого gate проверка идёт каждый последующий проход.
 //! Живые Begin/End, visual и разрешение участников остаются у переходного
 //! Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 

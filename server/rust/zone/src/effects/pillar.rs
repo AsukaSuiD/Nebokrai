@@ -1,7 +1,8 @@
 //! Данные и срок защитной стойки CPillarState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/pillarstate.cpp/.h;
-//! конструктор 0x005F4A60, Serialize 0x005E7330,
-//! Unserialize 0x005D6190, AI 0x005D60B0.
+//! Serialize общий с Po/Yu-семейством.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

@@ -2,12 +2,12 @@
 //! (`server/gameserver/appserver/player.cpp`).
 //! Точная пара `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
 //! (идентификаторы — docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
-//! `QuestTimeBegin` VA 0x0042DA20–0x0042DAAF, `QuestTimeClear`
-//! VA 0x0042DAC0–0x0042DB32, `SetQuestOn` VA 0x0042DB40–0x0042DBB4
+//! `QuestTimeBegin`, `QuestTimeClear` и `SetQuestOn`
 //! записывают поля игрока до создания клиентского сообщения.
-//! Game script GetQuestTime VA 0x004BA553–0x004BA59A и 0x004B81ED
-//! проверяет нули и обнуляет отрицательный остаток; client 0x8FA12
-//! VA 0x004FAB19–0x004FAB6A отправляет сырую 32-битную разность.
+//! Game script GetQuestTime проверяет нули и обнуляет отрицательный
+//! остаток; client 0x8FA12 отправляет сырую 32-битную разность.
+//! Доказательства:
+//! docs/reconstruction/gameserver-npc-and-regions.md#квестовые-записи-и-wire-снимки-cplayer
 
 /// Три сохраняемых поля вложены в живого игрока, а Game выполняет доставку.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

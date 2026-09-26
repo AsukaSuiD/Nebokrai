@@ -1,20 +1,13 @@
 //! Данные, срок и 12-байтная запись состояний боевой феи Po/Yu в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}state.cpp/.h.
-//! Конструкторы записывают свой ID без чтения часов: Pojia VA
-//! 0x005E80B0/0x005E8120 (vtable 0x0065F8CC, ID 0x212), Pobing VA
-//! 0x005E7B20/0x005E7B90 (vtable 0x0065F864, ID 0x213), Pomo VA
-//! 0x005E7600/0x005E7670 (vtable 0x0065F7FC, ID 0x214), Pofa VA
-//! 0x005E70C0/0x005E7130 (vtable 0x0065F794, ID 0x215), Yujia VA
-//! 0x005E6BD0/0x005E6C40 (vtable 0x0065F72C, ID 0x216), Yubing VA
-//! 0x005E66E0/0x005E6750 (vtable 0x0065F6C4, ID 0x217), Yumo VA
-//! 0x005E6220/0x005E6290 (vtable 0x0065F65C, ID 0x218), Yufa VA
-//! 0x005E5D60/0x005E5DD0 (vtable 0x0065F5F4, ID 0x219).
-//! Все восемь vtable разделяют Serialize VA 0x005E7330 (ID, затем остаток
-//! через getter, затем signed-значение), Unserialize VA 0x005FD660 (часы
-//! после внешнего ID и до срока со значением), GetRemainedTime
-//! VA 0x00605E10, AI VA 0x005E6E20 (завершение только при
-//! `now > start + keep`) и End VA 0x005DBCE0.
+//! Конструкторы записывают свой ID без чтения часов. Все восемь классов
+//! разделяют Serialize (ID, затем остаток через getter, затем
+//! signed-значение), Unserialize (часы после внешнего ID и до срока со
+//! значением), GetRemainedTime, AI (завершение только при
+//! `now > start + keep`) и End.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 //! Отображение вида (Po снижает цель, Yu усиливает держателя) подтверждено
 //! различием вызовов в Begin восьми классов; пофункциональная сверка всех
 //! property callbacks не выполнялась — числовые формулы перенесены из

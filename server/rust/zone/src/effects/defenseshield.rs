@@ -1,10 +1,10 @@
 //! Диспетчер защитной ветви `CFightDefense::PreDefense` в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/
 //! {life,mana,machine}shieldstate.cpp, promotionstate.cpp и moveshape.cpp.
-//! Правило пропуска сверено по машинному коду диспетчера VA
-//! `0x005B0A50–0x005B0A72`: `skill_id < 530 || > 545 || == 544` проходит
+//! Правило пропуска сверено по машинному коду диспетчера:
+//! `skill_id < 530 || > 545 || == 544` проходит
 //! к обходу состояний, остальные ID выходят из ветви. Стихийная ветвь
-//! Promotion VA `0x005B0C80` проверяет ID `0x142` и `kind == 3`.
+//! Promotion проверяет ID `0x142` и `kind == 3`.
 //! Выбор источника MP по варианту щита и порядок обхода состояний описаны
 //! в [бое](../../../docs/gameplay/combat.md); живые Begin/restart/AI/End
 //! остаются у переходного Game.

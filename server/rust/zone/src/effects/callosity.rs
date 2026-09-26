@@ -1,9 +1,10 @@
 //! Состояния CCallosityState/CCallosityState2 с общей записью и формулой.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/callositystate.cpp/.h` и `callositystate2.cpp/.h`.
-//! Конструкторы VA `0x005F4651/0x005F0E91` задают ID `0x75/0x7D`;
-//! vtable `0x006607D4/0x006603BC` используют общий writer `0x005F1050`,
-//! reader `0x005F48E0`, AI `0x005D60B0` и property callback `0x005F10B0`.
+//! Конструкторы задают ID `0x75/0x7D`;
+//! обе vtable используют общие writer, reader, AI и property callback.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

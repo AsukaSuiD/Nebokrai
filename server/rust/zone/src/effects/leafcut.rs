@@ -2,10 +2,11 @@
 //!
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/leafcutstate*.cpp` и соответствующие `.h`.
-//! Конструкторы VA `0x005FC580/0x005F05C0/0x005EBC00` задают ID
-//! `0x6B/0x80/0x8F` и vtable `0x006611F4/0x0066035C/0x0065FD44`.
-//! Все три таблицы используют writer `0x005F0820`, reader `0x005EBF20`
-//! и getter срока `0x00606320`; хвост записи — 2 DWORD и 4 WORD.
+//! Конструкторы задают ID `0x6B/0x80/0x8F`.
+//! Все три таблицы используют общие writer, reader и getter срока;
+//! хвост записи — 2 DWORD и 4 WORD.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use crate::combat::MasterInfo;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};

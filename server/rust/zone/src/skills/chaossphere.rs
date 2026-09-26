@@ -1,9 +1,10 @@
 //! Движущаяся область CChaosSpherePhalanx и её живая форма.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! идентификаторы —
-//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки.
-//! Summon VA 0x005A8290, ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0,
-//! AI VA 0x005FF270 (appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h).
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки;
+//! appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h. Опорные
+//! адреса —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 //! Композит `CChaosSpherePhalanx` (CShape + область) перенесён буквально из
 //! старого адаптера; новых машинных оснований он не добавляет. Тело
 //! `summon_chaos_sphere` тоже перенесено буквально

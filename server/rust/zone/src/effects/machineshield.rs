@@ -1,7 +1,8 @@
 //! Данные и поглощение урона машинным щитом Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/machineshieldstate.cpp/.h;
-//! Serialize 0x005F1EE0, Unserialize 0x005F2000, AI 0x005F34B0,
-//! CFightDefense::PreDefense 0x005B0CD8–0x005B0E5F.
+//! защитная ветвь — в `CFightDefense::PreDefense`.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::shieldabsorption::absorb_shield_damage;
 use super::time::timed_client_state_time;

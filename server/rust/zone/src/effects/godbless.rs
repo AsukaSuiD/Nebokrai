@@ -1,7 +1,7 @@
 //! Данные и числовые правила CGodBlessState/CGodBlessState2 в Zone.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/godblessstate{,2}.cpp/.h;
-//! Serialize 0x005EE310, Unserialize 0x00601830,
-//! GetRemainedTime 0x00601480, AI 0x00601640, OnUpdateProperties 0x00601690.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/godblessstate{,2}.cpp/.h.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

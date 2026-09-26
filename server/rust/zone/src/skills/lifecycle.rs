@@ -1,7 +1,8 @@
 //! База и стадии живого навыка Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/states/state.cpp/.h
-//! и appserver/states/skill.cpp/.h; CState ctor/Begin VA 0x005DBCA0,
-//! 0x005DBD70/0x005DBDD0; CSkill Begin/End VA 0x004D83E0/0x004D84C0.
+//! и appserver/states/skill.cpp/.h; опорные адреса базы — раздел
+//! «state/ — арена, кодек и каталог состояний» в
+//! docs/reconstruction/gameserver-skills.md.
 //! SkillStage и причина завершения — внутренняя модель Rust, не native-поля.
 //! Native Begin сохраняет сторону при NULL и обновляет часы только при U;
 //! point-ветвь очищает S. Отказ callback не откатывает базу. End очищает

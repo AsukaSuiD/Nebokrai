@@ -1,9 +1,11 @@
 //! Постоянные прибавки минимальной и максимальной атаки Swordship.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/swordshipstate{,2,3,4}.cpp/.h`.
-//! Vtable `0x00660D4C/0x006602AC/0x0065FEB4/0x0065FE64` направляют
-//! property callback на `0x005F8870`, writer на `0x005ECE70`, reader
-//! на `0x005F0010`. Четыре конструктора задают ID ниже.
+//! Все четыре vtable направляют
+//! property callback, writer и reader на общие тела. Четыре конструктора
+//! задают ID ниже.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

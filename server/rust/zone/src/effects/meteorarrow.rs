@@ -1,8 +1,8 @@
 //! Запас метеорных стрел `CMeteorArrowState` в Zone.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/meteorarrowstate.cpp` и `meteorarrowstate.h`.
-//! Конструктор VA `0x005F6820`, vtable `0x00660AC4`, writer `0x005ECE70`,
-//! reader `0x005F0010`, добавление `0x005F6970`.
+//! Опорные адреса (конструктор, vtable, writer, reader, добавление):
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

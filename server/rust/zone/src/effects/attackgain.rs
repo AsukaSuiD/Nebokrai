@@ -1,7 +1,8 @@
 //! Данные усиления атаки Fury и RageBreak в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/furystate.cpp/.h
-//! и ragebreakstate.cpp/.h; общий Serialize 0x005E7330,
-//! OnUpdateProperties 0x005FD480, Unserialize 0x005FD660, AI 0x005EA4C0.
+//! и ragebreakstate.cpp/.h; Serialize/Unserialize общие с Po/Yu-семейством.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use crate::combat::truncate_original_i64_low;

@@ -1,8 +1,9 @@
 //! Данные и правила CWeakState; доступ к живому S остаётся в Game-адаптере.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/weakstate.cpp/.h`.
-//! Vtable `0x006621B4`: AI `0x00606EF0`, property callback `0x00607020`,
-//! writer `0x00606FC0`, reader `0x006071F0`, getter срока `0x00605E10`.
+//! Опорные адреса vtable (AI, property callback, writer, reader, getter
+//! срока):
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

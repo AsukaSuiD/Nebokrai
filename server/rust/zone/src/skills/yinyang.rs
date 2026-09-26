@@ -1,8 +1,8 @@
 //! Параметры и маски областей CYinYang и CYinYang2.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/yinyang{,2}.cpp и yinyangphalanx{,2}.cpp/.h.
-//! Summon VA 0x005A6270 и 0x005682E0; конструкторы областей
-//! VA 0x005FE4F0 и 0x005F2410.
+//! Опорные адреса Summon и конструкторов областей —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 
 pub const YIN_YANG_SKILL_ID: u32 = 0x139;
 pub const YIN_YANG_2_SKILL_ID: u32 = 0x146;

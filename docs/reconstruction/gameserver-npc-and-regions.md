@@ -334,6 +334,7 @@ UNKNOWN: семантика BSS-глобалов `0xEF44E8` (watchdog) и `0xEF4
 | четырёхаргументный `MoveTo` | `0x508F10`/`0x5090FB` | VERIFIED_DISASSEMBLY | общий `Slip` один/два/три раза по `is_run`/riding с исходным направлением; всегда `ASA_MOVE` после начатой spatial-мутации (`CMoveShape::OnMove` — void); задержка шага — общая формула CBaseAI |
 | хвост `CPlayerAI::Run` (авто-прирост) | — | VERIFIED_DISASSEMBLY | `level³ · auto_exp_2 · (1 + faction_level·0.05) + auto_exp_1`, масштаб f32 `0.00011574074` (raw `0x2540E8`, единственная ссылка raw `0x1094D4`); `vigour = trunc(x·log10(exp+600) − y)` с cap; беззнаковая проверка срока `last >= now - interval` намеренно не wrap-safe; регенерация `trunc((level·0.1 − 1)·5 + faction_bonus + 10)`, faction bonus `max(1, min(level·0.01, 1) · (faction_level·0.5))` |
 | базовый idle | слот `+0x48` vtable → `0x00485540` | VERIFIED_DISASSEMBLY | пустой RET (`c3`+padding): idle игрока не ставит базовый `Stand` на 1000 мс |
+| форма цели и чтение ожидающей команды навыка | `HasTarget` VA `0x004C7DD0`; сравнение object/point VA `0x0050A13A–0x0050A15C`, `0x0050A349–0x0050A367`; чтение ID команды и очистка старшего бита VA `0x00488BAD–0x00488BE4`, `0x00488E73–0x00488EAE`, `0x004892DF–0x00489320`; выбор формы цели VA `0x00488D20–0x00488E20`, `0x00488FE6–0x00489109`, `0x0048949D–0x00489547` | MATCH (по шапке владельца) | enum и полный Eq — внутренняя модель Rust; ключ ожидающего запроса не включает уровень боевого духа и GUID цели; реализация `zone::skills::dispatch` |
 
 UNKNOWN: источник события `ChangeSkillWithWarSoul` в этой паре не найден (из 82
 прямых `AddAIEvent` только `0x509877` с WarSoul=1/Attack; все 13 постановок
@@ -366,6 +367,7 @@ ChangeSkill — WarSoul=0); полный registered `CSkill::End`; поведе�
 | `CPassiveGladiator::WhenBeenHurted` / `OnSearchEnemy` / `OnBeenHurted` / `Clear` | `0x211140` / `0x210f00` / `0x210e40` / `0x210ec0` | VERIFIED_DISASSEMBLY | упорядоченный список ≤ 10 уникальных ID нападавших игроков `m_vEnemy`: дубликат пропускает `push_back`, при счёте `> 0xa` вытесняется первый (`memmove` + `end -= 4`); `IndexSet` сохраняет порядок: новичок всегда в конец, дубликат — прежняя позиция; `OnSearchEnemy` удаляет записи на месте `memmove`-циклом (неразрешённый игрок, `RealDistance` > `GetChaseRange` vt `+0x13c` или `IsDied`), равенство дистанций сохраняет раннюю запись (`jge`); tamed-существо (`0x0E6460`) или повозка (`0x0E6D30`) назначается целью немедленно только вне боя; `OnBeenHurted` после базового ставит `ASA_SEARCH_ENEMY` — сам поиск выполняет caller через passive-реакцию Defense |
 | `CPuninessCreature::OnSchedule` / `Tracing` / `OnSearchEnemy` | `0x0060F4B0` / `0x0060F390` / `0x0060F4E0` | MATCH | пустой общий hook, owner ≠ 0, `HasTarget == 1`, пустые очереди → tail-call virtual `Tracing` (vt `+0x4C`); Tracing: цель умерла → `OnLoseTarget + AddAIEvent(5)`; внутри `GetGuardRange` — `GetLineDir(target→owner)`, `GetDirPos`, общий `MoveTo(run=0)` (`0x0060F45B`) БЕЗ записи `SetDir`; за дальностью — проверка `GetChaseRange`; поиск: игроки перед питомцами, ближайший с заменой при `≤` (равная дистанция побеждает позднюю запись) |
 | `CCarriage::SetCurrentAction` / `OnSchedule` / `OnFallowingSchedule` / `OnStayingSchedule` / master-проверка | `0x00506710` / `0x00506A20` (хвост `0x00506CFE`/`0x00506D04`) / `0x00506720` / `0x005068F0` | MATCH | прямая запись `m_caAction [+0x7C]`; умерший владелец (`GetState != 1`, vt `+0x74`) — журнал и `Evanish` (vt `+0x188`); follow: очереди пусты и `IsMoveable` (vt `+0x148`), хозяин `CPet::GetPetMaster`, тот же регион (vt `+0x44`), знаковая дистанция > 2, `FindPositionForCarriage` (`0x004CCFD0`) даёт клетку ровно в двух шагах сзади; затем повторная проверка региона и беззнаковая дистанция `≤ dwCarriageStopDistance` (`0x00EF45D0`) → `MoveTo(run=0)`, иначе GS0008 и STAYING; staying обратно → GS0009 и FALLOWING; master-проверка: первое пропадание → STAYING + таймер; дубликат `m_nCarriageID` вызывает Evanish до distance-хвоста; возвращение хозяина — прямая запись и FALLOWING до таймера; `disappear` — GS0007 и Evanish; ctor/dtor `0x005066D0`/`0x00506700` построчно не читались |
+| точка поста стражника (`GuardStationState`) | `m_lX`/`m_lY` владельца в `0x0060E290` (`OnSearchEnemy`) | MATCH (по прежнему владельцу) | фиксируется один раз при первом проходе и далее только читается; общее дистанционное ядро `zone::ai::guardtarget` разобрано построчно по `0x0060E350`/`0x0060E510`/`0x0060E290` (категорийный выбор — ближайший не ближе min-distance навыка, слишком близкая сохранённая запись заменяется следующей; первый категорийный список выигрывает при равной дистанции, также `0x0060DA90`/`0x0060DB10`) |
 
 Общие факты семейства: `GetDirPos` (`0x0045B330`) безотказен для восьми
 направлений (табличное сложение дельт); входной state-вопрос `0x0047B150` и
@@ -552,13 +554,14 @@ packet Add → move publish; частичный отказ → Clear(temp) + Rol
 
 ## Сессии игрока
 
-Реализация: `zone::interactions::csessionfactory`, `zone::sessions::{cequipmentupgrade, cequipmentdakong}`.
+Реализация: `zone::interactions::csessionfactory`, `zone::sessions::{cequipmentupgrade, cequipmentdakong, cequipmentcompose}`.
 
 | функция | RVA | статус | суть факта |
 |---|---|---|---|
 | `CSessionFactory::QuerySession` | `0x000780C0` | VERIFIED_DISASSEMBLY | возвращает null при отсутствии ключа; PDB: статическая `hash_map<long, CSession*>` |
 | `CSessionFactory::QueryPlug` | `0x00078190` | VERIFIED_DISASSEMBLY | то же для plug (`hash_map<long, CPlug*>`) |
 | `CTeam::GetTeamatesAmount` | VA `0x00507590` | VERIFIED_DISASSEMBLY | считает только разрешённые plug ID своего списка через `QueryPlugByID` (VA `0x0047B6C0`), не сырую длину; повторные ID учитываются повторно; ended/type/локальность не фильтруются |
+| `CEquipmentCompose::OnSessionEnded` | — | VERIFIED | compose-plug только проверяет наличие player/region и возвращает bool, который `CSession::End` не использует; отдельной mutation/publication при завершении сессии нет (`zone::sessions::cequipmentcompose`) |
 
 Остальное у сессий экипировки — прежняя форма старого пакета
 (`src/gameserver/appserver/session/cequipmentupgrade.rs` /
@@ -566,6 +569,23 @@ packet Add → move publish; частичный отказ → Clear(temp) + Rol
 машинные таблицы не велись, статусы не повышались. Половинное свойство седьмого
 слота DaKong сохраняет x87-усечение к нулю, включая отрицательные значения
 снятия камня.
+
+## Квестовые записи и wire-снимки CPlayer
+
+Реализация: `zone::quests::{availability, client, progress}`; исходный владелец
+PDB — `server/gameserver/appserver/player.cpp`, точная пара
+`GameServer/gameserver.exe + GameServer/GameServer.pdb`.
+
+| функция | VA | статус | суть факта |
+|---|---|---|---|
+| `QuestTimeBegin` / `QuestTimeClear` / `SetQuestOn` | `0x0042DA20–0x0042DAAF` / `0x0042DAC0–0x0042DB32` / `0x0042DB40–0x0042DBB4` | MATCH (по шапке владельца) | записывают поля игрока до создания клиентского сообщения |
+| script `GetQuestTime` | `0x004BA553–0x004BA59A` и `0x004B81ED` | MATCH (по шапке владельца) | проверяет нули и обнуляет отрицательный остаток |
+| client `0x8FA12` | `0x004FAB19–0x004FAB6A` | MATCH (по шапке владельца) | отправляет сырую 32-битную разность |
+| `AddQuestDataByteArray` | `0x00433310–0x0043339F` | MATCH (по шапке владельца) | count, затем упорядоченные u16 ID и u8 state |
+| `AddQuestDataByteArray_ForClient` — фильтр и снимок входа | `0x0043E204–0x0043E229`, `0x0043E229–0x0043E339` | MATCH (по шапке владельца) | фильтр пропускает state 1 и неизвестные каталогу ID; снимок пишет u16 ID, пять u32 (old, type, level, difficulty, track), три C-строки (short description, name, description), u8 display и четыре i32 (region, x, y, effect); последний i32 читается со смещения +0x74 после +0x78/+0x7C/+0x80 |
+| `CPlayer::AddQuest` и уведомление `0xBFF2C` | `0x00445397–0x00445531`, `0x004453F4–0x004454FE` | MATCH (по шапке владельца) | удаляет прежнее ненулевое состояние до поиска определения и только затем вставляет новый ноль; уведомление пишет тот же набор полей в том же порядке |
+| `CPlayer::RunQuestCompleteScript` | `0x00458940–0x004589AA` | MATCH (по шапке владельца) | допускает только запись с нулевым byte state, затем ищет определение и передаёт его complete-script в общий исполнитель |
+| клиентские ветви `OnOrgasysMessage` | `0x0048AE0C–0x0048AED2`, `0x0048AED7–0x0048AF9D` | MATCH (по шапке владельца) | проверяют нулевое состояние перед поиском complete/disband-script; запуск сценария принадлежит Game |
 
 ## Предметы и контейнеры
 
@@ -586,6 +606,7 @@ packet Add → move publish; частичный отказ → Clear(temp) + Rol
 | `CHonorRanks::getInstance` | `0x0000CFA0` | VERIFIED_DISASSEMBLY | singleton заменён owned-полем `CGame::honor_ranks`; запись текущего дня — отдельная static `m_nSortDate`, достигнутые honour-маршруты её не читают |
 | `CHonorRanks` dtor `$E4`/`$E2` | `0x0000D0D0` | VERIFIED_DISASSEMBLY | static list initializer и sized-delete покрыты `Default`, `Vec` и `Drop`; доменной семантики нет |
 | `CHonorRanks::GetPlayerPosition`/`AddToByteArray` | — | IMPLEMENTED | 1-based snapshot order; exact count/record payload для client `0xBFF35` |
+| `CContainer` ctor/dtor, `AddListener`/`RemoveListener`, `Find/Remove`, `tagPreviousContainer` | ctor/dtor `0x000DF570/0x000DF2A0`, `0x000DF5B0`, `0x000DF250`, `0x000DF1A0..0x000DF200`, `0x000DF1D0` | MATCH (по шапке владельца) | ctor/dtor владеют только ordered vector listener-ов; `AddListener` отклоняет null и duplicate, `RemoveListener` удаляет первое совпадение с сохранением порядка; `Find/Remove` — только virtual forwarding thunks (overload с type игнорирует type, overload с object извлекает `m_guExID`, null → null); `tagPreviousContainer` сохранён буквально (`zone::items::ccontainer`) |
 
 Остальные ещё не подключённые player-integrated методы контейнеров и constructor/
 release time-поля `CGoods` требуют реконструкции: достигнутые ядра не выдаются за

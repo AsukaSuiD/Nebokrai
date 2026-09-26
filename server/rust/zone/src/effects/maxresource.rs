@@ -2,8 +2,10 @@
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/enlargemaxhpstate.cpp` и `enlargemaxhpstate.h`,
 //! `enlargemaxmpstate.cpp` и `enlargemaxmpstate.h`.
-//! Конструкторы VA `0x005E22E0/0x005E2160` задают ID `0x259/0x25A`;
-//! обе vtable ведут к writer `0x005E23D0` и reader `0x00601350`.
+//! Конструкторы задают ID `0x259/0x25A`;
+//! обе vtable ведут к общим writer и reader.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

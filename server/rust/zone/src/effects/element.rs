@@ -1,9 +1,10 @@
 //! Сохранённые прибавки TaiJi и Origin к свойствам стихии.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/taijistate.cpp/.h` и `originstate.cpp/.h`.
-//! Конструкторы VA `0x00600F70/0x006011A0` задают ID `0x12D/0x130`;
-//! vtable `0x006617C4/0x00661814` используют общий writer `0x005E23D0`
-//! и reader `0x00601350`, но разные property callbacks.
+//! Конструкторы задают ID `0x12D/0x130`;
+//! обе vtable используют общие writer и reader, но разные property callbacks.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

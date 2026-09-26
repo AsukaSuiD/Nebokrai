@@ -1,11 +1,13 @@
 //! Данные и 96-байтная запись постоянных состояний У-син.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/wuxing*state.cpp/.h`.
-//! Vtable пяти вариантов направляют writer на VA `0x005E0030`, reader
-//! на VA `0x005E0880`: ID DWORD и 0x5c сырых байт с `[this+0x38]`.
-//! Два байта между WORD и DWORD сохраняются без интерпретации.
-//! Property callbacks: Metal VA `0x005E08C0`, остальные VA `0x005E0080`.
+//! Vtable пяти вариантов направляют writer и reader на общие тела:
+//! ID DWORD и 0x5c сырых байт с `[this+0x38]`.
+//! Два байта между WORD и DWORD сохраняются без интерпретации; у Metal —
+//! собственный property callback.
 //! Порядок и ветви сверены; точность промежуточных x87-вычислений остаётся PARTIAL.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 

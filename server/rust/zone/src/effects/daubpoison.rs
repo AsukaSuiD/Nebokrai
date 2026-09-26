@@ -1,9 +1,10 @@
 //! Данные, срок и сохраняемая запись CDaubPoisonState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/daubpoisonstate.cpp/.h;
-//! конструктор 0x005F17B0 задаёт ID 0xDF и срок из аргумента без чтения часов.
-//! Его vtable 0x0066047C разделяет с CCureState Serialize 0x005F51E0,
-//! Unserialize 0x005EAAC0, GetRemainedTime 0x005F2CD0, AI 0x005D5BA0
-//! и End 0x005FD420.
+//! конструктор задаёт ID 0xDF и срок из аргумента без чтения часов.
+//! Его vtable разделяет с CCureState Serialize, Unserialize, GetRemainedTime,
+//! AI и End.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

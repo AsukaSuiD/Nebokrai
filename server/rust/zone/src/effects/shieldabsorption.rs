@@ -1,11 +1,10 @@
 //! Общая числовая часть PreDefense мана- и машинного щитов.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/fightdefense.cpp/.h;
-//! ветви CFightDefense::PreDefense VA 0x005B0ABC–0x005B0C72 и 0x005B0CD8–0x005B0E5F.
-//! Произведение MP-фактора — MATCH по якорям 0x5B0B8A–0x5B0BB8 (мана-щит, ID 0x141)
-//! и 0x5B0D83–0x5B0DB3 (машинный щит, ID 0xDE): умножение идёт неокруглённым
-//! x87-продуктом `mp*0.01`; f32-копия (`fst [esp+0x18]` / `fst [esp+0x1C]`)
-//! создаётся только для деления mana-ветви. Прежняя реконструкция округляла
-//! фактор до f32 до умножения (установленное расхождение, здесь исправлено).
+//! защитные ветви (ID 0x141 и 0xDE) — в `CFightDefense::PreDefense`.
+//! Произведение MP-фактора идёт неокруглённым
+//! x87-продуктом `mp*0.01`; f32-копия создаётся только для деления
+//! mana-ветви. Машинные якоря и история поправки округления:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use crate::combat::{AttackPower, AttackPowerType, truncate_original, truncate_original_i64_low};
 

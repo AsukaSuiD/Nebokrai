@@ -1,14 +1,16 @@
 //! Данные и запись `CTeamState` (ID `0x186A6`) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/teamstate.cpp/.h.
-//! Конструктор VA `0x005BFE60` сохраняет C-prefix имени и пароля без часов;
-//! stamp проверки нулевой до Begin. Serialize VA `0x005BFA50` и Unserialize
-//! `0x005BFF20` пишут ID и две C-строки без часов; bounded decode допускает
-//! до 255 байт на строку. GetAdditionalData VA `0x005BFDD0` ставит бит 16
+//! Конструктор сохраняет C-prefix имени и пароля без часов;
+//! stamp проверки нулевой до Begin. Serialize/Unserialize
+//! пишут ID и две C-строки без часов; bounded decode допускает
+//! до 255 байт на строку. GetAdditionalData ставит бит 16
 //! по ненулевой длине строки пароля и берёт живое число разрешённых team
-//! plugs либо 1. AI VA `0x005BFD20` проверяет unsigned last+5000 <= now
+//! plugs либо 1. AI проверяет unsigned `last+5000 <= now`
 //! и записывает stamp; без цели/Player — End. Живые Begin/restart/AI/End
 //! и пакеты остаются у переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 

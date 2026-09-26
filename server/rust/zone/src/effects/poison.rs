@@ -2,10 +2,11 @@
 //!
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/{poisonarrowstate,spiderpoisonstate,spriteburnstate,kerosenestate}.cpp/.h`.
-//! Конструкторы задают vtable VA `0x0065F24C`, `0x0065F9F4`, `0x006620F4`,
-//! `0x0065FCE4`; все четыре используют writer `0x005E93C0` и getter срока
-//! `0x00606320`. Первые три читаются через `0x005E3500`, Kerosene — через
-//! `0x005EB800`, который берёт время после полей записи.
+//! Все четыре используют общие writer и getter срока; первые три читаются
+//! одним reader-ом, Kerosene — отдельным, который берёт время после полей
+//! записи.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use crate::combat::MasterInfo;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};

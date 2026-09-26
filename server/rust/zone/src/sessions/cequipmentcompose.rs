@@ -108,6 +108,7 @@ pub struct CEquipmentCompose {
     compose_container: CEquipmentComposeShadowContainer,
 }
 
+// `OnSessionEnded` оригинала лишь проверяет наличие player/region; его bool `CSession::End` не использует, отдельной mutation/publication нет.
 impl CEquipmentCompose {
     pub const fn new() -> Self {
         Self {
@@ -123,13 +124,3 @@ impl CEquipmentCompose {
         &mut self.compose_container
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// (идентификаторы —
-// docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки)
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentcompose.cpp
-
-// VERIFIED: `OnSessionEnded` только проверяет наличие player/region и возвращает
-// bool, который `CSession::End` не использует; отдельной mutation/publication нет.
-// COMPONENT_VARIANT_END: GameServer

@@ -1,16 +1,16 @@
 //! Данные и сохраняемая запись CTianShenXiaFanState (0x335) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/skills/tianshenxiafanstate.cpp/.h.
-//! Конструктор VA 0x00605780 записывает ID 0x335, срок (+0x38) и уровень
-//! (+0x3C) из аргументов без чтения часов. Vtable 0x0066202C: Begin
-//! 0x00605B70, AI 0x005D5BA0 (общее истечение), End 0x006059A0,
-//! OnUpdateProperties 0x00605A10, GetRemainedTime 0x00601200 (константный
-//! ноль), Serialize 0x006059C0 и Unserialize 0x00605C20.
+//! Конструктор записывает ID 0x335, срок (+0x38) и уровень
+//! (+0x3C) из аргументов без чтения часов; GetRemainedTime — константный
+//! ноль.
 //! Serialize пишет ID, поле +0x2C как есть и уровень — три DWORD (12 байт).
 //! Unserialize асимметричен и часов не читает: WORD в timestamp (+0x2C),
 //! затем DWORD со смещением +6 записи в level; keep не меняет, поэтому
 //! загруженная запись несёт keep=0 от factory, а вход продвигается на
 //! 10 байт при 12 байтах записи. Этот исходный дефект сохранён.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

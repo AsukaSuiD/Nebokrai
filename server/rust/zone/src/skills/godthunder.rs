@@ -2,21 +2,20 @@
 //! CGodThunderPhalanx/CGodThunderPhalanx2.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! идентификаторы —
-//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки.
-//! Конструкторы VA 0x005F5B50/0x005EF190, Initialize 0x005F59C0/0x005EEF30,
-//! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0,
-//! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).
+//! docs/reconstruction/gameserver-skills.md#идентификаторы-сборки;
+//! appserver/skills/godthunder{,2}.cpp. Опорные адреса —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 //! Композит `CGodThunderPhalanx` (CShape + область) перенесён из старого
 //! адаптера буквально; новых машинных оснований он не
 //! добавляет. Тело `summon_god_thunder` перенесено из старого клея буквально
-//! (VA 0x00573840/0x00553A80 уже сверены ниже):
+//! (его Summon уже сверен ниже):
 //! Master(country0)/Player EM→свежая таблица→usage20015/FISTP; порядок
 //! дальнейших живых чтений — в `GodThunderSummonParameters::read`; SetTile→
 //! Initialize/RNG предшествуют повторному чтению actual region captured U;
 //! Add→encode/BF502 не зависят от успеха Add (швы `ZonalCastContact` в
 //! `skills/zonalcast.rs`). Конструктор явно отклоняет параметры с native
 //! делением на ноль или выходом из массива; валидный порядок запросов и
-//! RNG не меняется. Для server decode VA 0x005F5D90 подтверждённого
+//! RNG не меняется. Для server decode подтверждённого
 //! вызывающего пути оригинала нет (UNKNOWN), decoder не переносится.
 
 use nebokrai_shared::protocol::LegacyWriter;

@@ -3,8 +3,7 @@
 //! пара `4F5C98E0…` + RSDS match), `appserver/skills/heartenstate.cpp` и
 //! `heartenstate.h`; тела перенесены буквально. Данные, срок и формула
 //! прибавки — Zone
-//! `effects/hearten.rs` (ctor `0x005EE500`, vtable `0x006600D4`, writer
-//! `0x005D4D10`, reader `0x004F9D80`, property callback `0x005EE740`).
+//! `effects/hearten.rs` (опорные адреса — в его шапке).
 //!
 //! Loop1 visual создаёт общий каталог арены. Между Begin и append нет
 //! внешнего callback; первый UpdateVisualEffect принадлежит последующему

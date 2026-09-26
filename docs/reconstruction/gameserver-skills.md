@@ -280,12 +280,72 @@ DWORD как есть; «отрицательный» остаток возмо�
 55 (Team — с оговоркой INFERRED о природе младшего слова); единственное
 расхождение — additional щитов Life/Machine/Mana. PARTIAL числовых
 property-формул боевой феи относится к владельцу `effects/battlefairy.rs`.
-Идентичность классов zone ↔ C++ подтверждена vtable/ctor-пабликами в шапках
-модулей `effects`; отображение перечислено у каждого варианта в
-`state/storage`.
+Идентичность классов zone ↔ C++ подтверждена vtable/ctor-опорными адресами
+(собраны ниже в разделе [«effects: wire-опорные адреса состояний
+Zone»](#effects-wire-опорные-адреса-состояний-zone)); отображение перечислено
+у каждого варианта в `state/storage`.
 
 Текущая реализация: `zone::skills::state::catalog`; enum-каталог payload
 (`StateData`) — `zone::skills::state::storage`.
+
+## effects: wire-опорные адреса состояний Zone
+
+Идентичность классов Zone `effects` ↔ C++ подтверждена ctor/vtable-опорными
+адресами точной пары `gameserver.exe + GameServer.pdb`; исходные владельцы
+PDB (`appserver/skills/*state.cpp`, `appserver/other states/*state.cpp`,
+`appserver/player.cpp`, `appserver/states/*`) указаны в шапках модулей.
+Таблица собирает адреса, которые жили в шапках zone-файлов; поведенческие
+правила остаются в шапках соответствующих модулей `zone::effects::*`.
+Форма записи — как в прежних шапках-владельцах, статус не повышался.
+
+| zone-владелец | опорные адреса и факт |
+|---|---|
+| `blind` | BlindState-семейство, десять классов: KnightCut (`0x67`) ctor `0x005FCCF0/0x005FCD60`, vt `0x00661254`; KnockOut (`0x192`) `0x005F4F30/0x005F4FA0`, vt `0x00660894`; BoaLock (`0xD2`) `0x005FB560/0x005FB5D0`, vt `0x006610DC`; Blind (`0x76`) `0x00607380`, vt `0x00662214`; Rush (`0x73`) `0x006077E0`, vt `0x00662274`; Rush2 (`0x7C`) `0x005F12E0/0x005F1350`, vt `0x0066041C`; Seal (`0x138`) `0x005FF800/0x005FF870`, vt `0x006615F4`; Strike (`0xDD`) `0x00606830`, vt `0x00662154`; SpiderWeb (`0x199`) `0x005EA6E0/0x005EA750`, vt `0x0065FBCC`; BossBlueQuake (`0x1F8`) `0x005E8590/0x005E8600`, vt `0x0065F934`. Общие: Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, GetRemainedTime `0x005F2CD0`, AI `0x005D5BA0`; у BoaLock — собственный End `0x005FB800` и пустой OnAction |
+| `battlefairy` (Po/Yu ×8) | Pojia `0x005E80B0/0x005E8120` vt `0x0065F8CC` (`0x212`); Pobing `0x005E7B20/0x005E7B90` vt `0x0065F864` (`0x213`); Pomo `0x005E7600/0x005E7670` vt `0x0065F7FC` (`0x214`); Pofa `0x005E70C0/0x005E7130` vt `0x0065F794` (`0x215`); Yujia `0x005E6BD0/0x005E6C40` vt `0x0065F72C` (`0x216`); Yubing `0x005E66E0/0x005E6750` vt `0x0065F6C4` (`0x217`); Yumo `0x005E6220/0x005E6290` vt `0x0065F65C` (`0x218`); Yufa `0x005E5D60/0x005E5DD0` vt `0x0065F5F4` (`0x219`). Общие: Serialize `0x005E7330`, Unserialize `0x005FD660`, GetRemainedTime `0x00605E10`, AI `0x005E6E20`, End `0x005DBCE0`. Отображение вида (Po снижает цель, Yu усиливает держателя) подтверждено различием вызовов в Begin восьми классов; формулы — PARTIAL из существующего Rust |
+| `heal` (×4) | CHealState `0x005F8940/0x005F89D0` vt `0x00660D9C` (`0xD3`); CHeal2State `0x005EFAC0/0x005EFB50` vt `0x0066024C` (`0xE3`); CSuperHealState `0x005F63B0/0x005F6440` vt `0x00660A64` (`0xD9`); CSuperHeal2State `0x005EE960/0x005EE9F0` vt `0x00660134` (`0xE4`). Общие: AI `0x005EEDF0`, End `0x005EEBA0`, GetRemainedTime `0x005F2CD0`, Serialize `0x005F65F0`, Unserialize `0x005EEC70` |
+| `cure` | ctor `0x005E9E50`, Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, AI `0x005D5BA0` |
+| `daubpoison` | ctor `0x005F17B0` (ID `0xDF`), vt `0x0066047C`; общие с CCureState: Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, GetRemainedTime `0x005F2CD0`, AI `0x005D5BA0`, End `0x005FD420` |
+| `promotion` (`0x142`) | ctor с параметрами `0x005F2BC0`, ctor по умолчанию `0x005F2C40` (оба коэффициента = 1); vt `0x006605F4`: AI `0x005D5BA0`, End `0x005FD420`, GetRemainedTime `0x005F2CD0`; Restart `0x005FD450` (только часы); Serialize `0x005F2E90`, Unserialize `0x005F2FB0` |
+| `bossbluefury` (`0x1F7`) | ctor `0x005E8A60` (коэффициент атаки `+0x38`, срок `+0x3C`, слабая фаза `+0x40`); vt `0x0065F994`: AI `0x005E8D50`, End `0x005E8D10`, Restart `0x005FD450`, OnUpdateProperties `0x005E8DC0`, GetRemainedTime `0x005D5F30`, Serialize `0x005E7330`, Unserialize `0x005D6190` (weak_time не читается) |
+| `tianshenxiafan` (`0x335`) | ctor `0x00605780`; vt `0x0066202C`: Begin `0x00605B70`, AI `0x005D5BA0`, End `0x006059A0`, OnUpdateProperties `0x00605A10`, GetRemainedTime `0x00601200`, Serialize `0x006059C0`, Unserialize `0x00605C20`; исходный дефект асимметрии 10/12 байт сохранён |
+| `changebody` (`0x37`) | ctor `0x005DAC90`; vt `0x0065E41C`: AI `0x005DAAA0`, End `0x005DA240`, OnUpdateProperties `0x005DA0F0`, GetRemainedTime `0x005DA030`, Serialize `0x005DA080`, Unserialize `0x005DA0C0` |
+| `undead` (`0x38`) | ctor `0x005D62A0` (72 байта без часов); GetRemainedTime `0x005D6320`; Serialize `0x005D64F0`; Unserialize `0x005D6530`; общий AI `0x005D7C80` |
+| `extended` (`0x32`/`0x33`) | ctor `0x005D9230`/`0x005D9990`; Serialize `0x005D9510`/`0x005D9BB0`; Unserialize `0x005D9550`/`0x005D9BF0`; AI `0x005D94E0`/`0x005D9FB0`; getter Original общий с CHBYState, New — `0x005D6320` |
+| `consumablerestore` (`100000`/`100001`) | ctor `0x004F8410`/`0x004F87B0`, vt `0x0065355C`/`0x006535BC`; общие с Heal-семейством: Serialize `0x005F65F0`, Unserialize `0x005EEC70`, GetRemainedTime `0x005F2CD0`, additional `0x00601200`; AI `0x004F8650`/`0x004F8AA0` |
+| `agility` | CAgility/CNatural/CRapture: ctor `0x005F4195`/`0x005F3795`/`0x005F3C85`, vt `0x00660774`/`0x006606B4`/`0x00660714`, общий writer `0x005F3E40`, reader `0x005F4420`; временная CAgilityState2: writer `0x005F1050`, reader `0x005F48E0`, AI `0x005D60B0` |
+| `callosity` (`0x75`/`0x7D`) | ctor `0x005F4651`/`0x005F0E91`, vt `0x006607D4`/`0x006603BC`; общие: writer `0x005F1050`, reader `0x005F48E0`, AI `0x005D60B0`, property callback `0x005F10B0` |
+| `hearten` | ctor `0x005EE500`, vt `0x006600D4`, writer `0x005D4D10`, reader `0x004F9D80`, property callback `0x005EE740` |
+| `ride` (`100004`) | Serialize `0x004F8F60`, Unserialize `0x004F93B0`, AI `0x004F9110` |
+| `teamstate` (`0x186A6`) | ctor `0x005BFE60`, Serialize `0x005BFA50`, Unserialize `0x005BFF20`, GetAdditionalData `0x005BFDD0`, AI `0x005BFD20` |
+| `particular` (`0x186A5`) | ctor `0x004F9440`, vt `0x00653684`; Serialize `0x005E23D0`, Unserialize `0x00601350`, AI `0x004F9900` |
+| `scriptstate` (5×UseGoods, ImproveExp, AutoProtect) | AutoProtect vt `0x0065E00C` (End `0x005D44E0`, Serialize `0x005F51E0`); пять UseGoods (End `0x005D5B80` с ended-флагом, Serialize `0x005D4D10`, getter `0x005F2CD0`); ImproveExp (getter `0x005D5F30`, Serialize `0x005E7330`, AI `0x005D60B0`); readers `0x004F9D80`/`0x005D6190`/`0x005EAAC0` |
+| `attackgain` (Fury/RageBreak) | общий Serialize `0x005E7330`, OnUpdateProperties `0x005FD480`, Unserialize `0x005FD660`, AI `0x005EA4C0` |
+| `roar` | ctor `0x005EC7E0`, Serialize `0x005F65F0`, Unserialize `0x005ECC60`, AI `0x005EC9A0`, OnUpdateProperties `0x005ECAA0` |
+| `pillar` | ctor `0x005F4A60`, Serialize `0x005E7330`, Unserialize `0x005D6190`, AI `0x005D60B0` |
+| `godbless` (×2) | Serialize `0x005EE310`, Unserialize `0x00601830`, GetRemainedTime `0x00601480`, AI `0x00601640`, OnUpdateProperties `0x00601690` |
+| `lifeshield` (`0x220`) | Serialize `0x005E2C60`, Unserialize `0x005E2E30`, AI `0x005E2D90`; ветвь `CFightDefense::PreDefense` `0x005B0E64–0x005B1030`, якорь MP-произведения `0x5B0F55–0x5B0F83`. История: прежняя реконструкция округляла MP-фактор до f32 до умножения — установленное расхождение, исправлено (неокруглённый x87-продукт `mp*0.01`; f32-копия `fst [esp+0x1C]` создаётся только для деления mana-ветви) |
+| `machineshield` (`0xDE`) | Serialize `0x005F1EE0`, Unserialize `0x005F2000`, AI `0x005F34B0`; ветвь PreDefense `0x005B0CD8–0x005B0E5F`, якорь `0x5B0D83–0x5B0DB3` |
+| `manashield` (`0x141`) | Serialize `0x005F3380`, Unserialize `0x005F3520`, AI `0x005F34B0`; ветвь PreDefense `0x005B0ABC–0x005B0C72`, якорь `0x5B0B8A–0x5B0BB8` (f32-копия `fst [esp+0x18]`) |
+| `shieldabsorption` | общая числовая часть мана-/машинного щитов тех же ветвей PreDefense (`0x005B0ABC–0x005B0C72`, `0x005B0CD8–0x005B0E5F`); та же установленная поправка округления, что у lifeshield |
+| `defenseshield` | диспетчер PreDefense `0x005B0A50–0x005B0A72` (`skill_id < 530 \|\| > 545 \|\| == 544` проходит к обходу состояний); стихийная ветвь Promotion `0x005B0C80` проверяет ID `0x142` и `kind == 3` |
+| `energyholding` | ctor `0x005EC410`/`0x005EC450`, AddEnergy `0x005EC490`; общие с SoulCollect Serialize `0x005E1D50`, Unserialize `0x005E1E80` |
+| `soulcollect` | ctor `0x005E1AD0`, AddSoul `0x005E1BC0`, Serialize `0x005E1D50`, Unserialize `0x005E1E80`, GetRemainedTime `0x00601200` (ноль), GetAdditionalData `0x004D7090` |
+| `swordship` (×4) | vt `0x00660D4C`/`0x006602AC`/`0x0065FEB4`/`0x0065FE64`; property callback `0x005F8870`, writer `0x005ECE70`, reader `0x005F0010` |
+| `element` (`0x12D`/`0x130`) | ctor `0x00600F70`/`0x006011A0`, vt `0x006617C4`/`0x00661814`; общий writer `0x005E23D0`, reader `0x00601350` |
+| `fullmiss` (`0x25B`) | ctor `0x005E2090`, vt `0x0065F044`, property callback `0x005E2120`, writer `0x005E23D0`, reader `0x00601350` |
+| `maxresource` (`0x259`/`0x25A`) | ctor `0x005E22E0`/`0x005E2160`; обе vtable ведут к writer `0x005E23D0` и reader `0x00601350` |
+| `meteorarrow` | ctor `0x005F6820`, vt `0x00660AC4`, writer `0x005ECE70`, reader `0x005F0010`, добавление `0x005F6970` |
+| `poison` (×4) | vt `0x0065F24C`/`0x0065F9F4`/`0x006620F4`/`0x0065FCE4`; общий writer `0x005E93C0`, getter `0x00606320`; первые три читаются через `0x005E3500`, Kerosene — через `0x005EB800` (берёт время после полей записи) |
+| `poisonfog` (`0xC9`) | ctor `0x00607C40`, vt `0x006622D4`, writer `0x00607F50`, reader `0x006084C0`, property callback `0x00608060` |
+| `periodicattack` | PoisonArrow: Serialize `0x005E93C0`, Unserialize `0x005E3500`, AI `0x005E3730`; Kerosene: Unserialize `0x005EB800`; общие с семьями: BloodLoss `0x005E3B40`/`0x005E3C70`, LeafCut Serialize `0x005F0820`, LeafCut2 Unserialize `0x005EBF20` |
+| `bloodloss` | ctor `0x005E3820`, vt `0x0065F2AC`, writer `0x005E3B40`, reader `0x005E3C70`; хвост записи — два DWORD с битами f32 и два WORD |
+| `leafcut` (`0x6B`/`0x80`/`0x8F`) | ctor `0x005FC580`/`0x005F05C0`/`0x005EBC00`, vt `0x006611F4`/`0x0066035C`/`0x0065FD44`; общие writer `0x005F0820`, reader `0x005EBF20`, getter `0x00606320`; хвост записи — 2 DWORD и 4 WORD |
+| `wuxing` (×5) | пять vtable направляют writer на `0x005E0030`, reader на `0x005E0880` (ID DWORD и `0x5C` сырых байт с `[this+0x38]`); property callbacks: Metal `0x005E08C0`, остальные `0x005E0080` |
+| `weak` (`0x12E`) | vt `0x006621B4`: AI `0x00606EF0`, property callback `0x00607020`, writer `0x00606FC0`, reader `0x006071F0`, getter срока `0x00605E10` |
+| `wangsheng` (`0x221`) | ctor `0x00605D90`; общий Serialize `0x005E7330`, Unserialize `0x005FD660`, AI `0x005E6E20`, OnUpdateProperties `0x00605FB0` |
+| `automaticrestore` (×4) | AI HP peace `0x004FA8E0` (смерть/полнота HP/мирный режим до часов); все четыре класса вызывают общие тела Serialize `0x005ECE70` / Unserialize `0x004F9D80`; PDB называет общие тела по другим состояниям — принадлежность определяется vtable, не именем символа |
+| `visualeffect` | проверенный диапазон базового `CVisualEffect` `0x005DC1B0..0x005DC234` |
+| `time` | образец таймед-остатка `CHealState::GetRemainedTime` `0x005F2CD0` (при истёкшем сроке второе чтение `timeGetTime` не выполняется) |
 
 ## zonalcast: скелет областных призывов
 
@@ -305,6 +365,8 @@ ChaosSphere (`0x137`), SoulMirror (`0x13C`). Исходные владельцы
 | `CChaosSphere::AI` | RVA `0x1A7FA0` | VERIFIED | после гейта смерти читает X/Y S один раз (без повторного Weak) и чистит identity S |
 | `CSnowStorm::CheckCastCondition` / `AI` | RVA `0x183E20` / `0x183C40` | VERIFIED | ошибки reuse/пути/MP — только visual-режимы без GS-форматирования; недостаток MP и в Check, и в AI → visual7 без `GS0288` |
 | десять тел `*Effect::UpdateVisualEffect` | таблицы переходов RVA: CWeak `0x1AE8C0`, CPoisonFog `0x1935E0`, CSnowStorm `0x1837C0`, CYinYang `0x1A5730`, CYinYang2 `0x1677A0`, CGodThunder `0x172D00`, CGodThunder2 `0x152F40`, CFireWall `0x1AB140`, CChaosSphere `0x1A7940`, CSoulMirror `0x1A4400` | VERIFIED | wire-кадр `0x000BFE01`: switch по 16 режимам с таблицей переходов; личная ветка отказов кадром `[u8=0, u8=mode]` только игроку; mode 0 → кадр `action=1` (навык, уровень, источник, direction); mode 1 → кадр `action=2` с нулевой парой цели и X/Y. Наборы режимов: девять владельцев `0/1/2/7/10/11/13/15`, у PoisonFog добавлен `14` |
+| идентичность областей и Summon (опорные VA) | `CGodThunderPhalanx`/`CGodThunderPhalanx2`: ctor `0x005F5B50`/`0x005EF190`, Initialize `0x005F59C0`/`0x005EEF30`, общий AddToByteArray `0x005EF0C0`, AI `0x005F6150`/`0x005EF6B0`, Summon `0x00573840`/`0x00553A80`; server decode `0x005F5D90` (UNKNOWN: подтверждённого вызывающего пути нет) — `zone::skills::godthunder`. `CWeakPhalanx`: ctor `0x600730`, обход `0x600840`, AI `0x600a70`, расчёт срока Summon `0x5AF41B–0x5AF48C` — `zone::skills::weak`. `CSnowStorm`: Summon `0x00584060`, ctor `0x005F9040`, Initialize `0x005F8D70`, EncodeToByteArray `0x005F8ED0`, CalculateAttackPower `0x005F92D0`, Attack `0x005F93B0`, AI `0x005F94B0` — `zone::skills::snowstorm`. `CChaosSpherePhalanx`: Summon `0x005A8290`, ctor `0x005FEE80`, AddToByteArray `0x005FECB0`, AI `0x005FF270` — `zone::skills::chaossphere`. `CYinYang*`: Summon `0x005A6270`/`0x005682E0`, ctor `0x005FE4F0`/`0x005F2410` — `zone::skills::yinyang`. Неподвижные области: ReplaceAffectRegion `0x005FFCD0`/`0x005FE270`/`0x005F2190`, `CScope::SetInScope` `0x005E9990`, AI FireWall `0x006003E0`, YinYang `0x005FE9A0`, YinYang2 `0x005F28C0` — `zone::skills::masked_area` | MATCH (по шапке владельца) | адреса в форме VA (истинный RVA = VA − `0x400000`); тела Summon сверены у владельцев зонального скелета |
+| элементальный удар областей (опорные VA) | `CalculateAttackPower`: firewallphalanx `0x00600120`, yinyangphalanx `0x005FE6E0`, yinyangphalanx2 `0x005F2600`, godthunderphalanx `0x005F5E90`, godthunderphalanx2 `0x005EF3F0`, chaosspherephalanx `0x005FEFB0`; `CFireWallPhalanx` Summon `0x005ABC70`, ctor области `0x005FFF30`; `CPoisonFogPhalanx` ctor `0x005FBD90`, AI `0x005FC040` | MATCH (по шапке владельца) | реализация `zone::skills::{elementphalanx, firewall, poisonfog}` |
 
 Источники X/Y mode 1: живой S с откатом к сохранённой точке (проверено для
 CWeak/CFireWall/CSnowStorm/CGodThunder/CYinYang/CYinYang2/CChaosSphere; у
@@ -967,6 +1029,17 @@ SendToPlayer под `dynamic_cast CPlayer`; wide-8 кастеры пишут
   id, GUID (1+16 или маркер), len, blob `SerializeForOldClient`; BF918
   отправляется и при отказе Serialize.
 
+Правила слотов боевого духа (`zone::skills::battlefairy`, MATCH по шапке
+владельца; все VA): проверка уровня `0x0042E7A0–0x0042E81C`; снятие/установка
+девяти навыков `0x00430610–0x00430756` и `0x00430760–0x00430921`; пары
+несовместимых навыков `m_UnPairSkills` при создании `CBattleFairyContainer`
+`0x00504052–0x00504149`; ResetSkill — проверка кандидата `0x00501815–0x00501A8D`,
+допуск `0x00501599–0x00501645`, поиск `0x00501663–0x0050178A`, чтение
+`0x005017B4–0x00501806`, запись `0x00501892–0x00501AC7`, стоимость
+уведомления `0x00501B6B–0x00501B8D`; расход одного предмета — количество
+`0x004315E9–0x00431615`, удаление `0x0043169C–0x00431702`; стоимость текста
+MP — `CWangsheng::AI` `0x0051E097–0x0051E0E7`.
+
 Текущая реализация: `zone::skills::battlefairyskill` (+ файл-делегат `appserver/skills/battlefairyskill.rs` старого пакета); исходные владельцы — семейство `appserver/skills/*` и базовый `appserver/states/skill.cpp`.
 
 ### battlefairysummon — призыв/следование/гибель боевого духа (CPlayer)
@@ -1372,6 +1445,7 @@ DWORD-переполнением; OnUpdateProperties возвращает 1 бе
 | `CState` ctor / `DecodeExStates` | `0x005DBCA0` / `0x004D1B18` | VERIFIED | DecodeExStates пишет sufferer type/id держателя, оставляет region=0 из ctor; Object Begin устанавливает текущий sufferer-region |
 | RTTI CSpiderMist | `0x0066F16C` | VERIFIED | CSummonSkill→CSkill→CState: активный CSpiderMist не входит в контейнер `m_vStates`, три Begin не вызывают AddState; проверка ID 0x198 внутри CastCure не создаёт state-owner |
 | `CStateFactory::Unserialize` | RVA `0x001D7D00`, VA `0x005D7D00` (`?Unserialize@CStateFactory@@SAPAVCState@@PAEAAJ@Z`) | VERIFIED | чтение declared count, switch по ID записи с переходом к привязке владельца; таблица переходов начинается с `0x32` |
+| `CState` Begin / `CSkill` Begin/End / `CSkill::IsRestored` | VA `0x005DBD70`/`0x005DBDD0`, VA `0x004D83E0`/`0x004D84C0`, VA `0x004D8220–0x004D825F` | MATCH (по шапке владельца) | lifecycle-база `zone::skills::lifecycle`; native Begin сохраняет сторону при NULL и обновляет часы только при U; point-ветвь очищает S; IsRestored читает уже прочитанный delay |
 
 Особенности контракта арены: порядок добавления и пустые позиции после
 удаления принадлежат контейнеру (уплотнение только явное); новый экземпляр
@@ -1393,6 +1467,14 @@ Payload монстра: End `0x0057B810` пишет только `+0x4C/+0x50/+0
 базового CState очищаются общим хвостом. Остальное — архитектурный перенос
 без новых машинных фактов (порядок Inactive→kernel, `prepare_derived_end`,
 `clear_end_paths` в порядке `SkillOwner::end_policy`).
+
+Payload боевого духа (`zone::skills::execution::payload`, MATCH по шапке
+владельца): три `End(int)` VA `0x00516FB0`/`0x0051A700`/`0x005222A0` очищают
+DWORD-фазу перед visual и AfterUse; два `End(bool)` VA `0x0051BE50`/
+`0x005246C0` очищают только BYTE-флаги и не заменяют `End(int)`.
+`?End@CChuckStone@@UAEXH@Z` (VA `0x0056A330`) — общий адрес обоих владельцев
+(`CChuckStone`/`CSkeletonArchery`), четыре DWORD-зануления `+0x4C/0x50/0x54/0x58`
+перед `SetMoveable(true)` и базовым End.
 
 Текущая реализация: `zone::skills::{baseattackruntime,state/{storage,serialization,catalog,mutations,accessors,snapshot,mod},statefactory,execution/*}`;
 исходные владельцы PDB: `appserver/skills/baseattack.cpp`, `appserver/moveshape.*`,

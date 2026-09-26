@@ -2,9 +2,10 @@
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! идентификаторы —
 //! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
-//! Конструкторы VA 0x005EC410/0x005EC450, AddEnergy 0x005EC490;
-//! общие с SoulCollect Serialize 0x005E1D50 и Unserialize 0x005E1E80
+//! Serialize/Unserialize общие с SoulCollect
 //! (appserver/skills/energyholdingstate.cpp/.h).
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

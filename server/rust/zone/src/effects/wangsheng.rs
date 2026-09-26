@@ -1,7 +1,8 @@
 //! Сохранённые данные состояния CWangshengState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/wangshengstate.cpp/.h;
-//! конструктор 0x00605D90, общий Serialize 0x005E7330,
-//! Unserialize 0x005FD660, AI 0x005E6E20, OnUpdateProperties 0x00605FB0.
+//! Serialize/Unserialize/AI общие с Po/Yu-семейством боевой феи.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

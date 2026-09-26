@@ -1,21 +1,12 @@
 //! Данные и 8-байтная запись семейства CBlindState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/skills/{blindstate,knightcutstate,knockoutstate,boalockstate,...}.cpp/.h.
-//! Конструкторы записывают свой ID и срок без чтения часов: KnightCut
-//! VA 0x005FCCF0/0x005FCD60 (vtable 0x00661254, ID 0x67), KnockOut
-//! VA 0x005F4F30/0x005F4FA0 (vtable 0x00660894, ID 0x192), BoaLock
-//! VA 0x005FB560/0x005FB5D0 (vtable 0x006610DC, ID 0xD2), Blind
-//! VA 0x00607380 (vtable 0x00662214, ID 0x76), Rush VA 0x006077E0
-//! (vtable 0x00662274, ID 0x73), Rush2 VA 0x005F12E0/0x005F1350
-//! (vtable 0x0066041C, ID 0x7C), Seal VA 0x005FF800/0x005FF870
-//! (vtable 0x006615F4, ID 0x138), Strike VA 0x00606830
-//! (vtable 0x00662154, ID 0xDD), SpiderWeb VA 0x005EA6E0/0x005EA750
-//! (vtable 0x0065FBCC, ID 0x199), BossBlueQuake VA 0x005E8590/0x005E8600
-//! (vtable 0x0065F934, ID 0x1F8).
-//! Все десять vtable разделяют Serialize VA 0x005F51E0 (ID, затем остаток
-//! через getter), Unserialize VA 0x005EAAC0 (часы после внешнего ID и до
-//! сохранённого остатка), GetRemainedTime VA 0x005F2CD0 и AI
-//! VA 0x005D5BA0 (завершение только при `now > start + keep`).
+//! Конструкторы записывают свой ID и срок без чтения часов. Все десять
+//! классов разделяют Serialize (ID, затем остаток через getter), Unserialize
+//! (часы после внешнего ID и до сохранённого остатка), GetRemainedTime и AI
+//! (завершение только при `now > start + keep`).
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

@@ -1,10 +1,10 @@
 //! Ослепление CBlind (0x76): kernel-вход, visual и наложение состояния.
 //! Источник: gameserver.exe + GameServer.pdb (точная пара `4F5C98E0…` +
-//! RSDS match), `appserver/skills/blind.cpp`. Машинные якоря: Begin
-//! `0x16DA30`; AddBlindState `0x16E500` → `new 0x3C` + ctor CRushState2
-//! `0x5F12E0` (VERIFIED разведкой — создаётся состояние второго рывка, а не
+//! RSDS match), `appserver/skills/blind.cpp`; опорные адреса —
+//! docs/reconstruction/gameserver-skills.md. AddBlindState создаёт
+//! CRushState2 (VERIFIED разведкой — создаётся состояние второго рывка, а не
 //! CBlindState); codec семейства 8-байтный ✓ `effects/blind.rs`; End(H)
-//! 13-fold `0x146090` — общий CStateSkill tail, здесь не дублируется
+//! 13-fold — общий CStateSkill tail, здесь не дублируется
 //! (порядок clear+End исполняет kernel). Тела перенесены буквально.
 //!
 //! Подготовка и visual принадлежат зарегистрированному навыку; AddBlindState

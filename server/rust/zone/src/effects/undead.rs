@@ -1,17 +1,19 @@
 //! Данные и 76-байтная запись `CNotDisappearAfterDead` (внешний ID `0x38`) в Zone.
 //! Источник: gameserver.exe + GameServer.pdb,
 //! appserver/other states/notdisappearafterdead.cpp/.h.
-//! Конструктор VA `0x005D62A0` копирует 72 байта без часов. GetRemainedTime
-//! VA `0x005D6320` при нулевом сроке не читает часы, иначе берёт одно значение
-//! для проверки границы и второе для вычитания. Serialize VA `0x005D64F0`
+//! Конструктор копирует 72 байта без часов. GetRemainedTime
+//! при нулевом сроке не читает часы, иначе берёт одно значение
+//! для проверки границы и второе для вычитания. Serialize
 //! записывает вычисленный getter-ом остаток в живой keep (+0x40), не меняя
 //! started/item timestamp, и затем добавляет 72-байтный блок; writer получает
-//! этот же остаток без второго clock. Unserialize VA `0x005D6530` одним clock
+//! этот же остаток без второго clock. Unserialize одним clock
 //! ставит оба timestamp (+0x2C и +0x80) и копирует все 72 байта, включая
-//! innerID 0. Общий AI VA `0x005D7C80` использует строгие wrapping-сроки.
+//! innerID 0. Общий AI использует строгие wrapping-сроки.
 //! Codec сохраняет padding +2..3 и исходный ненулевой BOOL-байт, а не
 //! нормализует загруженную запись при сохранении. Живые Begin/AI/End и
 //! visual остаются у переходного Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::guarded_client_state_time;
 

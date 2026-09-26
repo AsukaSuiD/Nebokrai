@@ -1,21 +1,14 @@
 //! Правила навыков боевого духа.
 //! Contract: `docs/gameplay/skills.md` (уровень, слоты, сброс навыка).
 //! Источник: gameserver.exe + GameServer.pdb, appserver/player.cpp/.h
-//! (проверка уровня VA 0x0042E7A0–0x0042E81C) и
-//! appserver/player.cpp/.h (снятие/установка девяти навыков
-//! VA 0x00430610–0x00430756 и 0x00430760–0x00430921),
-//! constructor `CBattleFairyContainer` (пары несовместимых навыков
-//! VA 0x00504052–0x00504149),
-//! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
-//! VA 0x00501815–0x00501A8D, допуск VA 0x00501599–0x00501645,
-//! поиск VA 0x00501663–0x0050178A,
-//! чтение VA 0x005017B4–0x00501806,
-//! запись VA 0x00501892–0x00501AC7 и стоимость уведомления
-//! VA 0x00501B6B–0x00501B8D),
-//! appserver/player.cpp/.h (расход одного предмета: количество
-//! VA 0x004315E9–0x00431615, удаление VA 0x0043169C–0x00431702),
-//! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
-//! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
+//! (проверка уровня, снятие/установка девяти навыков,
+//! расход одного предмета), constructor `CBattleFairyContainer` (пары
+//! несовместимых навыков), container/cbattlefairycontainer.cpp/.h (цепочка
+//! ResetSkill и стоимость уведомления) и appserver/skills/wangsheng.cpp/.h
+//! (стоимость текста MP CWangsheng::AI).
+//! Доказательства: docs/reconstruction/gameserver-skills.md (раздел «Боевой
+//! дух: координатор battlefairyskill, призыв battlefairysummon и навыки
+//! семейства»).
 
 /// Пара, записанная в исходную `m_UnPairSkills` при создании контейнера.
 const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {

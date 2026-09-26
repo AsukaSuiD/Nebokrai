@@ -2,9 +2,10 @@
 //!
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/bloodlossstate.cpp` и `bloodlossstate.h`.
-//! Конструктор VA `0x005E3820`, writer VA `0x005E3B40`, reader VA `0x005E3C70`.
-//! Vtable `0x0065F2AC` связывает writer/reader с состоянием; хвост содержит
+//! Vtable состояния связывает writer/reader; хвост записи содержит
 //! два DWORD с битами f32 и два WORD. Игровой RNG остаётся у Game.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use crate::combat::MasterInfo;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};

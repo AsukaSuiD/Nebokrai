@@ -1,8 +1,8 @@
 //! Данные, запись и расчёт ослабления `CPoisonFogState` в Zone.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/poisonfogstate.cpp` и `poisonfogstate.h`.
-//! Конструктор VA `0x00607C40`, vtable `0x006622D4`, writer `0x00607F50`,
-//! reader `0x006084C0`, property callback `0x00608060`.
+//! Опорные адреса (конструктор, vtable, writer, reader, property callback):
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 

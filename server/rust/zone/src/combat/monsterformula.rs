@@ -5,15 +5,7 @@
 //!
 //! Точная пара: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`
 //! (идентификаторы —
-//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки). Публичные символы семейства: `GetMaxHP` (RVA `0x000E65A0`),
-//! `GetAttackAvoid` (`0x000E64F0`), `GetElementAvoid` (`0x000E6520`),
-//! `GetHit` (`0x000E6760`), `GetDef` (`0x000E6780`), `GetDodge` (`0x000E6800`),
-//! `GetElementResistant` (`0x000E6880`), `GetElementModify` (`0x000E6900`),
-//! `GetSoulResistant` (`0x000E6970`), `GetHpRecoverSpeed` (`0x000E6990`),
-//! `GetAddSoulAtk` (`0x000E69D0`), `GetAtcInterval` (`0x000E69F0`),
-//! `GetStopFrame` (`0x000E6A40`), `GetSpeed` (`0x000E79B0`),
-//! `CalculateExperienceQuota` (`0x000E7FE0`),
-//! `CalculateExperienceCorrective` (`0x000E7A70`).
+//! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! Pet attack/speed/timing и elemental modifier применяют факторы только при
 //! валидной player-owner связи; целочисленные результаты сохраняют x87
 //! truncation. Таблица квоты опыта индексируется числом живых участников, а

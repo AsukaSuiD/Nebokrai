@@ -2,9 +2,9 @@
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! идентификаторы —
 //! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки.
-//! Конструктор VA 0x005E1AD0, AddSoul 0x005E1BC0, Serialize 0x005E1D50,
-//! Unserialize 0x005E1E80, GetRemainedTime 0x00601200,
-//! GetAdditionalData 0x004D7090 (appserver/skills/soulcollectstate.cpp/.h).
+//! Исходный владелец PDB `appserver/skills/soulcollectstate.cpp/.h`.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 

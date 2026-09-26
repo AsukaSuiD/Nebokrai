@@ -6,20 +6,22 @@
 //! docs/reconstruction/gameserver-npc-and-regions.md#идентификаторы-сборки).
 //! Исходный owner `server/gameserver/appserver/container/ccontainer.cpp`.
 //!
-//! Constructor/destructor RVA `0x000DF570/0x000DF2A0` владеют только ordered
-//! vector listener-ов. `AddListener` RVA `0x000DF5B0` отклоняет null и duplicate,
-//! `RemoveListener` RVA `0x000DF250` удаляет первое совпадение с сохранением
+//! Constructor/destructor владеют только ordered
+//! vector listener-ов. `AddListener` отклоняет null и duplicate,
+//! `RemoveListener` удаляет первое совпадение с сохранением
 //! порядка. `Vec` и RAII заменяют MSVC allocation/memmove без изменения этих
 //! контрактов. Старый pointer identity выражен непрозрачным ненулевым handle:
 //! container не получает владение самим listener-ом.
 //! `IndexSet` заменяет ручные `contains + push` и поиск позиции при удалении,
 //! сохраняя уникальность, порядок вставки и сдвиг последующих обработчиков.
 //!
-//! `Find/Remove` RVA `0x000DF1A0..0x000DF200` были только virtual forwarding
+//! `Find/Remove` были только virtual forwarding
 //! thunks: overload с type игнорировал type, overload с object извлекал его
 //! `m_guExID`, null возвращал null. В Rust эти переходы принадлежат typed API
 //! конкретного derived container-а; отдельное фиктивное base-хранилище не
-//! вводится. `tagPreviousContainer` RVA `0x000DF1D0` сохранён буквально.
+//! вводится. `tagPreviousContainer` сохранён буквально.
+//! Опорные адреса — раздел «Предметы и контейнеры» в
+//! docs/reconstruction/gameserver-npc-and-regions.md.
 
 use indexmap::IndexSet;
 use std::collections::hash_map::DefaultHasher;

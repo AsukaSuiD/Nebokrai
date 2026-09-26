@@ -1,15 +1,15 @@
 //! Правила области ослабления CWeakPhalanx, срока призыва CWeak и тела его
 //! Summon. Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/weakphalanx.cpp/.h и appserver/skills/weak.cpp.
-//! Конструктор области: VA 0x600730; обход: 0x600840; AI: 0x600a70;
-//! расчёт срока призыва: 0x5AF41B–0x5AF48C.
+//! Опорные адреса области и Summon —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 //! Композит `CWeakPhalanx` (CShape + область) и тело `summon_weak` следуют
 //! старому адаптеру без новых машинных оснований. Summon сначала сохраняет
 //! actual region U и отвергает `GetSecurity == SAFE`, не GetBlock;
 //! MASTER(country0)/Player EM либо 0 предшествуют свежей таблице; порядок
 //! запросов (коэффициент `20010` → срок `30001` через машинную формулу
 //! `weak_lifetime` → потеря attack `205` → живой уровень → часы → ID)
-//! сверен с Summon VA 0x005AF41B–0x005AF48C в части расчёта срока. SetTile
+//! сверен с телом Summon в части расчёта срока. SetTile
 //! центра, проход перекрытия старых областей, регистрация AddShape и
 //! encode/BF502 остаются швами-фасадами (`ZonalCastContact` в
 //! `skills/zonalcast.rs`): входной регион читается до Add, отказ Add не

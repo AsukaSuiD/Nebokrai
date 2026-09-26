@@ -1,8 +1,8 @@
 //! Данные, срок и запись `CHeartenState` в Zone.
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! `appserver/skills/heartenstate.cpp` и `heartenstate.h`.
-//! Конструктор VA `0x005EE500`, vtable `0x006600D4`, writer `0x005D4D10`,
-//! reader `0x004F9D80`, property callback `0x005EE740`.
+//! Опорные адреса (конструктор, vtable, writer, reader, property callback):
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 

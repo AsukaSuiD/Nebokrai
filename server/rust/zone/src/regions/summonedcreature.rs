@@ -8,9 +8,9 @@
 //! переполнением с текущим DWORD.
 //! Сама сущность остаётся единственным `CMonster` в `MonsterWorld`; этот тип
 //! хранит только отличающийся жизненный цикл и не создаёт параллельное хранилище.
-//! Constructor `CSummonedCreature` `1:1BA1B0` (VA `0x005BB1B0`), разбор по
-//! дизассемблу: base `CMonster` ctor `0x4E7E70`, оба DWORD по
-//! `+0x2A8/+0x2AC` обнуляются, vtable `0x65CFE4`.
+//! Constructor разобран по дизассемблу точной пары; оба DWORD по
+//! `+0x2A8/+0x2AC` обнуляются. Опорные адреса — раздел «NPC и базовые
+//! фигуры» в docs/reconstruction/gameserver-npc-and-regions.md.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SummonedCreatureLifecycle {

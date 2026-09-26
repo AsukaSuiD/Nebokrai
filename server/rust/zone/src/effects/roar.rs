@@ -1,7 +1,8 @@
 //! Данные и числовое подавление атаки CRoarState в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/roarstate.cpp/.h;
-//! конструктор 0x005EC7E0, Serialize 0x005F65F0, Unserialize 0x005ECC60,
-//! AI 0x005EC9A0, OnUpdateProperties 0x005ECAA0.
+//! Serialize общий с Heal-семейством.
+//! Опорные адреса:
+//! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};

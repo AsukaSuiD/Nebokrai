@@ -1,9 +1,8 @@
 //! Маска и живая форма неподвижных областей FireWall и YinYang.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/firewallphalanx.cpp и yinyangphalanx{,2}.cpp.
-//! ReplaceAffectRegion VA 0x005FFCD0, 0x005FE270, 0x005F2190;
-//! CScope::SetInScope VA 0x005E9990. AI FireWall VA 0x006003E0,
-//! YinYang VA 0x005FE9A0 и YinYang2 VA 0x005F28C0.
+//! Опорные адреса ReplaceAffectRegion/SetInScope/AI —
+//! docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов.
 //! Композит `MaskedElementPhalanx` (CShape + снимок атаки + маска) перенесён
 //! из старого адаптера буквально; новых машинных оснований он не добавляет.
 
