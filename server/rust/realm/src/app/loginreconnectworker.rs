@@ -3,22 +3,13 @@
 //! [`crate::app::world_server`] (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`,
 //! SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
-//! Машинно подтверждённые точки (S_PUB32 `.exe/Nworldserver.exe`, первая
-//! секция):
-//! - `ConnectLoginServerFunc` `1:000023b0` (VA `0x4033B0`): начальная проверка
-//!   exit-флага `[0x56E48C]`, затем цикл `Sleep(0x1F40)` (исходный cadence 8
-//!   секунд) -> `ReConnectLoginServer` `1:00002280` (VA `0x403280`) через
-//!   process-global `g_pGame` `[0x56E47C]`; выход при `== 1`, а exit-флаг
-//!   проверяется только после неуспешной попытки — спящий worker не
-//!   прерывается stop, как и полный `WaitForSingleObject` исходного
-//!   `CreateConnectLoginThread` `1:00003320`;
-//! - replacement client после успешного connect передаётся main-loop через
-//!   typed handoff, поэтому смена network-owner-а происходит в исходной
-//!   позиции `0x3FC03` и не обгоняет сообщения (обработку остаётся
-//!   выполнять process-owner `CGame`).
-//!
-//! Worker повторяет попытку с исходной cadence, пока соединение не
-//! опубликовано либо owned shutdown не отменит ожидание. Snapshot endpoint-а
+//! Worker повторяет попытку с исходной cadence 8 секунд, пока соединение не
+//! опубликовано либо owned shutdown не отменит ожидание; exit-флаг исходно
+//! проверялся только после неуспешной попытки, поэтому спящий worker не
+//! прерывался stop. Replacement client передаётся main-loop typed handoff:
+//! смена network-owner-а происходит в исходной позиции `0x3FC03` и не
+//! обгоняет сообщения (обработку выполняет process-owner `CGame`).
+//! Snapshot endpoint-а
 //! и producer исходной World FIFO живёт здесь в `WorldLoginReconnectSpec`
 //! (поля публичны: snapshot собирает владелец `CGame` за пределами
 //! библиотеки). Фактическая попытка bind/connect бывшего owner-метода
@@ -30,6 +21,8 @@
 //! (`WorldLoginReconnectThreadStart`, `WorldLoginReconnectThreadRestart`)
 //! живут здесь рядом с outcome/spec; setup thread-сборка и lifecycle
 //! thread-owner-а (`connect_login_worker`) остаются у `CGame`.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 
 use std::error::Error;
 use std::fmt;

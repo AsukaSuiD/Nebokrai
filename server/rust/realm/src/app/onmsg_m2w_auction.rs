@@ -1,7 +1,7 @@
 //! Auction-dispatcher `OnMSG_M2W_AUCTION` WorldServer в составе Realm `app/`.
 //!
-//! Источник контракта — `worldserver.exe` и
-//! `worldserver.pdb`, исходный owner `OnMSG_M2W_AUCTION`.
+//! Источник контракта — `Nworldserver.exe` и
+//! `WorldServer.pdb`, исходный owner `OnMSG_M2W_AUCTION`.
 //!
 //! `0x15EB01` и non-`STATE_PRE_BUY` путь `0x15EB02` передают owned `DbNote`
 //! в действующую input queue с operation. `0x15EB02` в

@@ -1,10 +1,8 @@
 //! Диспетчер server-сообщений WorldServer (`appworld/message/servermessage.cpp`,
-//! свободная `OnServerMessage`, pub `?OnServerMessage@@YAXPAVCMessage@@@Z`
-//! RVA `0x000ACCF0`), подтверждённый `Nworldserver.exe` (SHA-256 `F3AC454D…`)
-//! и парным `WorldServer.pdb` (RSDS `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751`,
-//! age 1). Здесь — сам диспетчер `on_server_message`, decode-helpers,
-//! `on_game_server_connected`, семейство `continue_game_server_*_configuration`
-//! и reconnect-цепочка.
+//! свободная `OnServerMessage`): сам диспетчер `on_server_message`,
+//! decode-helpers, `on_game_server_connected`, семейство
+//! `continue_game_server_*_configuration` и reconnect-цепочка. Источник
+//! контракта — та же точная пара, что у [`crate::app::world_message`].
 //!
 //! Внутрипроцессный reconnect заменяет GameServer client в той же FIFO-позиции:
 //! старое соединение закрывается и уничтожается до публикации нового; уже
@@ -19,43 +17,28 @@
 //! legacy-ноль без сдвига курсора; безопасные проверки длины останавливают
 //! только чтение, которое в оригинале выходило бы за буфер.
 //!
-//! Ветвь `0x3FC02` (GameServer disconnect, синтетическое close-сообщение
-//! `CMyServerClient::OnClose`) подтверждена машинной разборкой той же точной
-//! пары (VA секции 1): `0x4ADD6F` decode
-//! `CBaseMessage::GetDWord` (`0x423790`) → `GetGame` (`0x4017A0`) →
-//! `CGame::GetGameServer(K)` (`0x4132A0`, pub `1:0x122A0`). Not-found
-//! (`0x4ADE76`) — AddLogText (`0x41E630`) формата `0x5473AC`
-//! (`!!!!!Unknown GameServer Lost!!!!!!!!![index = %d]`). Found — `0x4ADD94`
-//! `connected=0` (байт `tagGameServer+0`), sprintf (`0x51AFC0`) формата
-//! `0x5473FC` (`%s [%d]`, `strIP` `+0xC`, port `+0x24`) с удалением строки
-//! из Win32 listbox (`LB_FINDSTRINGEXACT 0x18F` → `LB_DELETESTRING 0x182` —
-//! UI-эффект вне wire, сознательно не воспроизводится, как и `LB_ADDSTRING
-//! 0x181` ветви `0x5FA01`), AddLogText формата `0x5473E0` (`GameServer %s
-//! [%d] lost!`); при `[esi+4]==5` (аукционный slot) — `CMessage(0x80403)`
-//! (`0x422DA0`) + `Add<ulong>(0)` (`0x423C00`) + `SendAll` (`0x423170`,
-//! game-server отправитель `g_Game+0x174`). Обе концовки завершают
-//! `CGame::OnGameServerLost(K)` (`0x411340`, pub `1:0x10340`) — миграция
-//! игроков offline и login-нотификация `0x1FE03` остаются inherent-методом
-//! владельца игры через шов `WorldServerMessageGameView`; его Win32
-//! player-listbox `AddPlayerList` подставлен no-op sink-ом по тому же
-//! принципу исключения. Статус контракта ветви — VERIFIED_DISASSEMBLY;
-//! legacy-неинициализированный port моделируется `Option`, при `None`
-//! модель печатает `%d` нулём и несёт исходный `Option` в отчёте.
+//! Ветвь `0x3FC02` (synthetic close GameServer) разобрана по машинному коду
+//! (VERIFIED): `GetGameServer(K)`, not-found AddLogText, found — `connected=0`,
+//! при auction slot — `0x80403` + `SendAll`; обе концовки завершают
+//! `OnGameServerLost(K)`. Win32-listbox UI-эффекты вне wire сознательно не
+//! воспроизводятся (здесь и `LB_ADDSTRING` ветви `0x5FA01`), player-listbox
+//! владельца игры подставлен no-op sink-ом. Миграция игроков offline и
+//! login-нотификация `0x1FE03` остаются inherent-методом владельца игры через
+//! шов `WorldServerMessageGameView`. Legacy-неинициализированный port
+//! моделируется `Option`: при `None` модель печатает `%d` нулём и несёт
+//! исходный `Option` в отчёте.
 //!
 //! Игровой контекст диспетчер получает через [`WorldGameView`]; organizing-
 //! переходы игрока и save-материализацию — через [`WorldServerMessageGameView`]
-//! с ассоциированными типами владельцев старого пакета. Регистры и конфиги
-//! initial-цепочки приходят typed ссылками или owned-снимками payload;
+//! с ассоциированными типами владельцев старого пакета.
 //! `CountryWarSys`/`CCountryHandler`, остающиеся в старом пакете,
-//! сериализуются вызывающей стороной в исходной позиции.
+//! сериализуются вызывающей стороной в исходной позиции. Цитируемые
+//! data-контракты игры лежат в `crate::app::worldserver`, reconnect
+//! restart-итоги — в `crate::app::loginreconnectworker`, network `CMessage` —
+//! в `crate::app::world_message`, `CountryHandlerSerializeError` — в
+//! `crate::organizations`.
 //!
-//! Цитируемые data-контракты игры (CD-key snapshot, reconnect records,
-//! region transition/snapshot, save-пайплайн, ping/region decode) лежат в
-//! `crate::app::worldserver`, reconnect restart-итоги — в
-//! `crate::app::loginreconnectworker`, network `CMessage` — в
-//! `crate::app::world_message`, `CountryHandlerSerializeError` — у
-//! `CountrySerializeError` в `crate::organizations`.
-
+//! Доказательства: docs/reconstruction/realm-services.md#world-диспетчер-servermessage
 use std::error::Error;
 use std::fmt;
 use std::net::Ipv4Addr;

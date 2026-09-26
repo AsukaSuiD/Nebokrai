@@ -7,11 +7,9 @@
 //! обслуживания, сохранения и рассылок не распараллеливается.
 //!
 //! Статус: тела `process_message` (`1:00a30`) и `ai` (`1:138a0`) сверены
-//! полным машинным разбором по точной паре `Nworldserver.exe` +
-//! `WorldServer.pdb` (RSDS `289F1FB3-…` age 1; дампы `.local/verify-c5c/`,
-//! `dis_processmessage.txt` и `dis_ai.txt`) — VERIFIED-МАТЧИ; единственная
-//! правка по ней — statement-order DIFF-A1 в `ai` (см. тело). Остальные
-//! stage-функции полагаются на данные и отчёты
+//! полным машинным разбором точной пары — VERIFIED; единственная правка по
+//! ней — statement-order DIFF-A1 в `ai` (см. тело). Остальные stage-функции
+//! полагаются на данные и отчёты
 //! `app::world_main_loop_data`/`app::world_hub_data`.
 //!
 //! Имена и проекции типов — Realm/Shared формы (см. `crate::app::world_game`).

@@ -1,8 +1,6 @@
-//! GM-диспетчер `OnGMMessage` WorldServer в составе Realm `app/`.
-//! Типы маршрута именованных регионов и route-scan живут в том же модуле.
-//!
-//! GM-сообщения `OnGMMessage` из `gmmessage.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! GM-диспетчер `OnGMMessage` WorldServer из `gmmessage.cpp`, подтверждённый
+//! точной парой `Nworldserver.exe` и `WorldServer.pdb`. Типы маршрута
+//! именованных регионов и route-scan живут в том же модуле.
 //!
 //! Диспетчер безусловно читает ID запроса, затем обслуживает запросы,
 //! ретрансляцию, рассылку регионам, перезагрузку, отключение карты, молчание

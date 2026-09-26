@@ -1,46 +1,25 @@
 //! Сообщение направления Login/GameServer ↔ WorldServer из
-//! `nets/networld/message.cpp` (PDB-объект
-//! `E:\svn\fengyun_russia_dev\Nets\networld\Release\Message.obj`);
-//! Realm — сетевой край и диспетчеризация World-направления объединённого
-//! Realm-процесса. Источник контракта — точная пара `.exe/Nworldserver.exe`
-//! SHA-256 `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! ImageBase `0x400000`, PE timestamp `0x53FB128F` ↔ `.exe/WorldServer.pdb`
-//! GUID `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751` age 1. Формат base-буфера и RLE
+//! `nets/networld/message.cpp`; Realm — сетевой край и диспетчеризация
+//! World-направления объединённого Realm-процесса. Формат base-буфера и RLE
 //! держит Shared network; процессный scratch-конверт и `CRITICAL_SECTION`
-//! заменены owned `Vec` и этим статическим `Mutex`, не внося второго объекта.
+//! заменены owned `Vec` и статическим `Mutex`, не внося второго объекта.
 //!
-//! Машинно подтверждённые точки (VA по дизассемблеру секции 1):
-//! - ctor `0x422DA0` хранит `MsgType` в header-слово `+4` и обнуляет
-//!   runtime-поля `+0x18/+0x1C/+0x20/+0x24` объекта `0x28` байт;
-//! - `CreateMessage` `0x422DD0`: `cmp len,0x20000; jbe small` — вход короче
-//!   `0x20001` получает capacity `0x100000` со статическим scratch `0x5B9BC8`,
-//!   больший — `len*8` с временным buffer `0x6B9BC8`; failure decode `0x4235C0`
-//!   в любом варианте возвращает null; header 16 байт, внутренний length
-//!   устанавливается `0x10`, payload добавляется, `timeGetTime` пишется в
-//!   `+0x24` (recv-время);
-//! - `CreateMessageWithoutRLE` `0x422F20`: null-вход или нулевая длина даёт
-//!   null; далее та же 16-байтовая header-копия без отдельной проверки
-//!   `len < 16` — текущий `HeaderTooShort` относится к классу повреждённого
-//!   wire-входа, у исходника там 32-битное переполнение длины payload;
-//! - `SendToSocket` `0x422FF0`, `SendToMapID` `0x4230B0`, `SendAll` `0x423170`
-//!   читают server-отправителя из `g_Game+0x174`, `Send` `0x423220` —
-//!   исходящего Login-клиента из `g_Game+0x170`; null-отправитель возвращает 0;
-//! - все четыре send-ветки сериализуются статическим CS `0x6B9BCC`, строят
-//!   scratch `0x6B9BFC` как `[total_len, crc(total_len), crc(message),
-//!   message]`, append-помощник `0x423510` вычисляет `total_len = len + 0xC`
-//!   и копирует сообщение сразу после 12-байтового префикса; оба CRC — общий
-//!   `DataCrc32` `0x4A43A0`; `Send` передаёт `prioritized` и flags `0`;
-//! - `Run` `0x4232E0`: маска `type & 0xFFFFFF00` через `type - (type & 0xFF)`,
-//!   тринадцать handler-целей (server `0x4ADCF0` for `0x3FC00/0x4FC00/0x5FA00`,
-//!   log `0x4B0D10` for `0x4FB00/0x5FB00`, gma `0x4A6020` for
-//!   `0x4FD00/0x60400`, player `0x4AD580`, other `0x4AC680`, gm `0x4AB370`,
-//!   team `0x4AAD40`, orgasys `0x4A6110`, write-log `0x4A8AB0` с gate-byte
-//!   `g_Game+0x290`, country `0x4A47F0` for `0x60300/0x7FF00`, server-auction
-//!   `0x4A5650`, jjc `0x4A45E0`, misc-auction `0x4A5230`); любая ветвь,
-//!   включая неизвестный тип, возвращает `1`.
+//! Create-пути копируют 16-байтовый header и нормализуют первое слово по
+//! реально добавленному payload (порог `0x20001` — capacity `0x100000` либо
+//! `len*8`; RLE create пишет recv-tick из `timeGetTime`); `HeaderTooShort`
+//! относится к классу повреждённого wire-входа. Все четыре send-ветки
+//! сериализуются статическим CS и строят envelope `[total_len, crc(total_len),
+//! crc(message), message]`; null-отправитель возвращает 0.
+//!
+//! `Run` маскирует младший byte opcode и знает тринадцать handler-целей
+//! (server, log, gma, player, other, gm, team, orgasys, write-log с
+//! gate-byte, country, server-auction, jjc, misc-auction); любая ветвь,
+//! включая неизвестный тип, возвращает `1`.
 //!
 //! `ApplyClientContext` у исходника нет: runtime-поля заполнял принимающий
 //! server-путь; здесь это отдельный метод перед публикацией сообщения.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-wire-сообщение
 
 use parking_lot::Mutex;
 

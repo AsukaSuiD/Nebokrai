@@ -74,7 +74,7 @@ pub enum WorldRegionNameLookup<'a> {
 }
 
 /// Snapshot полей login-строки игрока: `_strcmpi` совпадение долгожителям ещё до
-/// поставки `worldserver.exe` строки, legacy-порядок map-итерации сохранён.
+/// поставки `Nworldserver.exe` строки, legacy-порядок map-итерации сохранён.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorldLoginAccountPlayer {
     pub team_id: i32,

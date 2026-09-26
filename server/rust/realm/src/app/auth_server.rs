@@ -3,12 +3,12 @@
 //! точная пара, что у [`crate::app::auth_message`]. Доменные call sites
 //! `CGame` остаются у владельца процесса.
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/authserver.exe`):
-//! - ctor `CMyNetServer_Auth` `0x412770`: базовый `CServer` ctor `0x4118B0`,
-//!   vtable `0x42E178`, поле `+0x120 = 0`, limits `+0x14C = 0x64` (100) и
-//!   `+0x150 = 0x1000000` — точные константы component;
-//! - `CreateServerClient` `0x4127B0`: `new` объекта `0xC8` байт, ctor
-//!   `CMyNetServerClient_Auth` `0x415A10` с владельцем `this`.
+//! Константы component: максимум незавершённых send — `100`, per-client
+//! send-buffer limit — `0x1000000`; accepted client создаётся той же
+//! virtual-фабрикой (`CMyNetServerClient_Auth`), поле `+0x120 = 0` живого
+//! состояния не получает.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#auth-принятое-login-соединение
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};

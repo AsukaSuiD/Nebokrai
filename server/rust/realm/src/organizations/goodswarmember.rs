@@ -1,6 +1,6 @@
 //! Участники Goods War `CGoodsWarMember` из WorldServer,
-//! подтверждённые `worldserver.exe` и
-//! `worldserver.pdb`.
+//! подтверждённые `Nworldserver.exe` и
+//! `WorldServer.pdb`.
 //!
 //! Player->faction map и faction set сохраняют signed order; count-list —
 //! отдельный порядок по убыванию count. Замена записи вставляет новую до первой

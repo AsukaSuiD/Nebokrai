@@ -1,10 +1,6 @@
 //! Драйвер потока игры WorldServer (`GameThreadFunc`) вместе с data-bundle
-//! инициализации и release. Источник контракта — точная пара
-//! `.exe/Nworldserver.exe` + `.exe/WorldServer.pdb` (SHA-256 `F3AC454D…`,
-//! RSDS совпадает; S_PUB32 `?GameThreadFunc@@YGIPAX@Z` `1:00019310`,
-//! `?CreateGame@@YAHXZ` `1:00014660`, `?DeleteGame@@YAHXZ` `1:00000780`,
-//! `?Init@CGame@@QAEHXZ` `1:00017ee0`, `?MainLoop@CGame@@QAEHXZ` `1:00018a00`,
-//! `?Release@CGame@@QAEHXZ` `1:0000d7f0`).
+//! инициализации и release. Источник контракта — та же точная пара, что у
+//! [`crate::app::world_message`].
 //!
 //! Драйвер выполняет исходный порядок `CreateGame -> Init -> MainLoop ->
 //! Release -> DeleteGame`: инициализация потока до принятия хода, turn-цикл
@@ -23,6 +19,8 @@
 //! `WorldGameInitContext` объявлен в [`crate::app::world_init_context`]
 //! (шов `&mut dyn RegionParameterLoadTarget` вместо CGame-typed
 //! `load_region_parameters`); его impl — в [`crate::app::world_process_init`].
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 
 use std::error::Error;
 use std::fmt;

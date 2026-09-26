@@ -324,9 +324,7 @@ impl WorldReloadProfileFlags {
         }
     }
 
- /// DIFF-3 (машинная досверка по точной паре `Nworldserver.exe` +
- /// `WorldServer.pdb`, RSDS `289F1FB3-…` age 1; дамп
- /// `.local/verify-c5c/dis_reload_profiles.txt`): при обработке любого
+ /// DIFF-3 (машинная досверка той же точной пары): при обработке любого
  /// low-бита оригинал выполняет `low &= ~mask; high = 0`, поэтому первый
  /// обработанный low-профиль гасит все pending high-профили. High-бит
  /// снимает только свою маску.

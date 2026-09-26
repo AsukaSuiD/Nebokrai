@@ -1,17 +1,12 @@
-//! DB-владелец `CRsPlayerAccount` BillingServer из `rsplayeraccount.cpp`.
+//! DB-владелец `CRsPlayerAccount` BillingServer из `rsplayeraccount.cpp`:
+//! операции `GetUserPoint`, `PutCashLog`, `BuyPlayerItem` и `BuyItemCode`.
 //!
-//! Реализованы операции `GetUserPoint`, `PutCashLog`, `BuyPlayerItem` и
-//! `BuyItemCode`. Выходной `@TranCode` остаётся `adVarChar(500)`, а принимающий
-//! буфер сохраняет исходную ёмкость 512 байт.
-//!
-//! `tiberius` заменяет ADO/COM, но не SQL владельца. Каждая публичная операция
-//! по-прежнему открывает отдельное соединение; `PutCashLog` открывает одно
-//! соединение на весь переданный snapshot и последовательно переиспользует
-//! одну procedure-форму. Выполняются точные имена `GetUserPoint`,
-//! `PutCashLog`, `buyPlayerItem` и `buyItemCode` с исходными именованными
-//! параметрами. Внешняя транзакция не добавлена: старый ADO-код не вызывал
-//! `BeginTrans/CommitTrans/RollbackTrans`, поэтому транзакционные границы
-//! остаются внутри найденных baseline-процедур MSSQL.
+//! `tiberius` заменяет ADO/COM, но не SQL владельца: те же имена процедур с
+//! исходными именованными параметрами, отдельное соединение на операцию
+//! (`PutCashLog` — одно на весь snapshot с последовательным переиспользованием
+//! одной procedure-формы). Внешняя транзакция не добавлена: ADO не вызывал
+//! `BeginTrans/CommitTrans/RollbackTrans`, транзакционные границы остаются
+//! внутри найденных baseline-процедур MSSQL.
 //!
 //! Входные `std::string` были ANSI `char*`, затем ADO преобразовывал BSTR в
 //! `adVarChar`. Windows-1251 декодирует ту же русскую ANSI-границу, а SQL
@@ -20,7 +15,8 @@
 //! параметр имел тип signed `adInteger`: передача через `bigint -> int`
 //! сохраняет DB-ошибку при значении выше `INT_MAX`, а не меняет bit pattern.
 //! OLE Automation `double` cash-log времени переводится от эпохи
-//! `1899-12-30` в штатный TDS `datetime`; ручной MSSQL wire не создаётся.
+//! `1899-12-30` в штатный TDS `datetime`. Выходной `@TranCode` остаётся
+//! `adVarChar(500)`, принимающий буфер сохраняет исходную ёмкость 512 байт.
 //!
 //! `GetUserPoint` и `BuyPlayerItem` сохраняют DB-fallback `-2`,
 //! `BuyItemCode` — `-5`; их output-поля при ошибке остаются нулевыми/пустыми,
@@ -41,9 +37,6 @@
 //! `GetGame` заменён явным atomic-флагом `log_server_enabled`, который читается
 //! после успешной процедуры в той же исходной позиции; owned запись
 //! возвращается вызывающему manager для постановки в ту же FIFO.
-//! ADO wrappers, COM smart pointers, `VARIANT`, BSTR, STL/CRT helpers и все
-//! `Catch/FUN` cleanup-блоки удалены как library/compiler noise; их
-//! существенные cleanup-эффекты выражены владением и `Drop`.
 
 use std::collections::VecDeque;
 use std::error::Error;

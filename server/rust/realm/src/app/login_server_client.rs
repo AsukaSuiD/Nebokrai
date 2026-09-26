@@ -3,58 +3,30 @@
 //! игрока Login-направления. Источник контракта — та же точная пара,
 //! что у [`crate::app::login_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
-//! - ctor `CMyNetServerClient_Client` `0x46E590`: base `0x46F160`, vtable
-//!   `0x49DB10`, receive buffer ровно `0x5000` (`push 0x5000` + alloc),
-//!   два компаньона `0xC800` в `+0x70/+0x74` (исходный send accumulator —
-//!   без выделенного Rust-поля);
-//! - `OnReceive` `0x46E810`: gate owner `+0xA8`, цикл, пока накоплено `>= 0xC`;
-//!   при включённом флаге `[owner+0x10C]` сначала предел полной длины
-//!   (`declared > [owner+0x118]` → виртуальное `OnTotalMessageSizeOver`
-//!   `[vtable+0x40]`), затем CRC длины `0x47F050`; `declared > size` — останов
-//!   без потери хвоста; при включённом флаге `[owner+0x10D]` — CRC по сжатым
-//!   байтам `[+0xC, declared-0xC]` через `0x47F050`; create только RLE
-//!   `0x4655C0`; opcode допустим в `(0x2FD00, 0x3FC00)` exclusive —
-//!   контекст `[+0x34]→[+0x24]` socket, `[+0x88]→[+0x20]` map, byte-string
-//!   `[+0x90]→[+0x2C]` CD-key, `[+0x2C]→[+0x28]` IPv4; publish через push
-//!   helper `0x46AE90`; consume `sub size, declared`; shrink к `0x100000`
-//!   при возврате под лимит; reject очищает accumulator без отката
-//!   опубликованного;
-//! - четыре пути с `AddForbidIP 0x469390` + `QUIT 0x466730`: предел длины,
-//!   length CRC (`0x46EA79`), content CRC (`0x46EAD4`), opcode вне диапазона
-//!   (`0x46EB1F`, плюс deleting dtor `[edx]` с `push 1`); create-null
-//!   без ban — доказанное отличие ветки;
-//! - `OnClose` `0x46E660`: при пустом CD-key — НИ публикации, НИ вызова
-//!   общего close (`je` сразу в эпилог); при непустом — `new(0x48)`
-//!   `CMessage(0x10001)` через ctor `0x465540`, `Add` CD-key с NUL,
-//!   publish owner `+0xDC` через `0x46AE90` и общий close `0x46C740(0)`;
-//!   фактическое удаление соединения остаётся общему `CServer`.
-//!
-//! Owner сохраняет проверки длины/CRC, RLE create-путь, opcode-range,
-//! metadata, FIFO-публикацию, неполного TCP-хвоста и synthetic disconnect по
-//! непустому CD-key. Небезопасные malformed-границы длины и RLE
+//! Owner сохраняет условные (по owner-флагам) проверки полной длины и обеих
+//! CRC, RLE create-путь, допустимый opcode-диапазон `(0x2FD00, 0x3FC00)`,
+//! metadata, FIFO-публикацию, неполный TCP-хвост и synthetic disconnect только
+//! по непустому CD-key: пустой CD-key не получает ни публикации, ни общего
+//! close (машинный quirk). Небезопасные malformed-границы длины и RLE
 //! детерминированно очищают accumulator и возвращают локальную ошибку без
 //! воспроизведения UB.
 //!
-//! Производный конструктор выделял receive-buffer `0x5000` и второй buffer
-//! `0xC800`. Первый представлен общей `CServerClient` capacity; второй был
-//! техническим send accumulator унаследованного server-client и не получает
-//! отдельного дублирующего поля. `Vec` заменяет ручные `new/delete`, realloc и
-//! финальный `memmove`, сохраняя порядок кадров и неполный хвост. Превышение
-//! длины, обе ошибки CRC и opcode вне диапазона доказанно требуют
+//! Превышение длины, обе ошибки CRC и opcode вне диапазона доказанно требуют
 //! последовательности component diagnostic -> `AddForbidIP` ->
-//! `QuitClientBySocketID`; этот файл классифицирует реакцию, а применит её
-//! следующий фактический `CMyNetServer_Client`. Ошибка создания с
-//! доказанным нулевым результатом очищает accumulator без ban. Старые
-//! `PutDebugString` не превращаются здесь в новый logging API; параметры
-//! диагностик сохранены в типизированных ошибках для server-owner’а.
+//! `QuitClientBySocketID`; этот файл классифицирует реакцию, а применяет её
+//! фактический server-owner (`crate::app::login_server`). Ошибка создания с
+//! доказанным нулевым результатом очищает accumulator без ban — отличие
+//! ветки. Старые `PutDebugString` не превращаются в новый logging API;
+//! параметры диагностик сохранены в типизированных ошибках для server-owner’а.
 //!
+//! Исходный второй buffer `0xC800` был техническим send accumulator
+//! унаследованного server-client и не получает отдельного дублирующего поля.
 //! При длине с sign bit либо `total_len < 12` x86-путь переходил к signed
-//! сравнению и/или unsigned `len - 12`. Как и trailing RLE marker или
+//! сравнению и/или unsigned `len - 12`; как и trailing RLE marker или
 //! декодированный header короче 16 bytes, safe Rust отбрасывает такой вход без
-//! unsafe-чтения. SEH, deleting-destructor thunks,
-//! allocator-копии и ошибочно приписанный World deleting-destructor удалены
-//! как compiler/library noise.
+//! unsafe-чтения.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#login-принятое-клиентское-соединение
 
 use nebokrai_shared::network::{CMsgQueue, CServerClient};
 use nebokrai_shared::protocol::data_crc32;

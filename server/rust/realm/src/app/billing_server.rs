@@ -3,34 +3,28 @@
 //! Billing. Источник контракта — та же точная пара, что у
 //! [`crate::app::billing_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/billingserver.exe`):
-//! - ctor `CServerForGS` `0x40C780`: базовый `CServer` ctor `0x40B8C0`,
-//!   vtable `0x42DC48`, поле `+0x120 = 0`, limits `+0x14C = 0x64` (100) и
-//!   `+0x150 = 0x1000000` — ровно константы компонента;
-//! - `CreateServerClient` `0x40C7C0`: `new` и ctor `CClientForGS` `0x40F180`
-//!   c владельцем `this`.
-//!
 //! Owner создаёт принятое client-состояние, обрабатывает общий command
 //! snapshot и выдаёт конкретную FIFO. Долгоживущие Linux I/O actions
 //! возвращаются runtime через общий `CServer`; этот owner не исполняет
 //! доменные Billing-сообщения и не создаёт второй transport runtime.
-//! Производный конструктор менял общий максимум незавершённых send-операций на
-//! `100` и per-client send-buffer limit на `0x1000000`. В отличие от Auth и
-//! Login World, Billing `CGame` не перезаписывал эти лимиты из setup. После
-//! `Host` он загружал общий allow-list `GSInfoSetup.ini` и сохранял local IPv4;
-//! Rust оставляет обе операции явными и не читает setup внутри сети.
+//! Константы component: максимум незавершённых send — `100`, per-client
+//! send-buffer limit — `0x1000000`. В отличие от Auth и Login World, Billing
+//! `CGame` не перезаписывал эти лимиты из setup. После `Host` он загружал общий
+//! allow-list `GSInfoSetup.ini` и сохранял local IPv4; Rust оставляет обе
+//! операции явными и не читает setup внутри сети.
 //!
 //! Virtual-фабрика выделяла `CClientForGS`; Rust создаёт тот же component-state
-//! непосредственно в admission closure. Старые `operator new`/null и
-//! deleting-destructor заменены обычным владением Rust и `Drop`. Receive-ошибка
-//! Billing parser не добавляет IP-ban и не ставит `QUIT`; close callback
-//! публикует доказанное `0x10EF01` через FIFO. Отсутствующие у производного
-//! класса diagnostics для rate guard и identity lookup остаются no-op.
+//! непосредственно в admission closure. Receive-ошибка Billing parser не
+//! добавляет IP-ban и не ставит `QUIT`; close callback публикует доказанное
+//! `0x10EF01` через FIFO. Отсутствующие у производного класса diagnostics для
+//! rate guard и identity lookup остаются no-op.
 //!
 //! Windows `SetSendRevBuf/SO_SNDBUF=0` принятого клиента не переносится в
 //! Linux как внешне похожая socket option: требуемая backpressure-семантика не
-//! доказана. Неименованное поле конструктора `+0x120 = 0` также не получает
-//! фиктивного Rust-state только ради старого layout.
+//! доказана (UNKNOWN). Неименованное поле конструктора `+0x120 = 0` также не
+//! получает фиктивного Rust-state только ради старого layout.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#billing-listener
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};

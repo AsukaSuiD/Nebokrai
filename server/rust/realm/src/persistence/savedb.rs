@@ -4,12 +4,6 @@
 //! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
 //! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
-//! Машинно подтверждённые точки (S_PUB32 `.exe/Nworldserver.exe`, первая
-//! секция): свободный `?DoSaveData@@YAXXZ` `1:0001b610`, variadic gate
-//! `?ShowSaveInfo@@YAXPBDZZ` `1:00000720` с глобалом `?g_bShowSaveInfo@@3_NA`
-//! и Login-ответ `?SendErrLog@@YAXDJJPBD@Z` `1:00000f30`; worker-вход
-//! `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30` собирает job у process-owner-а.
-//!
 //! Владелец собирает snapshots игроков, стран, регионов, товаров, организаций,
 //! JJC, GodsBattle, variables и Largess и передаёт их соответствующим World DB
 //! owners. Порядок стадий, отдельные соединения, SQL/procedures и отсутствие
@@ -26,6 +20,8 @@
 //! потребитель в действующем коде — save-оркестрация (`SaveDataLogPublisher`).
 //! `WorldSaveThreadJob` живёт здесь, потому что его
 //! `lifecycle` собран из типов этого модуля.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 
 use std::collections::BTreeMap;
 use std::error::Error;

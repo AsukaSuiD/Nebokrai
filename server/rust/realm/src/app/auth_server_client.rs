@@ -3,52 +3,22 @@
 //! клиента Auth-направления. Источник контракта — та же точная пара,
 //! что у [`crate::app::auth_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/authserver.exe`):
-//! - ctor `CMyNetServerClient_Auth` `0x415A10`: base `0x4147E0`, receive buffer
-//!   ровно `0xA00000` (`push 0xA00000` + alloc), vtable `0x42E470`, объект
-//!   `0xC8` (см. `CreateServerClient` `0x4127B0`);
-//! - `OnAccept` `0x415AD0`: clear byte `[+0xAC]` (close flag), `new(0x44)`
-//!   `CMessage(0xCF401)` через ctor `0x4136B0`, контекст `[client+0x2C]` →
-//!   `[+0x20]` (IPv4), `[client+0x34]` → `[+0x1C]` (socket), публикация в
-//!   owner `+0xDC` через push helper `0x40D9F0`;
-//! - `OnClose` `0x415B60`: `CMessage(0xCF402)` с тем же socket/IP контекстом и
-//!   публикацией до общего base close `0x413290(0)`;
-//! - `OnReceive` `0x415C10`: gate owner `+0xA8`; цикл, пока накоплено `>= 0xC`;
-//!   CRC длины через общий `DataCrc32 0x415F80` (mismatch → обнуление
-//!   accumulator), `declared > size` — останов без потери хвоста, create через
-//!   `CreateMessageWithoutRLE 0x413760` (без аргумента времени — поле
-//!   recv-tick у принятого Auth сообщения остаётся нулём ctor), повторный CRC
-//!   содержимого; контекст `[+0x34]→[+0x1C]` socket, `[+0x88]→[+0x18]` map,
-//!   byte-string из `[+0x90]`→`[+0x24]` CD-key, `[+0x2C]→[+0x20]` IPv4;
-//!   публикация в owner `+0xDC` через `0x40D9F0`; consume `sub size, declared`;
-//!   shrink к `0x100000` при возврате под лимит (capacity `[+0x64] > 0x100000`
-//!   и size `≤ 0x100000`); reject очищает accumulator без отката ранее
-//!   опубликованных сообщений.
-//!
-//! Owner реализует `OnAccept`, `OnClose` и безопасный разбор полного
-//! `OnReceive` envelope. Malformed-границы, на которых исходный x86 уходил в
-//! небезопасную арифметику, детерминированно очищают accumulator и возвращают
-//! локальную ошибку без воспроизведения UB.
-//!
-//! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
-//! `0x100000`. Rust использует общий `CServerClient` с Auth-capacity для
-//! receive; `Vec` send-buffer растёт сам, поэтому его исходная резервная
-//! capacity не имеет отдельной наблюдаемой семантики.
-//!
 //! `OnAccept` снимает close flag и ставит сообщение `0x0CF401`; `OnClose`
 //! сначала ставит `0x0CF402`, затем выполняет общий close. Оба сообщения несут
 //! socket ID и peer IPv4. `OnReceive` разбирает
-//! `[total_len, crc(total_len), crc(normalized_message), message]`, создаёт
-//! только несжатый Auth `CMessage`, копирует socket/map/CD-key/IP metadata и
-//! передаёт владение общей FIFO-очереди.
+//! `[total_len, crc(total_len), crc(normalized_message), message]` только
+//! через несжатый create — поле recv-tick принятого Auth сообщения остаётся
+//! нулём ctor (см. `crate::app::auth_message`), — копирует
+//! socket/map/CD-key/IP metadata и передаёт владение общей FIFO.
 //!
-//! Length CRC проверяется до ожидания полного кадра. Content CRC считается по
-//! нормализованному `CMessage`, а не обязательно по буквальному входному
-//! header: create-путь перезаписывает его первое слово фактической длиной.
-//! `Vec::drain` заменяет ручные realloc/memmove, сохраняя порядок и неполный
-//! хвост. Второй мегабайтный buffer не читается этим исходником иначе, чем как
-//! общий send accumulator; allocator, fill/vector internals, SEH и deleting-
-//! destructor удалены как технический шум.
+//! Length CRC проверяется до ожидания полного кадра; content CRC считается по
+//! нормализованному `CMessage`, чьё первое header-слово create-путь
+//! перезаписал фактической длиной. Malformed-границы, на которых исходный x86
+//! уходил в небезопасную арифметику, детерминированно очищают accumulator и
+//! возвращают локальную ошибку без воспроизведения UB; неполный хвост
+//! сохраняется.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#auth-принятое-login-соединение
 
 use nebokrai_shared::network::{CMsgQueue, CServerClient};
 use nebokrai_shared::protocol::data_crc32;

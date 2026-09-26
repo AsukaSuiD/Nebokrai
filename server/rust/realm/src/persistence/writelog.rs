@@ -1,7 +1,6 @@
 //! Payload-контракт FIFO журнала WorldServer Realm.
 //!
-//! Источник — точная пара `Nworldserver.exe`/`WorldServer.pdb`
-//! (RSDS 289F1FB3-96A0-4FF4-8B5D-1FD17B50B751).
+//! Источник — та же точная пара, что у [`crate::persistence::savedb`].
 
 use nebokrai_shared::values::{CGuid, TagTime};
 

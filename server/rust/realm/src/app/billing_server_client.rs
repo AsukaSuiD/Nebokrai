@@ -3,38 +3,11 @@
 //! клиента направления Billing. Источник контракта — та же точная пара, что у
 //! [`crate::app::billing_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/billingserver.exe`):
-//! - ctor `CClientForGS` `0x40F180`: base `0x40E0F0`, vtable `0x42DEE8`,
-//!   receive buffer ровно `0xA00000` (`push 0xA00000` + alloc), два компаньона
-//!   `0x100000` в семействе смещений `+0x64/+0x70`;
-//!   send-buffer семьи `0x100000` — точных значений типа ObjectSize;
-//! - `OnReceive` `0x40F320`: gate owner `+0xA8`, цикл, пока накоплено `>= 0xC`;
-//!   CRC длины через общий `DataCrc32 0x413530` (mismatch → discard
-//!   accumulator), `declared > size` — останов без потери хвоста,
-//!   create через `CreateMessageWithoutRLE` `0x40FA30`, повторный CRC
-//!   содержимого; context assignment с ограниченной зарезервированной формой
-//!   сообщения (`[client+0x34]->[+0x24]`, `[client+0x88]->[+0x20]`,
-//!   byte-string из `[client+0x90]`→`[+0x2C]`, `[client+0x2C]->[+0x28]`);
-//!   публикация в owner `+0xDC` через push helper `0x40CCC0`; consume
-//!   `sub size, declared`; shrink к `0x100000` при возврате под лимит; reject
-//!   обнуляет accumulator без отката ранее опубликованных сообщений;
-//! - `OnClose` `0x40F230`: `new CMessage(0x10EF01)` размером `0x48`,
-//!   `Add` long `[client+0x88]` (map identity), `Add` cstring `[client+0xC]`
-//!   (peer IPv4 dotted с NUL — общий writer включает завершающий NUL),
-//!   `Add` long `[client+0x8]` (long port); публикация в ту же FIFO до
-//!   общего base close `0x40D850(0)`.
-//!
 //! Owner реализует закрытие и разбор корректного либо неполного `OnReceive`.
 //! Небезопасные malformed-границы длины и короткого внутренного header
 //! детерминированно очищают accumulator и возвращают локальную ошибку.
 //! `SetSendRevBuf` остаётся отдельной transport-границей: совместимый Linux
 //! socket option неизвестен.
-//!
-//! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
-//! `0x100000`. Rust использует общий `CServerClient` с Billing-capacity для
-//! receive; его owned send accumulator растёт сам и не получает второго
-//! component-поля. `Vec::drain` заменяет ручные realloc/memmove, сохраняя
-//! порядок кадров и неполный TCP-хвост.
 //!
 //! Receive-envelope имеет форму
 //! `[total_len, crc(total_len), crc(normalized_message), message]`. Length CRC
@@ -49,17 +22,15 @@
 //! не превращая опечатку в новый logging API.
 //!
 //! `OnClose` всегда публикует `0x10EF01`, добавляя текущий map ID, dotted peer
-//! IPv4 с NUL и унаследованный `CMySocket` port. Accept-path заменял IP через
-//! `inet_ntoa`, но не менял constructor port `5000`; `Ipv4Addr` и
-//! `DEFAULT_PORT` воспроизводят эти значения без WinSock. Затем устанавливается
-//! общий close-state. Socket ID, CD-key и числовой IP сообщению не присваиваются.
+//! IPv4 с NUL (accept-path через `inet_ntoa`) и constructor port `5000`
+//! (`Ipv4Addr` и `DEFAULT_PORT` воспроизводят значения без WinSock) до общего
+//! close-state. Socket ID, CD-key и числовой IP сообщению не присваиваются.
 //!
-//! Для длины с sign bit либо `total_len < 12` x86-путь достигал signed
-//! сравнения и/или unsigned `len - 12`; внутреннее сообщение длиной 1..15
-//! bytes также читало header за границей. Safe Rust отбрасывает весь текущий
-//! accumulator без воспроизведения UB. SEH, allocator-копии,
-//! security cookie и деструкторные механизмы удалены как compiler/library
-//! noise; освобождение обоих buffers выражено владением и `Drop`.
+//! Malformed-границы длины (sign bit, `total_len < 12`) и короткого header,
+//! где x86 уходил в signed/unsigned арифметику или чтение за границей, safe
+//! Rust отбрасывает весь текущий accumulator без воспроизведения UB.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#billing-принятое-game-соединение
 
 use std::net::Ipv4Addr;
 

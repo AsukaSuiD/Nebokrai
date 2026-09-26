@@ -1,5 +1,5 @@
-//! FIFO загруженных игроков, подтверждённая `worldserver.exe` и
-//! `worldserver.pdb`.
+//! FIFO загруженных игроков, подтверждённая `Nworldserver.exe` и
+//! `WorldServer.pdb`.
 //!
 //! Запись сохраняет 20-byte account buffer, player/client IDs и nullable
 //! player-owner. Size и pop блокируются независимо, FIFO передаёт владение,

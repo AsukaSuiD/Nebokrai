@@ -1,7 +1,7 @@
 //! GMA-dispatcher `OnGMAMessage` WorldServer в составе Realm `app/`.
 //!
 //! kick-player `0x4FD01` и transport branches `0x4FD04`, `0x60401`, `0x60402`.
-//! Источник контракта — `worldserver.exe` и `worldserver.pdb`.
+//! Источник контракта — `Nworldserver.exe` и `WorldServer.pdb`.
 //! Kick-player сохраняет `_strcmpi` lookup аккаунта, online-list gate, точные
 //! payload-ы ошибок LoginServer, отсутствие Login-ответа на успешном пути и
 //! два `AddLogText` в исходном порядке. Небезопасные `char[256]`, `strcpy` и

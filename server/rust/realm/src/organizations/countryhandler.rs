@@ -8,21 +8,19 @@
 //! [`CountrySaveSink`], чья реализация остаётся в старом `game.rs`.
 //!
 //! `Run` сначала удаляет истёкшие top-info по отдельным wrapping ticks, затем
-//! вызывает `CCountry::AI` только для страны с ненулевым ID и именем короля.
-//! Суточное обновление идёт в том же country order. Временное извлечение owner-а
-//! для governance-вызова устраняет aliasing, не меняя slot между сообщениями.
-//!
-//! Top-info packets сохраняют исходные поля и C-строки; ошибки отправки не
-//! меняют очередь. Initial-config пишет размер всей карты и records без
-//! отдельного key; пустой slot блокирует сериализацию вместо null-dereference.
+//! вызывает `CCountry::AI` только для страны с ненулевым ID и именем короля;
+//! суточное обновление идёт в том же country order. Временное извлечение
+//! owner-а для governance-вызова устраняет aliasing, не меняя slot. Top-info
+//! packets сохраняют исходные поля и C-строки; ошибки отправки не меняют
+//! очередь. Initial-config пишет размер всей карты и records без отдельного
+//! key; пустой slot блокирует сериализацию вместо null-dereference.
 //!
 //! Решение по инвентарю: process-global `AtomicI32` next top-info ID оригинала
-//! перенесён в поле `next_top_info_id` handler-а. Поле инициализируется нулём в
-//! constructor и монотонно wrapping-инкрементируется при каждом
-//! `add_one_top_info` без сброса: pre-increment от нуля выдаёт ту же
-//! последовательность 1, 2, 3…, что `fetch_add` от единицы в оригинале, и так
+//! перенесён в поле `next_top_info_id` handler-а (нулевой init, монотонный
+//! wrapping-increment при каждом `add_one_top_info`): pre-increment от нуля
+//! выдаёт ту же последовательность 1, 2, 3…, что `fetch_add` от единицы, и так
 //! же wrapping-переходит через `i32::MAX`. Один process handler оригинала
-//! эквивалентен одному Rust owner-у, поэтому observable поведение не меняется.
+//! эквивалентен одному Rust owner-у, observable поведение не меняется.
 //!
 //! Run-, new-day- и initialize-отчёты живут вместе с владельцем;
 //! `CountryHandlerSerializeError` дополняет `CountrySerializeError`, а

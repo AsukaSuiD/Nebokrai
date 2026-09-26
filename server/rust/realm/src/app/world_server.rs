@@ -1,28 +1,19 @@
 //! Сервер принятых GameServer-соединений WorldServer из
 //! `nets/networld/mynetserver.cpp`; Realm — общий обладатель принятого
-//! server-направления World. Источник контракта — та же точная
-//! пара, что у [`crate::app::world_message`].
+//! server-направления World. Источник контракта — та же точная пара, что у
+//! [`crate::app::world_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):
-//! - ctor `CMyNetServer` `0x428250`: базовый `CServer` ctor `0x427370`,
-//!   vtable `0x54107C`, поле `+0x120 = 0`, limits `+0x14C = 100` и
-//!   `+0x150 = 0x2000000` — ровно `WORLD_DEFAULT_MAX_IN_FLIGHT_SENDS` и
-//!   `WORLD_DEFAULT_PERMITTED_SEND_BYTES`;
-//! - `CreateServerClient` `0x428290`: `new` объект `0xC8` байт и ctor
-//!   `CMyServerClient` `0x42BBA0` с владельцем `this`.
+//! Owner задаёт World limits (максимум незавершённых send — `100`, per-client
+//! send-buffer limit — `0x2000000`), создаёт принятое client-состояние и
+//! хранит единственную FIFO обычных сообщений и reconnect handoff. Close
+//! публикует `0x3FC02` с map ID; parser error не добавляет ban или `QUIT`.
+//! Общий `CServer` владеет I/O/runtime, этот слой — только World component
+//! state и callbacks. Типизированное `LoginClientReconnected` заменяет
+//! исходную публикацию `0x3FC03 + CMyNetClient*`: тот же тип обрабатывает сам
+//! диспетчер `OnServerMessage`, а wire-передача указателя не получает
+//! Rust-значения.
 //!
-//! Owner задаёт World limits, создаёт принятое client-состояние и хранит
-//! единственную FIFO обычных сообщений и reconnect handoff. Close публикует
-//! `0x3FC02` с map ID; parser error не добавляет ban или `QUIT` (см.
-//! `OnReceive` `0x42BD00` в [`crate::app::world_server_client`]). Общий
-//! `CServer` владеет I/O/runtime, а этот слой сохраняет только World
-//! component state и callbacks. Типизированное `LoginClientReconnected`
-//! заменяет исходную публикацию `0x3FC03 + CMyNetClient*`: тот же тип
-//! обрабатывает сам диспетчер `OnServerMessage` (`cmp eax,0x3FC03` по
-//! адресу `0x4ADD4A`; ранняя запись ошибочно относила сравнение к
-//! `OnTeamMessage` — в его теле ссылок на тип нет), а wire-передача
-//! указателя не получает Rust-значения.
-
+//! Доказательства: docs/reconstruction/realm-services.md#world-принятые-game-соединения
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 

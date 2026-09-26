@@ -1,7 +1,7 @@
 //! Входящий Team-owner WorldServer в составе Realm `app/`.
 //!
-//! Источник контракта `OnTeamMessage` — `worldserver.exe` и
-//! `worldserver.pdb`.
+//! Источник контракта `OnTeamMessage` — `Nworldserver.exe` и
+//! `WorldServer.pdb`.
 //!
 //! Реализация сохраняет opcodes `0x60001..0x6000C`, условный порядок чтения
 //! payload и все действующие virtual side effects. После отсутствующего

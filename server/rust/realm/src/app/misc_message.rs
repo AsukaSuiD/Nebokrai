@@ -1,42 +1,20 @@
 //! Сообщение сетевого направления MiscServer из `nets/netmisc/message.cpp`;
 //! Realm — владелец Misc-направления объединённого Realm-процесса.
 //!
-//! Источник контракта — точная пара `.exe/miscserver.exe`
-//! SHA-256 `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
-//! ImageBase `0x400000`, PE timestamp `0x53A26D7D` ↔ `.exe/miscserver.pdb`
-//! GUID `FE6CDEF1-D110-4C25-ABE9-F66D5E665F3B` age 1 (CodeView RSDS).
+//! Конструктор создаёт базовый 16-байтовый header, записывает `MsgType` в
+//! слово `+4` и обнуляет `MapID`, `SocketID`, IP и receive tick. Оба
+//! create-пути копируют все четыре слова входного header и нормализуют длину
+//! по реально добавленному payload (порог `0x20001` — capacity `0x100000`
+//! либо `len*8`); `HeaderTooShort` относится к классу повреждённого wire.
+//! Исходный RLE-create был закрыт CRITICAL_SECTION из-за общего static
+//! scratch; owned `Vec` исключает это единственное global-состояние, поэтому
+//! create-mutex осознанно не вводится. Rust получает tick параметром:
+//! совместимый монотонный wrapping-счётчик Linux runtime, wire-владелец не
+//! подменяет `timeGetTime` системным временем.
 //!
-//! Машинно подтверждённые точки (первая секция `.text`, VA по дизассемблеру):
-//! - ctor `0x4107A0` хранит `MsgType` в header-слово `+4` и обнуляет
-//!   runtime-поля `+0x18/+0x1C/+0x20/+0x24` объекта `0x28` байт, vtable
-//!   `0x4259F0`;
-//! - `CreateMessage` `0x4107D0`: весь decode/create/copy/free закрыт
-//!   `CRITICAL_SECTION 0x550564` до возврата (оба пути выхода) — защищаемым
-//!   состоянием был общий static scratch (`0x450548` статический, `0x550548`
-//!   выделяемый); owned `Vec` исключает это единственное global-состояние,
-//!   поэтому create-mutex осознанно не вводится. Порог `cmp len,0x20000; jbe` —
-//!   вход короче `0x20001` получает capacity `0x100000`, больший — `len*8`;
-//!   failure decode `0x410C00` возвращает null; `timeGetTime` пишется в `+0x24`;
-//! - `CreateMessageWithoutRLE` `0x410920`: null/нулевая длина → null; та же
-//!   16-байтовая header-копия без отдельной проверки `len < 16`, поэтому
-//!   текущий `HeaderTooShort` относится к классу повреждённого wire;
-//! - `Send` `0x4109F0`: отправитель `g_Game+0x78`, null → 0; сериализация CS
-//!   `0x55054C` вокруг envelope helper `0x410B50` (`total_len = len + 0xC`,
-//!   scratch `0x55057C`, message копируется сразу после префикса), два общих
-//!   `DataCrc32 0x405730`, виртуальный send `[vtable+0x40]` с `prioritized` и
-//!   flags `0`, выход через LeaveCriticalSection;
-//! - `Run` `0x410AB0`: маска `type - (type & 0xFF)`, `0x14EC00` → пустой
-//!   destructor-стаб `0x4057A0` и возврат `1`, `0x14ED00` → `0x4036B0`
-//!   (OnMSG_W2M_AUCTION) и `1`, `0x16EA00` → `0x403C10` (OnMSG_M2M_Fuction)
-//!   и `1`, прочие → `0x403CC0` (OnOtherMsg) и строго `0` — в отличие от
-//!   World-направления.
-//!
-//! Конструктор создаёт базовый 16-байтовый header, записывает `MsgType` в слово
-//! `+4` и обнуляет `MapID`, `SocketID`, IP и receive tick. Оба create-пути
-//! копируют все четыре слова входного header, затем нормализуют длину по реально
-//! добавленному payload. Rust получает tick параметром: Linux runtime
-//! предоставляет совместимый монотонный wrapping-счётчик, а этот wire-владелец
-//! не подменяет `timeGetTime` системным временем.
+//! `Run` маскирует младший byte: `0x14EC00` — no-op с возвратом 1, `0x14ED00`
+//! (W2M auction) и `0x16EA00` (M2M) — свои handlers с 1, прочие — `OnOtherMsg`
+//! и строго `0` — в отличие от World-направления (quirk).
 //!
 //! `Send` строит межсерверный envelope `[total_len, crc(total_len),
 //! crc(message), message]`, где все три слова little-endian, а CRC — IEEE из
@@ -49,6 +27,8 @@
 //! `MessageHandlers` и `MessageSender` — узкие синхронные selector/send
 //! границы доменного владельца и фактического клиента; они не принимают
 //! игровых решений и не создают общей административной архитектуры.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#misc-сообщение
 
 use parking_lot::Mutex;
 

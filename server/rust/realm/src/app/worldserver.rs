@@ -1,17 +1,16 @@
 //! Технические функции process-owner-а исторического WorldServer в составе
 //! Realm `app/`.
 //!
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`. Файл хранит
-//! operator-log адаптеры, имя/состояние процесса и узкие lifecycle helpers,
-//! используемые `CGame`; доменный `Init/MainLoop/Release` живёт в
-//! `world_game_init`/`world_main_loop`.
+//! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`.
+//! Файл хранит operator-log адаптеры, имя/состояние процесса и узкие
+//! lifecycle helpers, используемые `CGame`; доменный `Init/MainLoop/Release`
+//! живёт в `world_game_init`/`world_main_loop`. Здесь же опубликованы
+//! resource/reload context-границы и типовой блок перезагрузки world-сервера.
 //!
 //! Windows MFC/console side effects заменены структурированными результатами и
 //! stderr process-оболочки. Byte-exact format keys, порядок публикации и
-//! различие штатной ошибки, retained owner и безопасной остановки сохраняются.
-//! Rust не вводит второй singleton либо дополнительный process lifecycle.
-//! Здесь же опубликованы resource/reload context-границы и типовой блок
-//! перезагрузки world-сервера; их владельцы-железо реализуют процесс.
+//! различие штатной ошибки, retained owner и безопасной остановки сохраняются;
+//! второй singleton либо дополнительный process lifecycle не вводится.
 //!
 //! В конце файла собраны data-контракты бывшего `CGame`, цитируемые полями
 //! диспетчерских outcome/report-типов `app::servermessage`: CD-key snapshot,
@@ -22,9 +21,7 @@
 //!
 //! Там же свободный monitoring-owner `SendErrLog` (`send_err_log_to_login` +
 //! `WorldErrorLogDelivery`): исходная cdecl-функция принадлежит коду процесса
-//! WorldServer, а не nets-классу `CMessage` (S_PUB32 `?SendErrLog@@YAXDJJPBD@Z`
-//! `1:00000f30` той же пары `Nworldserver.exe`/`WorldServer.pdb`, RSDS
-//! совпадает), и публикует Login wire
+//! WorldServer, а не nets-классу `CMessage`, и публикует Login wire
 //! `0x0001_FE08` средствами [`crate::app::world_message::CMessage`]. Поэтому
 //! её место у process-owner-а Realm `app/`, а не в `app::world_message`,
 //! который воспроизводит только сам nets-класс.
@@ -33,6 +30,8 @@
 //! IPv4 через nodename-lookup системного resolver-а) имеет здесь единственного
 //! мирового владельца; приватные per-runtime копии той же формы у
 //! Auth/Billing/Login не сводились.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 
 use std::error::Error;
 use std::fmt;

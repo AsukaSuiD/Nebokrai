@@ -1,29 +1,17 @@
 //! Исходящее LoginServer-направление WorldServer из `nets/networld/mynetclient.cpp/.h`;
-//! Realm — исходящий край World к Login. Источник контракта —
-//! та же точная пара, что у [`crate::app::world_message`].
+//! Realm — исходящий край World к Login. Источник контракта — та же точная
+//! пара, что у [`crate::app::world_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):
-//! - ctor `CMyNetClient` `0x429B70`: базовый `CClient` ctor `0x428750` c
-//!   vtable `0x54140C` (20 слотов; `OnReceive` — слот 7, `HandleClose` —
-//!   слот 19);
-//! - `OnReceive` `0x429C30`: один вызов читает не более `0x2800` (общий
-//!   `CLIENT_RECEIVE_CHUNK` Shared transport); `recv`-ошибка только
-//!   журналируется, `recv == 0` — журналируется без публикации; цикл frames,
-//!   пока накоплено `>= 0xC`: CRC длины, `declared < 0` — обнуление
-//!   накопленного размера и ошибка, `declared > size` — останов без потери
-//!   хвоста, create через `CreateMessageWithoutRLE 0x422F20`, повторный CRC
-//!   содержимого, публикация в FIFO `+0x100` (`push` helper `0x428710`),
-//!   consume `declared`; сокращение capacity к `0x100000` при возврате под
-//!   лимит; при любом reject оставшийся accumulator обнуляется, а уже
-//!   опубликованные сообщения сохраняются;
-//! - `CClient::OnClose` `0x428E00`: prereq-вызов `0x42A2B0(0)`, затем
-//!   `m_bConnect [client+0xB4] = 0` и виртуальный `HandleClose` (vtable
-//!   `+0x4C`); `CMyNetClient::HandleClose` `0x429BA0` публикует `new
-//!   CMessage(0x3FC01)` в ту же FIFO `+0x100`. Rust выполняет исходный
-//!   `OnClose` непосредственно на EOF/I/O ошибке, не дожидаясь отдельного
-//!   thread-event: сброс connect-флага, затем публикация `0x3FC01` — тот же
-//!   наблюдаемый порядок двух эффектов и место публикации.
-
+//! Receive разбирает поток envelope `[total_len, crc(total_len), crc(message),
+//! message]`: length CRC после накопления 12 байт, content CRC по
+//! нормализованному сообщению, все полные кадры за один вызов, неполный хвост
+//! сохраняется; reject очищает accumulator без отката уже опубликованного,
+//! recv-ошибки только журналируются. `OnClose` выполняется непосредственно на
+//! EOF/I/O ошибке, не дожидаясь thread-event: сброс connect-флага, затем
+//! публикация `0x3FC01` в ту же FIFO — тот же наблюдаемый порядок двух
+//! эффектов и место публикации.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-исходящее-login-соединение
 use std::error::Error;
 use std::fmt;
 use std::io;

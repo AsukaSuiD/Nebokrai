@@ -28,7 +28,7 @@
 //! realm-обработчик. Двухфазная `0x6011F` декодирует игрока из wire-хвоста
 //! стороной старого владельца игры между realm-разбором и realm-завершением.
 //!
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
@@ -161,7 +161,7 @@ pub enum OrganizingCityWarResultContextBlock {
 ///
 /// Исходный порядок — это сначала main-loop FIFO, а callback лишь кладёт
 /// подтверждение; терминал публикует точную выявленную форму outcome из
-/// `.exe/worldserver.exe`, и его изменение игры происходит только при
+/// `.exe/Nworldserver.exe`, и его изменение игры происходит только при
 /// чтении владельца игры, как и раньше.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueuedUnionApplicationTerminal {
@@ -252,7 +252,7 @@ struct WorldUnionApplicationRuntimeState {
 /// Это слитый владелец: открытые `Arc`-фабрики четырёх endpoint-узлов и есть
 /// исходные точки подключения подтверждений; объектное поле `state` по
 /// объявлению берёт собственную форму shared state из orginal-and-rec host
-/// `worldserver.exe + worldserver.pdb`. Расхождения очередей с прежним
+/// `Nworldserver.exe + WorldServer.pdb`. Расхождения очередей с прежним
 /// `WorldUnionApplicationRuntimeOwner` нет — старый файл ссылается на этот же
 /// `Arc`-state через type-алиас.
 #[derive(Clone, Default)]

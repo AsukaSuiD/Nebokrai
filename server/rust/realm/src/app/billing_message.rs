@@ -1,55 +1,37 @@
 //! Сообщение направления GameServer ↔ BillingServer из
 //! `nets/netbilling/message.cpp`; Realm — владелец Billing-направления
-//! объединённого Realm-процесса.
-//!
-//! Источник контракта — точная пара `.exe/billingserver.exe`
-//! SHA-256 `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
-//! ImageBase `0x400000`, PE timestamp `0x53ABDA0D` ↔ `.exe/billingserver.pdb`
-//! GUID `CAFACA76-74E6-4ED3-981C-D2963EEB2C3C` age 1 (CodeView RSDS, match).
-//!
-//! Машинно подтверждённые точки (первая секция `.text`, VA по дизассемблеру):
-//! - ctor `0x40F860` хранит `MsgType` в header-слово `+4`, обнуляет пять
-//!   dword runtime-полей `+0x18..+0x28` и строит пустую вложенную std::string
-//!   CD-key по `+0x2C` (capacity `0xF`, размер 0), vtable `0x42E040`;
-//! - `CreateMessage` `0x40F8E0`: весь decode/create/copy/free закрыт
-//!   `CRITICAL_SECTION 0x457958` до возврата; порог `cmp len,0x20000; jbe` —
-//!   вход короче `0x20001` получает capacity `0x100000` (static `0x457980`),
-//!   больший — `len*8` (temp `0x557980`); failure decode `0x40CE30` возвращает
-//!   null; owned `Vec` исключает общий scratch, поэтому create-mutex осознанно
-//!   не вводится, как и в остальном Realm app;
-//! - `SendToGS` `0x40F6F0` и `SendToAllGS` `0x40F780`: sender `g_Game+0x10C`,
-//!   **critical section в обоих отсутствует** (тела из ~0x80 байт без
-//!   Enter/LeaveCriticalSection), envelope helper `0x40CD80`
-//!   (`total_len = len + 0xC`, scratch `0x457970`), два общих
-//!   `DataCrc32 0x413530`; null-проверки sender у исходных тел нет — в
-//!   доказанном call graph sender инициализирован к моменту первого send,
-//!   typed `ServerCommandHandle` в Rust создаётся вместе с server-owner.
-//! - `Run` `0x40F810`: маска `type - (type & 0xFF)`, `0xFF000/0xEF200` →
-//!   `0x4139D0` (OnBillingMessage), `0xEF100/0x10EF00` → `0x413580`
-//!   (OnServerMessage), любая ветвь возвращает `1`, неизвестный тип — no-op.
+//! объединённого Realm-процесса; исходные идентификаторы сборки — в evidence
+//! (см. ниже).
 //!
 //! Конструктор пишет полный `MsgType` в header `+4`, оставляет пустой CD-key,
 //! нулевые socket/map/IP и null player/region. Rust хранит только metadata,
 //! которые соседний `CClientForGS::OnReceive` действительно переносит в
-//! сообщение (`[client+0x34]→[+0x24]` socket, `[client+0x88]→[+0x20]` map,
-//! `[client+0x2C]→[+0x28]` number IP, byte-string `[client+0x90]`→`[+0x2C]` CD-key);
-//! бестиповые аналоги `m_pPlayer/m_pRegion` не вводятся до их доменного владельца.
+//! сообщение; бестиповые аналоги `m_pPlayer/m_pRegion` не вводятся до их
+//! доменного владельца.
 //!
-//! Оба create-пути копируют четыре слова входного header, затем нормализуют
-//! первое слово по реально добавленному payload. Вход 1..15 bytes и переполнение
-//! умножения относятся к внутренним memory/arithmetic defects: safe Rust
-//! детерминированно отклоняет их до чтения header либо выделения буфера.
+//! Оба create-пути копируют четыре слова входного header и нормализуют первое
+//! слово по реально добавленному payload; порог `0x20001` даёт capacity
+//! `0x100000` либо `len*8`. Вход 1..15 bytes и переполнение умножения
+//! относятся к внутренним memory/arithmetic defects: safe Rust
+//! детерминированно отклоняет их до чтения header либо выделения. Оба
+//! send-метода строят envelope `[total_len, crc(total_len), crc(message),
+//! message]`; Billing `CServer` принимает buffer синхронно, owned
+//! socket-команда копируется до возврата.
 //!
-//! Оба send-метода строят envelope `[total_len, crc(total_len), crc(message),
-//! message]`. Billing `CServer` принимает buffer синхронно и общий Linux-owner
-//! копирует его в owned socket-команду до возврата.
+//! Значимое различие сериализации (машинный факт): исходный `CreateMessage`
+//! был закрыт CRITICAL_SECTION из-за общего static scratch — owned `Vec`
+//! исключает scratch, поэтому create-mutex осознанно не вводится, как и в
+//! остальном Realm app; send-методы CS не имели и не получают.
+//! Null-проверки sender у исходных тел нет: в доказанном call graph sender
+//! инициализирован к первому send; typed `ServerCommandHandle` создаётся
+//! вместе с server-owner.
 //!
 //! `Run` маскирует младший byte opcode: семейства `0x0FF000/0x0EF200`
 //! передаются `OnBillingMessage`, `0x0EF100/0x10EF00` — `OnServerMessage`,
-//! остальные являются no-op; результат всегда `1`. Два handler-метода — узкая
+//! остальные — no-op; результат всегда `1`. Два handler-метода — узкая
 //! граница именно этих свободных функций, а не новый общий dispatch framework.
-//! STL string, allocator, SEH, deleting destructor и compiler cleanup удалены
-//! как compiler/library noise; их эффект выражен владением и `Drop`.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#billing-сообщение
 
 use nebokrai_shared::network::{
     decode_rle, CBaseMessage, RleDecodeError, ServerClientMessageContext, ServerCommandHandle,

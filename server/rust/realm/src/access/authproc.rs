@@ -1,67 +1,37 @@
-//! Владелец Auth MSSQL-команд из `dbaccess/authdb/authproc.cpp`.
+//! Владелец Auth MSSQL-команд из `dbaccess/authdb/authproc.cpp`: `do_auth`,
+//! `do_auth_ex`, `do_lock`, `do_write_log`, построение ответов, обработка
+//! команд и lifecycle DB workers.
 //!
-//! Файл реализует `do_auth`, `do_auth_ex`, `do_lock`, `do_write_log`,
-//! построение ответов, обработку команд и lifecycle DB workers.
+//! `tiberius` заменяет ADO/COM при тех же именованных процедурах; каждый
+//! вызов открывает отдельное соединение, output-параметры читаются узким
+//! `DECLARE/EXEC/SELECT` batch, procedure name берётся только из исходной
+//! карты `ConfigReader` и экранируется как SQL identifier. Драйвер без TLS
+//! (исходная ODBC-строка не запрашивала шифрование). Auth и log используют
+//! собственные setup-поля и перечитывают settings перед каждым queue
+//! snapshot / `do_write_log`, сохраняя config reload.
 //!
-//! `tiberius` заменяет ADO/COM и выполняет те же именованные MSSQL-процедуры.
-//! Каждый вызов по-прежнему открывает отдельное соединение; параметры account,
-//! password и IPv4 передаются как bind values, а output-параметры читаются
-//! через узкий `DECLARE/EXEC/SELECT` batch. Procedure name берётся только из
-//! исходной карты `ConfigReader` и экранируется как SQL identifier. Драйвер
-//! собран без TLS feature: исходная ODBC-строка не запрашивала шифрование, а
-//! целевой runtime — специально поднятая локальная baseline MSSQL.
-//! Auth и log соединения используют собственные host/database/user/password
-//! поля исходного setup; секреты не входят ни в SQL-текст, ни в ошибки этого
-//! владельца. Auth settings обновляются перед каждым queue snapshot, log
-//! settings — перед каждым `do_write_log`, сохраняя config reload.
+//! `do_write_log` снимает local time один раз на snapshot, атомарно забирает
+//! coalesced FIFO `ServerInfo` и последовательно пишет `PutOnlineLog`
+//! (`@LogTime`, `@ls`, `@ws`, `@gs`, `@Amount`; схема `Account.bak`): падение
+//! соединения или вызова теряет весь уже вынутый хвост, как в оригинале
+//! (quirk зафиксирован событием ошибки). `WINDOWS_1251` и явный
+//! `CONVERT(varchar(200), ...)` воспроизводят ANSI-границу `adVarChar`; IPv4
+//! форматируется из младших host-endian octet, как `inet_ntoa`.
 //!
-//! `do_write_log` один раз получает local time Auth-хоста, затем атомарно
-//! забирает весь coalesced FIFO `ServerInfo` и открывает отдельное соединение с
-//! log-базой. `PutOnlineLog` выполняется последовательно для каждого tuple с
-//! одной меткой времени и параметрами `@LogTime`, `@ls`, `@ws`, `@gs`,
-//! `@Amount`. `chrono::Local` и Tiberius datetime заменяют `GetLocalTime` и OLE
-//! DATE без ручного platform-кода. Если connection или отдельный вызов падает,
-//! весь уже вынутый snapshot, включая ещё не записанный хвост, теряется как в
-//! оригинале; событие ошибки сохраняет эту странность явно.
-//! Схема `server/database/mssql-source/Account.bak` задаёт `dbo.PutOnlineLog`,
-//! тип `datetime`, четыре signed `int` и
-//! `INSERT INTO OnlineLog(LogTime,ls,ws,gs,Amount)` в том же порядке.
+//! Ошибка ADO оставляла `do_auth/do_auth_ex` с `-2`, а `do_lock` — с false;
+//! те же fallback возвращаются после структурированного события. ADO
+//! копировал ровно 80 байт `@Assure` и читал `SYSTEMTIME` без проверок
+//! nullable/длины: нарушение формы результата теперь детерминированно даёт
+//! обычный fallback `-2`, не воспроизводя out-of-bounds. Некорректная дата
+//! блокировки (игнорировавшийся `SystemTimeToVariantTime`) остаётся локальной
+//! DB-ошибкой.
 //!
-//! `encoding_rs::WINDOWS_1251` заменяет преобразование ANSI `char*` в ADO BSTR
-//! русской поставки. Перед varchar-параметрами SQL явно делает
-//! `CONVERT(varchar(200), ...)`, сохраняя не Unicode-тип старого `adVarChar`.
-//! IPv4 форматируется из младших host-endian octet, как `inet_ntoa` на исходном
-//! 32-битном значении.
-//!
-//! Ошибка ADO оставляла `do_auth/do_auth_ex` с начальным `-2`, а `do_lock` — с
-//! false; те же fallback возвращаются после записи структурированного события.
-//! Пустой account или пустое имя процедуры по-прежнему не создают результата.
-//! Старые утечки на этих ветвях исчезают только как ненаблюдаемый ownership-
-//! шум Rust.
-//!
-//! Каждый DB worker сначала проверяет stop, затем отдельно читает начальный
-//! 32-битный размер общей очереди, делает ровно столько ожидающих FIFO-pop и
-//! после прохода спит `1 ms`. `std::thread::JoinHandle` заменяет
-//! `_beginthreadex`/handle, `AtomicBool` — private Windows stop message, а
-//! `Arc` сохраняет общее владение очередями без глобального `GetGame`.
-//! `DBProcData` схлопнут в owned closure: отдельный Rust-аналог ручного
-//! allocation, vtable и destructor не нужен. Shutdown публикует stop, будит
-//! только пустое condvar-ожидание и присоединяет workers в порядке создания;
-//! forced `TerminateThread` не переносится.
-//!
-//! При отказе `_beginthreadex` оригинальный `CGame::Init` сохранял запись с null
-//! handle и продолжал. Это внутренний lifecycle-дефект без полезного внешнего
-//! эффекта: Rust останавливает уже созданные workers и возвращает start-ошибку.
-//!
-//! ADO-код копировал ровно 80 байт `@Assure` и читал
-//! `SYSTEMTIME` без проверки nullable/длины. Для корректного результата база
-//! обязана вернуть 80 байт при DB-коде `1` и дату при `-3`. Нарушение сейчас
-//! детерминированно даёт обычный DB fallback `-2`, не воспроизводя out-of-bounds.
-//!
-//! `SystemTimeToVariantTime` для некорректных полей
-//! блокировки возвращал BOOL, который старый код игнорировал. Корректная дата
-//! передаётся как ISO-строка в `CONVERT(datetime, ..., 126)`; реакция на
-//! некорректную дату безопасно остаётся локальной DB-ошибкой.
+//! Каждый DB worker проверяет stop, читает начальный 32-битный размер общей
+//! очереди, делает ровно столько ожидающих FIFO-pop и после прохода спит
+//! 1 ms; shutdown публикует stop и присоединяет workers в порядке создания
+//! без `TerminateThread`. При отказе `_beginthreadex` оригинал переживал
+//! запись с null handle (внутренний дефект без внешнего эффекта): Rust
+//! останавливает уже созданных workers и возвращает start-ошибку.
 
 use std::collections::VecDeque;
 use std::error::Error;

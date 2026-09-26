@@ -2,16 +2,8 @@
 //! net-thread семейства `CServer`.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_server`]
-//! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает). S_PUB32 World-варианта задаёт состав заменяемых потоков:
-//! accept — `AcceptThreadFunc` `0x24900` (`CServer::CreateAcceptThread`
-//! `0x249C0`), цикл сетевого прохода — `NetThreadFunc` `0x28060` →
-//! `DoNetThreadFunc` `0x27740` (`CreateNetMainThread` `0x28100`), I/O —
-//! `WorkerThreadFunc` `0x24870` → `DoWorkerThreadFunc` `0x244B0`
-//! (`CreateWorkerThreads` `0x26C90`), исходящий Login —
-//! `NetClientThreadFunc` `0x29A80` → `DoNetClientThreadFunc` `0x297D0` общего
-//! `CClient`. Семантика snapshot, admission и I/O-операций принадлежит
-//! владельцам `nebokrai_shared::network` и направлениям `app::world_server` /
+//! (идентификаторы — в evidence). Семантика snapshot, admission и I/O-операций
+//! принадлежит владельцам `nebokrai_shared::network` и направлениям `app::world_server` /
 //! `app::world_client`; этот файл переносит только планировку хода.
 //!
 //! Tokio-задача worker-а заменяет net-thread и объединяет accept с
@@ -28,6 +20,8 @@
 //! поэтому прежний единый `run_turn` разнесён на последовательные стадии
 //! `run_game_server_worker` и `poll_login_client`; process-обвязка собирает
 //! ход в исходном порядке, а типовой итог и отчёт остаются общими.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 
 use std::error::Error;
 use std::fmt;

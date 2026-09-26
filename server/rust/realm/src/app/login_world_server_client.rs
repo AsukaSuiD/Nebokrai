@@ -3,53 +3,24 @@
 //! World-соединения Login-направления. Источник контракта — та же точная
 //! пара, что у [`crate::app::login_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
-//! - ctor `CMyNetServerClient_World` `0x46EC60`: base `0x46F160`, vtable
-//!   `0x49DC98`, receive buffer ровно `0xA00000` (`push 0xA00000` + alloc),
-//!   send-компаньон `0x100000` (`+0x70` family);
-//! - `OnReceive` `0x46DDF0`: цикл, пока накоплено `>= 0xC`; CRC длины через
-//!   `DataCrc32 0x47F050`, `declared > size` — останов без потери хвоста,
-//!   create через `CreateMessageWithoutRLE 0x465710`, повторный CRC
-//!   содержимого; контекст `[+0x34]→[+0x24]` socket, `[+0x88]→[+0x20]` map,
-//!   byte-string `[+0x90]→[+0x2C]` CD-key (assign `0x401440`),
-//!   `[+0x2C]→[+0x28]` IPv4; publish owner `+0xDC` через `0x46AE90`; consume;
-//!   shrink к `0x100000` при возврате под лимит; reject очищает accumulator
-//!   без отката опубликованного. IP-ban и `QUIT` у исходника нет;
-//! - `OnClose` `0x46ED10`: `new(0x48)` `CMessage(0xFF01)` через ctor
-//!   `0x465540`, `[client+0x88]→[+0x20]` (map identity), publish owner `+0xDC`
-//!   и затем общий close `0x46C740(0)` — безусловно, всегда.
-//!
 //! Owner реализует закрытие и разбор корректного либо неполного `OnReceive`.
-//! Небезопасные malformed-границы длины и короткого внутреннего header
-//! детерминированно очищают accumulator и возвращают локальную ошибку.
-//! `SetSendRevBuf` остаётся отдельной transport-границей: совместимый Linux
-//! socket option неизвестен.
+//! World receive-envelope всегда несжатый `[total_len, crc(total_len),
+//! crc(normalized_message), message]`: length CRC сразу после появления
+//! 12 bytes, несжатый create нормализует первое слово header фактической
+//! длиной, затем content CRC считается по этому объекту. Только прошедшее обе
+//! проверки сообщение получает socket/map/name/IP metadata и передаётся общей
+//! FIFO. Ошибка любой CRC и доказанный `nullptr` create-пути очищают весь ещё
+//! не разобранный вход; IP-ban и `QUIT` исходник не ставил.
+//! Malformed-границы длины и короткого внутреннего header, где x86 переходил
+//! к signed/unsigned арифметике или чтению за границей, детерминированно
+//! очищают accumulator без UB; неполный TCP-хвост сохраняется.
 //!
-//! Производный конструктор выделял receive-buffer `0xA00000` и send-buffer
-//! `0x100000`. Rust использует общий `CServerClient` с World-capacity для
-//! receive; его owned send accumulator растёт сам и не получает второго
-//! component-поля. `Vec::drain` заменяет ручные realloc/memmove, сохраняя
-//! порядок кадров и неполный TCP-хвост.
+//! `OnClose` безусловно создаёт `0xFF01` только с текущим map ID, публикует
+//! его и выполняет общий close; отсутствующие socket/name/IP metadata
+//! специально не заполняются. `SetSendRevBuf` остаётся локальной
+//! transport-границей: совместимый Linux socket option неизвестен (UNKNOWN).
 //!
-//! World receive-envelope всегда имеет форму
-//! `[total_len, crc(total_len), crc(normalized_message), message]`.
-//! Length CRC проверяется сразу после появления 12 bytes, до ожидания полного
-//! кадра. Внутреннее сообщение не сжато: сначала `CreateMessageWithoutRLE`
-//! нормализует первое слово header фактической длиной, затем content CRC
-//! считается по этому объекту. Только прошедшее обе проверки сообщение
-//! получает socket/map/name/IP metadata и передаётся общей FIFO. Ошибка любой
-//! CRC и доказанный `nullptr` create-пути очищают весь ещё не разобранный вход;
-//! IP-ban и `QUIT` этот исходник не ставил.
-//!
-//! `OnClose` всегда создаёт сообщение `0xFF01`, присваивает ему только текущий
-//! map ID, публикует его и затем выполняет общий close. Rust не заполняет
-//! отсутствующие socket/name/IP metadata по аналогии с receive-путём.
-//!
-//! Для длины с sign bit либо `total_len < 12` x86-путь переходил к signed
-//! сравнению и/или unsigned `len - 12`; внутреннее сообщение длиной 1..15
-//! bytes также приводило к чтению header за границей. Safe Rust очищает такой
-//! вход без воспроизведения UB. SEH, allocator-
-//! копии и deleting-destructor удалены как compiler/library noise.
+//! Доказательства: docs/reconstruction/realm-services.md#login-принятое-world-соединение
 
 use nebokrai_shared::network::{CMsgQueue, CServerClient};
 use nebokrai_shared::protocol::data_crc32;

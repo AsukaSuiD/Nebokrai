@@ -1,16 +1,7 @@
 //! Журналы `OnWriteLogMessage` из `writelogmessage.cpp` в составе Realm
 //! `app/`: диспетчер write-log опкодов `0x60201..0x60218` с reserved no-op
-//! `0x60211..0x60213`.
-//!
-//! Источник контракта — точная пара `.exe/Nworldserver.exe` SHA-256
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! ImageBase `0x400000`, PE timestamp `0x53FB128F` ↔ `.exe/WorldServer.pdb`
-//! RSDS `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751` age 1 (stream match). Pubs:
-//! диспетчер `?OnWriteLogMessage@@YAXPAVCMessage@@@Z` на 1:000a7ab0
-//! (VA `0x4A8AB0`, цель Run-маски `0x60200` с gate-byte `g_Game+0x290`);
-//! отдельных pubs per-branch функций нет — ветви собраны одним switch
-//! диспетчера. FIFO-контракт подтверждён pubs
-//! `CWriteLogQueue::{PushWriteLogData,PopWriteLogData,GetSize,Clear}`.
+//! `0x60211..0x60213`. Источник контракта — та же точная пара, что у
+//! [`crate::app::world_message`].
 //!
 //! Game-контакты всех ветвей — только `map_player` (online lookup имени,
 //! account и level) и `push_write_log_command` (realm persistence FIFO); оба
@@ -32,6 +23,8 @@
 //! публикует его без ожидания commit. Fairy допускает subtype 0..4 и вычисляет
 //! grow-rate как `u32 * 0.0001`. Tiberius parameters и owned buffers заменяют
 //! `_sprintf`/ADO, не меняя порядок и частичные эффекты.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-write-log-диспетчер
 
 use std::net::Ipv4Addr;
 

@@ -1,5 +1,5 @@
-//! FIFO запросов загрузки игроков, подтверждённая `worldserver.exe` и
-//! `worldserver.pdb`.
+//! FIFO запросов загрузки игроков, подтверждённая `Nworldserver.exe` и
+//! `WorldServer.pdb`.
 //!
 //! Owner сохраняет first-match removal, head-to-tail pop, отдельные lock
 //! области и передачу владения batch-у. `Mutex<VecDeque<_>>` заменяет critical

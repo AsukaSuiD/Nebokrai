@@ -1,11 +1,6 @@
 //! Стадия MainLoop, воспроизводящая FIFO загруженных игроков
-//! (`CGame::ProcessPlayerDataQueue`), подтверждённая `Nworldserver.exe`
-//! (SHA-256 `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`)
-//! и парным `WorldServer.pdb` (RSDS `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751`,
-//! age 1): pubs `?ProcessPlayerDataQueue@CGame@@QAEXXZ`,
-//! `?GetSize@CPlayerDataQueue@@QAEIXZ`,
-//! `?PopPlayerData@CPlayerDataQueue@@QAEPAUtagPlayerDataQueue@@XZ`,
-//! `?PushPlayerData@CPlayerDataQueue@@QAE_NPAUtagPlayerDataQueue@@@Z`.
+//! (`CGame::ProcessPlayerDataQueue`); источник контракта — та же точная пара,
+//! что у [`crate::app::world_message`].
 //!
 //! Сама FIFO живёт в [`crate::characters::playerdataqueue`]; здесь её
 //! MainLoop-потребитель. За проход обрабатывается не более одной non-null
@@ -16,6 +11,8 @@
 //! MainLoop; состояния clock/profile этой стадии остаются в старом пакете,
 //! handler получает их поля по ссылке и пишет в исходных позициях
 //! относительно tick-вызовов.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-bai-tan-и-player-data
 
 use crate::app::world_game_view::{
     WorldPlayerQueueGameView, WorldProcessPlayerDataQueueBlock, WorldProcessPlayerDataQueueError,

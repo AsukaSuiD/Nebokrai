@@ -1,56 +1,41 @@
-//! DB-владелец `CRsCDKey` LoginServer из `rscdkey.cpp`.
+//! DB-владелец `CRsCDKey` LoginServer из `rscdkey.cpp`: `CDKeyBan`,
+//! IP-фильтры, matrix-card операции, `GetBanTime`, `FixPtAcc`,
+//! `ValidateLocalPassord` и GAS-процедура `getAccInfoEx`.
 //!
-//! Owner реализует `CDKeyBan`, IP-фильтры, matrix-card операции, `GetBanTime`,
-//! `FixPtAcc`, `ValidateLocalPassord` и GAS-процедуру `getAccInfoEx`.
+//! Каждая операция открывает отдельное соединение. `CDKeyBan` сохраняет
+//! нетранзакционный `SELECT WITH(NOLOCK) -> UPDATE/INSERT`; `matrix_validate`
+//! читает три позиции действующей matrix-card, а `matrix_used` — только
+//! наличие такой строки. `GetBanTime` возвращает nullable Rust datetime вместо
+//! OLE Automation `double`, чей ноль означал отсутствие ban.
 //!
-//! Каждая операция по-прежнему открывает отдельное соединение. `CDKeyBan`
-//! сохраняет нетранзакционный `SELECT WITH(NOLOCK) -> UPDATE/INSERT`;
-//! `matrix_validate` читает три позиции действующей matrix-card, а
-//! `matrix_used` проверяет только наличие такой строки. `GetBanTime` возвращает
-//! nullable Rust datetime вместо промежуточного OLE Automation `double`:
-//! исходный потребитель сразу превращал его обратно в календарные поля и
-//! считал ноль отсутствием ban.
+//! `IPIsAllowed` и `IPIsForbidded` получают setup-флаги явным аргументом
+//! вместо глобального `CGame`; raw WinSock IPv4 перед сравнением с `bigint`
+//! разворачивается тем же `bswap`. Allow-ошибка даёт `false`, forbid-ошибка —
+//! тоже `false`, поэтому только allow остаётся fail-closed; `IsBetweenIP`
+//! сводит и EOF, и найденный диапазон к `true` — наблюдаемый дефект сохранён
+//! без придуманного deny-результата.
 //!
-//! `IPIsAllowed` и `IPIsForbidded` получают исходные setup-флаги явным
-//! аргументом вместо чтения глобального `CGame`. Перед сравнением с `bigint`
-//! исходный raw WinSock IPv4 разворачивается тем же `bswap`. Allow-ошибка даёт
-//! `false`, forbid-ошибка — также `false`, поэтому только allow остаётся
-//! fail-closed. `IsBetweenIP` сводит и EOF, и найденный диапазон к `true`:
-//! любой успешно
-//! прочитанный result set разрешает вход, а `false` возможен только при ADO-
-//! ошибке. Этот наблюдаемый дефект сохранён без придуманного deny-результата.
+//! `FixPtAcc` заменяет числовой `originsdid` найденным `userid`, иначе вход
+//! неизменен; единственный достигнутый caller доказывает ASCII-цифры, и Rust
+//! повторяет проверку перед построением исходного некавыченного числового
+//! литерала — сохраняя SQL type precedence и не возвращая старую
+//! injection-границу (единственное непараметризованное место владельца).
+//! `ValidateLocalPassord` выбирает `originsdid` для числового account либо
+//! `userid`, сравнивает `CAST(passwd AS VARCHAR(50))` без учёта ASCII-регистра
+//! и возвращает канонический `userid`. `getAccInfoEx` сохраняет три входных
+//! `varchar(200)` и output `int @Result`, не меняя доказанный безусловный
+//! `false` вызывающего `CGame::ExecuteProce`.
 //!
-//! `FixPtAcc` заменяет числовой `originsdid` найденным `userid`, иначе оставляет
-//! вход неизменным. Единственный достигнутый caller заранее доказывает ASCII-
-//! цифры; Rust повторяет проверку перед построением исходного некавыченного
-//! числового литерала. Это сохраняет SQL type precedence даже при неизвестном
-//! типе `userinfo.originsdid` и не возвращает старую injection-границу.
-//! `ValidateLocalPassord` сам выбирает `originsdid` для полностью числового
-//! account либо `userid`, сравнивает `CAST(passwd AS VARCHAR(50))` без учёта
-//! ASCII-регистра и при успехе возвращает канонический `userid`. `nullptr` и
-//! выходной `char*` заменены slice/owned `Option<Vec<u8>>`.
-//! `getAccInfoEx` сохраняет отдельное соединение, три входных `varchar(200)`
-//! (`@UserID`, `@UserIP`, `@UserPwd`) и output `int @Result`; output не меняет
-//! доказанный безусловный `false` вызывающего `CGame::ExecuteProce`.
+//! `LoginDB.bak` подтверждает `csl_cdkey`, `ip_allow`, `ip_forbid`, `ip_list`
+//! и их типы, но ни он, ни `Account.bak` не содержат `userinfo`: контракт двух
+//! account-функций подтверждён EXE/PDB, а их DB-schema — UNKNOWN (длина/тип
+//! `userid`, `originsdid`, `passwd` не утверждаются, собственная таблица не
+//! создаётся). Во всех backup-наборах строки `matrix_card image` — `NULL`;
+//! `sp_bindCdkey` принимает blob любой ненулевой длины, а оригинал не проверял
+//! индекс перед чтением `SAFEARRAY`: для покрывающего три позиции blob
+//! сохраняется исходный `bool`, выход за длину — явно неразрешённая граница
+//! без `unsafe`.
 //!
-//! ADO/COM, `_Connection`, `_Recordset`, `VARIANT`/`SAFEARRAY`, `inet_addr` и
-//! compiler cleanup заменены `tiberius`, Tokio TCP и владеющими Rust-
-//! значениями. В этом владельце SQL параметризован везде, кроме доказанно
-//! цифрового литерала `FixPtAcc`; Windows-1251 обеспечивает старую ANSI-
-//! границу. Полный найденный
-//! `LoginDB.bak` подтверждает `csl_cdkey`, `ip_allow`, `ip_forbid`, `ip_list` и
-//! их типы, но ни он, ни `Account.bak` не содержат `userinfo`. Поэтому контракт
-//! двух account-функций подтверждён EXE/PDB, но их DB-schema неизвестна:
-//! нельзя утверждать длину/тип `userid`, `originsdid` и `passwd` либо создавать
-//! собственную таблицу.
-//!
-//! Во всех четырёх backup-наборах `LoginDB.bak` строки `matrix_card image`
-//! равны `NULL`; `sp_bindCdkey` принимает blob любой ненулевой длины. Оригинал
-//! не проверял индекс перед чтением `SAFEARRAY`. Для blob, покрывающего три
-//! позиции, сохраняется исходный `bool`; выход за длину остаётся явно
-//! неразрешённой границей без `unsafe` и без придуманного `false`. Конструктор,
-//! деструктор, ADO wrappers, STL/COM internals и EH cleanup удалены как
-//! доказанный compiler/library noise.
 //! Техническая функция `connect_login_database` переиспользуется соседним
 //! `game.cpp::UpdateOnlineUser2DB`; её SQL и порядок остаются в том owner-файле.
 

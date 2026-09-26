@@ -4,11 +4,7 @@
 //! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
 //! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
-//! Машинно подтверждённые точки (S_PUB32 `.exe/Nworldserver.exe`, первая
-//! секция): свободный `?DoSaveData@@YAXXZ` `1:0001b610` и worker-вход
-//! `?SaveThreadFunc@@YGIPAX@Z` `1:00000e30`; ctor/dtor действующего
-//! accumulator-а `??0tagDBData@CGame@@QAE@XZ` `1:00010f60` /
-//! `??1tagDBData@CGame@@QAE@XZ` `1:0000e760`.
+//! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 //!
 //! Accumulator, session facade и отделённый batch owner остаются чистыми
 //! данными: generation-ветки (`app/world_db_data_collect`) и DB I/O

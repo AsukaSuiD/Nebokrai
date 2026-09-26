@@ -1,8 +1,7 @@
 //! Формирование ответа World → Login со списком персонажей (`0x1FF02`).
 //!
-//! Источник: `CRsPlayer::OpenPlayerBase` в `Nworldserver.exe` (SHA-256
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`)
-//! и парный `WorldServer.pdb` (RSDS `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751`, age 1).
+//! Источник: `CRsPlayer::OpenPlayerBase` в точной паре `Nworldserver.exe` +
+//! `WorldServer.pdb` (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //! По инструкциям VA `0x0050F7E0..0x0050F845` подтверждены байт успеха,
 //! account, 16-битный счётчик и повторный 16-битный ноль перед возвратом
 //! в ветке без строк. Прежний Rust записывал там 32-битный ноль; исправлено

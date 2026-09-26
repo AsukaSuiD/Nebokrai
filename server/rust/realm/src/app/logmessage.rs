@@ -1,5 +1,5 @@
 //! Login lifecycle `OnLogMessage` из `logmessage.cpp`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Ветви диспетчера `OnLogMessage`: списки восстановления и
 //! удаления, вход и отключение аккаунта изменяются в исходном порядке до

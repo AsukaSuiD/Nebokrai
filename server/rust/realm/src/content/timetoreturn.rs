@@ -2,26 +2,8 @@
 //! календарные таблицы Realm. Источник контракта — та же точная пара, что у
 //! [`crate::app::world_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):
-//! - `on_time` `0x472DC0`: map-lookup по event ID (call map `find` `0x472D50`),
-//!   существует только если entry есть; access World region через accessor
-//!   `0x4017A0` (g_Game) → `0x413AC0` (region по signed map ID); только на
-//!   существующем map entry — `CMessage(0x7FA13)` через ctor `0x422DA0`,
-//!   `Add` param `+0x10` (map ID) через writer `0x423C00`, `Add` param `+0x24`
-//!   (buffer time) тем же, затем send через `SendToMapID` `0x4230B0` с
-//!   `[entry+0x4]` (map id entry владельца) → точное совпадение двух signed
-//!   long и маршрута message; weekly flag `(param+0x28)` gate-ит re-register
-//!   через `push 7` в `0x4A36E0` (`set time`, то же 7 дней, что Rust
-//!   `add_day(7)`);
-//! - `reload` `0x473CF0`: обходит весь map в порядке iterator-start до end и
-//!   отменяет event каждого param (`[param+0x2C] → 0x463F60 → 0x4637F0`) —
-//!   точное «reload отдельно отменяет IDs в map-order перед load»;
-//! - `initialize` `0x473DF0` делает тот же entry-load через `load` `0x4736F0`;
-//!   имя ресурса `setup\TimeToReturn.ini` видно в `.rdata`-строке лога —
-//!   буквальное совпадение owner во всех entry-путях.
-//!
-//! `initialize/load/reload/on_time` следуют контракту `worldserver.exe` и
-//! `worldserver.pdb`: owner читает в map-order секции `#` weekly и `*`
+//! `initialize/load/reload/on_time` следуют контракту `Nworldserver.exe` и
+//! `WorldServer.pdb`: owner читает в map-order секции `#` weekly и `*`
 //! absolute `setup/TimeToReturn.ini`, а callback отправляет `0x7FA13` с двумя
 //! signed long: map ID и buffer time. `BTreeMap`, typed `TimerId` и typed
 //! errors заменяют STL, singleton и неинициализированные event IDs без смены
@@ -33,6 +15,8 @@
 //! сохранена. `reload` отдельно отменяет IDs в map-order перед `load`. Невалидный
 //! календарный input не получает старую неинициализированную запись: Rust
 //! возвращает явную ошибку вместо чтения неинициализированных значений.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-контент-и-reload
 
 use std::collections::BTreeMap;
 

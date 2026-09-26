@@ -4,20 +4,13 @@
 //! что у [`crate::app::login_message`]; доменные call sites `CGame` остаются
 //! у владельца процесса.
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
-//! - ctor `CMyNetServer_World` `0x46A9B0`: базовый `CServer` ctor `0x46A480`,
-//!   vtable `0x49D408`, поле `+0x120 = 0`, limits `+0x14C = 0x64` (100) и
-//!   `+0x150 = 0x1000000` — точные константы component;
-//! - `CreateServerClient` `0x46A9F0`: `new` объекта `0xC8` байт, ctor
-//!   принятого `CMyNetServerClient_World` `0x46EC60` с владельцем `this`.
-//!
 //! Owner создаёт accepted WorldServer через virtual-фабрику, обрабатывает общий
 //! command snapshot и выдаёт конкретную FIFO. Долгоживущие Linux I/O actions
 //! возвращаются runtime через общий `CServer`; этот owner не исполняет доменные
-//! сообщения и не создаёт общий parser. Конструктор менял общий максимум
-//! незавершённых send-операций на `100` и per-client send-buffer limit на
-//! `0x1000000`. `CGame` после `Host` записывал receive-rate/ban, max WorldServer
-//! count, send limits, поздний backlog и таймаут первого пакета. Поле
+//! сообщения и не создаёт общий parser. Константы component: максимум
+//! незавершённых send — `100`, per-client send-buffer limit — `0x1000000`.
+//! `CGame` после `Host` записывал receive-rate/ban, max WorldServer count,
+//! send limits, поздний backlog и таймаут первого пакета. Поле
 //! `bWorldCheckMsgCon` также записывалось, но `CMyNetServerClient_World::
 //! OnReceive` всегда проверял content CRC и не читал его; Rust не создаёт
 //! неиспользуемый флаг.
@@ -30,8 +23,10 @@
 //!
 //! Windows `SetSendRevBuf/SO_SNDBUF=0` остаётся локальной transport-задачей
 //! принятого World-соединения; server-owner не подменяет её несовместимым
-//! Linux socket option. `field +0x120 = 0`, SEH, allocation и ошибочно
-//! приписанный client deleting-destructor не получают пустых аналогов.
+//! Linux socket option. `field +0x120 = 0` конструктора не связан с живым
+//! состоянием и не получает пустого аналога.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#login-listeners
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 

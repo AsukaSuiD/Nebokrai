@@ -1,28 +1,18 @@
 //! Принятое GameServer-соединение WorldServer из `nets/networld/myserverclient.cpp`;
-//! Realm — владелец принятого server-направления World.
-//! Источник контракта — та же точная пара, что у [`crate::app::world_message`].
+//! Realm — владелец принятого server-направления World. Источник контракта —
+//! та же точная пара, что у [`crate::app::world_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):
-//! - ctor `CMyServerClient` `0x42BBA0` выделяет receive buffer ровно
-//!   `0x1400000`; объект занимает `0xC8` байт (см. `CreateServerClient`
-//!   `0x428290`);
-//! - `OnReceive` `0x42BD00` циклится, пока накопленный размер `>= 0xC`;
-//!   сначала CRC длины через общий `DataCrc32 0x4A43A0`, при mismatch —
-//!   обнуление всего накопленного размера (discard) и диагностика; `declared
-//!   < 0` — discard и ошибка; `declared > size` — разбор останавливается без
-//!   потери хвоста; сокращение capacity к `0x1400000`, когда размер вернулся
-//!   под лимит; сообщение создаётся `CreateMessageWithoutRLE 0x422F20`,
-//!   проверяется CRC нормализованного содержимого, затем публикуется в
-//!   FIFO владельца (`push` helper `0x428710`) с полями контекста
-//!   `[client+0x34] -> [+0x1C]`, `[client+0x88] -> [+0x18]`,
-//!   `[client+0x2c] -> [+0x20]`; consume префикса — `sub size, declared`;
-//!   `declared < 0xC` у исходника не имело отдельной ветви (подписанное
-//!   переполнение payload-длины), поэтому текущий `InvalidFrameLength`
-//!   относится к классу повреждённого wire;
-//! - `OnClose` `0x42BC50`: `new CMessage(0x3FC02)`, `Add(client+0x88)`
-//!   (assigned map identity), публикация в ту же FIFO до общего base close
-//!   (`0x42A2B0` с аргументом 0).
-
+//! `OnReceive` циклится по envelope `[total_len, crc(total_len), crc(message),
+//! message]`: mismatch CRC длины — discard всего accumulator с диагностикой;
+//! отрицательная длина — discard и ошибка; неполный кадр сохраняет хвост;
+//! сообщение создаётся только несжатым create-путём, проверяется CRC
+//! нормализованного содержимого и публикуется с контекстом socket/map/IP.
+//! `InvalidFrameLength` при `declared < 0xC` относится к классу повреждённого
+//! wire: отдельной ветви у исходника не было (подписанное переполнение
+//! payload-длины). `OnClose` публикует `0x3FC02` с assigned map identity до
+//! общего close.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#world-принятые-game-соединения
 use nebokrai_shared::network::CServerClient;
 use nebokrai_shared::protocol::data_crc32;
 

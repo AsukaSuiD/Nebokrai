@@ -1,5 +1,5 @@
 //! Auction-сообщения `OnMSG_S2W_AUCTION` из `auction.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Input operations декодируют `CGoodsNode` и ставят DB note; relays меняют
 //! только opcode. Page меняется до построения ответа. Collect-no-notice сначала

@@ -3,8 +3,7 @@
 //! transfer/cycle-load, настройки Cost DB, notice-семья сохранения, трейт
 //! `LargessOwner` и Tiberius-реализация `TiberiusLargess` с load-веткой
 //! `LoadLargess`/`AddOneLargess` и worker lifecycle (`StartWorkerThread`).
-//! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`
-//! (RSDS 289F1FB3-96A0-4FF4-8B5D-1FD17B50B751).
+//! Источник контракта — та же точная пара, что у [`crate::persistence::savedb`].
 //!
 //! Owner сохраняет lifecycle Init/UnInit, очереди transfer/cycle-load, порядок
 //! `AddOneLargess`, календарные поля и обе формы `SaveLoadDetails`. Worker
@@ -18,11 +17,10 @@
 //! заменяет локальное Win32-время, `std::thread` +
 //! `JoinHandle` — жизненный цикл worker-а.
 //!
-//! Async-методы трейта записаны в desugared-форме по ADR-0013. Реализация
-//! держит эквивалент `CriticalSectionmapLargess` — `parking_lot::MutexGuard`
-//! (`!Send`) — захваченным поверх DB-вызовов, как исходная critical section
-//! охватывала connect, оба SQL-вызова и erase. Поэтому `+ Send` на
-//! возвращаемые future не добавлен: generic-потребитель `L: LargessOwner`
+//! Async-методы трейта записаны в desugared-форме по ADR-0013: реализация
+//! держит эквивалент `CriticalSectionmapLargess` (`parking_lot::MutexGuard`,
+//! `!Send`) захваченным поверх DB-вызовов, как исходная critical section
+//! охватывала connect, оба SQL и erase. Generic-потребитель `L: LargessOwner`
 //! сохраняющего pipeline не требует Send и получает тот же `?Send`-контракт,
 //! что давал исходный `async fn` трейта.
 //!

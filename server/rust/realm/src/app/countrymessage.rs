@@ -1,5 +1,5 @@
 //! Country-сообщения `OnCountryMessage` из `countrymessage.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Здесь чистые типы ветвей `0x60301`, `0x60304`, `0x60306..0x6031D` и сами
 //! обработчики независимых ветвей: хвостовой диспетчер [`on_country_message`]

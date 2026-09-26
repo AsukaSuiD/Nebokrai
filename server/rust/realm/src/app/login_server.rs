@@ -4,24 +4,14 @@
 //! что у [`crate::app::login_message`]; доменные call sites `CGame` остаются
 //! у владельца процесса.
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
-//! - ctor `CMyNetServer_Client` `0x46A870`: базовый `CServer` ctor `0x46A480`,
-//!   vtable `0x49D3B0`, поле `+0x120 = 0`, limits `+0x14C = 5` и
-//!   `+0x150 = 0x400000` — точные константы component;
-//! - `CreateServerClient` `0x46A8B0`: `new` объекта `0xC8` байт, ctor
-//!   принятого `CMyNetServerClient_Client` `0x46E590` с владельцем `this`.
-//!
 //! Owner создаёт accepted client через virtual-фабрику, применяет условные
 //! receive-проверки и общий command snapshot, обрабатывает `OnMapStrError`,
-//! структурные limit-события и выдаёт конкретную FIFO. Долгоживущие Linux
-//! I/O actions возвращаются runtime через общий `CServer`; этот owner не
-//! создаёт второй transport и не исполняет доменные сообщения.
-//!
-//! Конструктор менял общий максимум незавершённых send-операций на `5` и
-//! per-client send-buffer limit на `0x400000`. `CGame` после `Host` записывал
-//! receive-rate/ban, обе условные CRC-проверки, предел одного кадра, max client
-//! count, send limits, поздний backlog и таймаут первого пакета. Rust сохраняет
-//! эти группы отдельными config-методами и не читает `setup.ini` внутри сети.
+//! структурные limit-события и выдаёт конкретную FIFO; второй transport и
+//! доменные сообщения — не его граница. Константы component: максимум
+//! незавершённых send — `5`, per-client send-buffer limit — `0x400000`;
+//! receive-rate/ban, обе условные CRC, предел кадра, max client count,
+//! backlog и таймаут первого пакета `CGame` записывал после `Host` — Rust
+//! сохраняет их отдельными config-методами и не читает setup внутри сети.
 //!
 //! Ошибка client parser с доказанной реакцией вызывает component diagnostic,
 //! затем общий `CServer` немедленно добавляет peer в forbid-map и ставит
@@ -36,9 +26,10 @@
 //! `PutDebugString` limit-callbacks представлены локальным FIFO структурных
 //! notices без GUI, HTTP или общей административной плоскости.
 //!
-//! `field +0x120 = 0` конструктора ещё не связан с именованным живым
-//! состоянием и не получает пустого Rust-поля. SEH, allocation и ошибочно
-//! приписанный deleting-destructor World удалены как compiler noise.
+//! `field +0x120 = 0` конструктора не связан с именованным живым состоянием и
+//! не получает пустого Rust-поля.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#login-listeners
 
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddrV4};

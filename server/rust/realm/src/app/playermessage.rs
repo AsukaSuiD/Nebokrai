@@ -1,5 +1,5 @@
 //! Диспетчер игроков `OnPlayerMessage` WorldServer в составе Realm `app/`;
-//! источник контракта — `worldserver.exe` и `worldserver.pdb`.
+//! источник контракта — `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Владелец содержит четыре ветви перенаправления на месте:
 //! `0x5FC01 -> 0x7FA08`, `0x5FC02 -> 0x7FA09`, `0x5FC03 -> 0x7FA0A`,

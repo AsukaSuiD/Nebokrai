@@ -1,9 +1,8 @@
 //! Аукционный журнал Realm: контракт записей `CAuctionLog::stLogNode`.
 //!
-//! Источник — точная пара `Nworldserver.exe`/`WorldServer.pdb`
-//! (RSDS 289F1FB3-96A0-4FF4-8B5D-1FD17B50B751), PDB-путь владельца
-//! `e:\svn\...\public\auctionroom\auctionlog.cpp`. `#[repr(C)]` layout 0x150
-//! байт сохранён.
+//! Источник — та же точная пара, что у [`crate::app::world_message`];
+//! PDB-путь владельца `e:\svn\...\public\auctionroom\auctionlog.cpp`.
+//! `#[repr(C)]` layout 0x150 байт сохранён.
 
 use chrono::NaiveDate;
 

@@ -105,7 +105,7 @@ pub trait RsJjcSysOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> impl std::future::Future<Output = PlayerJjcLoadOutcome>;
 
- /// Оригинал `LoadJJcRank` этой пары `worldserver.exe`/`worldserver.pdb` не менял vector и возвращал
+ /// Оригинал `LoadJJcRank` этой пары `Nworldserver.exe`/`WorldServer.pdb` не менял vector и возвращал
  /// успех. Обобщённый vector не скрывает JJC layout: он вообще не читается.
     fn load_jjc_rank<Rank>(&mut self, _ranks: &mut Vec<Rank>) -> bool {
         true

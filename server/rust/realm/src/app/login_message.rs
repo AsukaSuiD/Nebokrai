@@ -1,54 +1,18 @@
 //! Сообщение трёх сетевых направлений LoginServer из `nets/netlogin/message.cpp`;
-//! Realm — владелец Login-направления объединённого Realm-процесса.
-//!
-//! Источник контракта — точная пара `.exe/loginserver.exe`
-//! SHA-256 `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
-//! ImageBase `0x400000`, PE timestamp `0x53E0C388` ↔ `.exe/loginserver.pdb`
-//! GUID `48D4B1F2-97BB-4CF8-B9EA-B13F7E2F9645` age 1 (CodeView RSDS, match).
-//!
-//! Машинно подтверждённые точки (первая секция `.text`, VA по дизассемблеру):
-//! - ctor `0x465540`: base `0x466360`, vtable `0x49CFBC`, вложенная
-//!   std::string CD-key по `+0x2C` (capacity `0xF`), header `+4` = type;
-//! - `Run` `0x465490`: сначала полный диапазон Auth (`cmp 0xCF300; jbe` /
-//!   `cmp 0xDF1FF; jae` → handler `0x47F320` OnASMessage, возврат 1), затем
-//!   маска `type - (type & 0xFF)` и service-магнаты: `0xFF00/0x1FE00` →
-//!   `0x480850` OnServerMessage, `0x1FF00/0x10000/0x2FD00` → `0x47F3F0`
-//!   OnLogMessage, `0x20000` → `0x47F0A0` OnGMMessage, `0x20100` →
-//!   `0x47F2A0` OnGMAMessage; любая ветвь, включая неизвестный тип,
-//!   возвращает 1;
-//! - `SendToAS` `0x4653E0`: sender `g_Game+0x3E4`, **CRITICAL_SECTION
-//!   `0x5E4864` вокруг build/CRC/send** (единственный send-владелец с lock!),
-//!   envelope helper `0x4658F0` (`total_len = len + 0xC`, scratch `0x5E4894`),
-//!   два общих `DataCrc32 0x47F050`; World/client send-методы lock не имеют
-//!   (`SendToWorldSocket 0x465230` во всём теле без Enter/Leave, scratch тот же);
-//! - client send по двум перегрузкам `0x465190` (socket) и `0x4651E0` (cdkey):
-//!   полный внутренний буфер кодируется append/encode helper `0x4659A0`, новая
-//!   длина `rle_len + 4` пишется первым dword scratch `0x5E4898`, затем
-//!   виртуальные ветки `[+0x38]`/`[+0x40]` соответственно; **без** CS и без
-//!   второго CRC-слоя;
-//! - `CreateMessage` `0x4655C0`: CS `0x5E487C` на decode/create/free (общий
-//!   static scratch `0x4E4860`/`0x5E4860`), порог `cmp len,0x20000; jbe` —
-//!   короче `0x20001` → capacity `0x100000`, больше → `len*8`, failure decode
-//!   `0x465B30` → null; create-mutex снова не вводится;
-//! - `CreateMessageWithoutRLE` `0x465710` — тот же несжатый 16-байтовый путь
-//!   без отдельной `len < 16` проверки — класс повреждённого wire;
-//! - `GetString` `0x4657D0` — SSO-assign исходной C-строки с движением курсора.
-//!
-//! Конструктор записывает полный `MsgType` в header `+4`, оставляет пустой
-//! CD-key, нулевые socket/map/IP и null player/region. Rust пока хранит только
-//! реально передаваемые receive-owner’ами metadata; `m_pPlayer/m_pRegion` не
-//! получают бестиповых аналогов до появления их доменного владельца.
+//! Realm — владелец Login-направления объединённого Realm-процесса; исходные
+//! идентификаторы сборки — в evidence (см. ниже).
 //!
 //! Client send кодирует полное внутреннее сообщение legacy RLE и добавляет
-//! четырёхбайтовую little-endian длину. World/Auth send строит envelope
-//! `[total_len, crc(total_len), crc(message), message]`. Доказанные общие
+//! четырёхбайтовую little-endian длину; World/Auth send строит envelope
+//! `[total_len, crc(total_len), crc(message), message]`. Различие сериализации
+//! значимо: `SendToAS` — единственный send-владелец с CRITICAL_SECTION вокруг
+//! build/CRC/send, World/client send-методы lock машинно не имеют. Общие
 //! `CServer`/`CClient` send-владельцы копируют вход до возврата, поэтому
 //! локальные `Vec<u8>` сохраняют lifetime общей scratch-памяти. Client send
 //! достижим также из отдельного `CGasThread`; исходная общая RLE-память могла
-//! пересекаться с game-thread без синхронизации. Безопасный Rust не
-//! воспроизводит data race через `unsafe`: локальный буфер сохраняет каждый
-//! корректный frame, а недетерминированное повреждение старого scratch не
-//! объявляется совместимым контрактом.
+//! пересекаться с game-thread без синхронизации — safe Rust не воспроизводит
+//! data race через `unsafe` и не объявляет недетерминированное повреждение
+//! старого scratch совместимым контрактом.
 //!
 //! RLE create сохраняет порог `0x20001`, capacity `0x100000` либо
 //! `compressed_len * 8`; несжатый create копирует четыре header-слова и
@@ -56,9 +20,14 @@
 //! отклоняются до чтения header или выделения; malformed trailing marker
 //! принадлежит shared basemessage.
 //!
-//! Traits ниже соответствуют только этим историческим владельцам и не создают
-//! общий protocol framework. STL/allocator/SEH/deleting-destructor удалены как
-//! compiler/library noise; их эффект выражен Rust-владением.
+//! Конструктор записывает полный `MsgType` в header `+4`, оставляет пустой
+//! CD-key, нулевые socket/map/IP и null player/region. Rust хранит только
+//! реально передаваемые receive-owner’ами metadata; `m_pPlayer/m_pRegion` не
+//! получают бестиповых аналогов до появления их доменного владельца. Traits
+//! ниже соответствуют только этим историческим владельцам и не создают общий
+//! protocol framework.
+//!
+//! Доказательства: docs/reconstruction/realm-services.md#login-сообщение-и-направления
 
 use std::fmt;
 
