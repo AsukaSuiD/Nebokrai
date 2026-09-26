@@ -14,9 +14,20 @@
 //! `appserver/ai/aifactory.rs`; часы каждого события читаются отдельным вызовом
 //! `now_milliseconds`; FIFO монстра остаются hub-владением.
 //!
-//! UNKNOWN: сайт вызова `Run` и каденсия AI; форма backoff-шага; семантика поля
-//! `owner+0x170` (`can_fight` по INFERRED name); массивы default-ID навыков;
-//! поле `tdI[2]`; type шаблона списка навыков монстра.
+//! Диспетчерские досверки точной пары: слоты диапазона на `CSkill` текущего
+//! навыка в Tracing — vt `+0x70` = `GetAffectRangeMin` (базовый ICF-склеенный
+//! RET1 = 1, переопределение лишь у CChuckStone/CSkeletonArchery — свойство
+//! 5004), vt `+0x74` = `GetAffectRangeMax` (свойство 5003, `> 0` : 1, без
+//! переопределений); backoff Tracing — один `GetDirPos`-шаг владельца прочь от
+//! цели по `GetLineDir(target→owner)` плюс общий `MoveTo(..., run=0)`;
+//! единственный сайт вызова `Run` — tail `jmp [vt+0x70]` в `CMoveShape::AI`
+//! (RVA `0xD0530`), достигаемой из `CGame::AI →` регион vt `+0x3C →` активные
+//! формы области с нулевым sleep-state; каденсия — каждый кадр g_ms (80 мс)
+//! обеих ветвей `CGame::MainLoop`. Семантика формы уже совпадает с кодом ниже.
+//!
+//! UNKNOWN: семантика поля `owner+0x170` (`can_fight` по INFERRED name);
+//! массивы default-ID навыков; поле `tdI[2]`; type шаблона списка навыков
+//! монстра; маскировка vt `+0x12C` вокруг Tracing.
 //! Доказательства: docs/reconstruction/gameserver-npc-and-regions.md#ai-расписаний-и-поведение
 
 use nebokrai_shared::resources::{GlobeSetupSnapshot, MonsterProperties, MonsterSkill};

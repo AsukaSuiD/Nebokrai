@@ -14,9 +14,12 @@
 //! `appserver/player.rs`, `gameeffectjournal.rs` старого пакета); spatial map
 //! mutation — Zone `regions/serverregion/areagrid.rs`.
 //!
-//! UNKNOWN/PARTIAL: pub-имя `ReviveBattleFairy` не резолвится (inline);
-//! порядок тела refresh в periodic `CPlayer::AI` — PARTIAL; tail `SummonBF`
-//! — у владельца контейнера.
+//! VERIFIED: refresh — первый блок тела `CPlayer::AI` (RVA `0x59FF0`, полное
+//! тело сверено, `.local/verify-bfai/`): GetGoods(10) → GAP 172==1 → GAP
+//! 153==0 → четыре записи summoned/state/recall/died в этом порядке →
+//! virtual `+0x9C`; до lost-timeout, region-gate и остального AI.
+//! UNKNOWN: pub-имя `ReviveBattleFairy` не резолвится (inline); tail
+//! `SummonBF` — у владельца контейнера.
 //!
 //! Исходный владелец PDB: `appserver/player.cpp/.h`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#battlefairysummon--призывследованиегибель-боевого-духа-cplayer

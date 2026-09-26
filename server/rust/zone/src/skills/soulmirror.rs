@@ -7,6 +7,12 @@
 //! Master(country 0); формула — один RNG без damage modifier/RP/CCH/второго
 //! RNG (directelementattack).
 //!
+//! Досверено полным дизассемблом `CSoulMirror::AI` (RVA `0x1A4D10`, MATCH):
+//! обход внешний по столбцам X/внутренний по строкам Y, маска `[row·width +
+//! column]`, флаг занятости — сразу по удачному dyn-cast до проверки
+//! attackable; машина сравнивает дубли по сырым указателям, zone — по
+//! (регион, identity); level/direction перечитываются на каждую клетку.
+//!
 //! Швы: hub `selfcast::{SelfCastGame, SelfCastContact}`; скелет Begin/Check/
 //! AI/End и кадр visual — `skills/zonalcast.rs` (вызов обхода — шов
 //! `apply_soul_mirror_area`); входные снимки существ — конверт

@@ -12,7 +12,11 @@
 //! построчной перечитки. Остаются hub-владением: общий monster tick, FIFO,
 //! `Hibernate`, `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и реальный путь
 //! `monsterbaseattack`; min-distance текущего навыка вычисляет hub-caller через
-//! `QueryProperty(5004)`. Швы: [`CityGuardDispatcherPlayer`]/[`CityGuardDispatcherRegion`]
+//! `QueryProperty(5004)` — открытый gap G1: машина зовёт виртуальный
+//! `GetAffectRangeMin` (=1 для всех классов, кроме ChuckStone-семьи),
+//! hub-форма совпадает с ней только у ChuckStone;
+//! docs/reconstruction/gameserver-npc-and-regions.md, строка
+//! `CCityGuardWithBow::WhenBeenHurted`. Швы: [`CityGuardDispatcherPlayer`]/[`CityGuardDispatcherRegion`]
 //! — фракция/союз и владелец города (проходы — общий шов `ai/lord.rs`);
 //! [`GuardStationDispatcherMonster`]/[`CityGuardDispatcherMoveShape`] — состояние
 //! поста и ID текущего навыка; `ForceMove` и RNG клеток — через

@@ -14,8 +14,13 @@
 //! YinYang/YinYang2 (`0x1A5EA0`/`0x167F10`, `0x1A5BB0`/`0x167C20`) и
 //! GodThunder/GodThunder2 (`0x173470`/`0x1536B0`, `0x173180`/`0x1533C0`) —
 //! MATCH общему скелету семьи; Check SoulMirror (`0x1A4850`) сверен
-//! (оговорка: цель `SetMoveable` — arg2). PARTIAL: AI SoulMirror не разобран;
-//! клиентское чтение кадров — UNKNOWN.
+//! (оговорка: цель `SetMoveable` — arg2). AI SoulMirror (`0x1A4D10`) доснят
+//! целиком и сверен: активный гейт фазы, смерть S → visual10 + `GS0285` +
+//! End(0), NULL таблицы/U → End(0), Begin-доля MP → CAN `10006` →
+//! GetLineDir/SetDir → visual0 → фаза 1 в тот же тик, unsigned `start +
+//! delay(10001)` → visual1 → обход области (`skills/soulmirror.rs`) → End(1)
+//! также при ненайденном регионе U — MATCH скелету ниже
+//! (`.local/reuse-verify-t5/`). Клиентское чтение кадров — UNKNOWN.
 //!
 //! Исходные владельцы PDB: `appserver/skills/{weak,poisonfog,snowstorm,yinyang,yinyang2,godthunder,godthunder2,firewall,chaossphere,soulmirror}.cpp`.
 //! Доказательства: docs/reconstruction/gameserver-skills.md#zonalcast-скелет-областных-призывов

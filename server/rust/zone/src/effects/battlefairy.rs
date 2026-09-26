@@ -5,13 +5,22 @@
 //! разделяют Serialize (ID, затем остаток через getter, затем
 //! signed-значение), Unserialize (часы после внешнего ID и до срока со
 //! значением), GetRemainedTime, AI (завершение только при
-//! `now > start + keep`) и End.
+//! `now > start + keep`) и End — общие тела `0x005E7330`, `0x005FD660`,
+//! `0x00605E10`, `0x005E6E20`, `0x005E7310` (обёртка над базой `0x005DBCE0`),
+//! VERIFIED_DISASSEMBLY.
 //! Опорные адреса:
 //! docs/reconstruction/gameserver-skills.md#effects-wire-опорные-адреса-состояний-zone
 //! Отображение вида (Po снижает цель, Yu усиливает держателя) подтверждено
-//! различием вызовов в Begin восьми классов; пофункциональная сверка всех
-//! property callbacks не выполнялась — числовые формулы перенесены из
-//! существующего Rust без изменения (PARTIAL).
+//! различием вызовов в Begin восьми классов. Все 16 property callbacks
+//! (OnUpdateProperties восьми классов, ветви игрока и монстра) досверены с
+//! телами того же образа: `0x005E8320` (Pojia), `0x005E7D90` (Pobing),
+//! `0x005E7870` (Pomo), `0x005E7390` (Pofa), `0x005E6E60` (Yujia),
+//! `0x005E6950` (Yubing), `0x005E6490` (Yumo), `0x005E5FD0` (Yufa) —
+//! формулы совпали буквально (VERIFIED_DISASSEMBLY). На монстрах живые
+//! ветви только у Pobing (атака) и Pomo (модификатор), у Yu-четвёрки их нет.
+//! Ctor-ы пишут ещё поле `+0x08` (1 у Pojia/Pomo/Pofa/Yumo/Yufa, 0 у
+//! Pobing/Yujia/Yubing; база — `0x7FFFFFFF`): семантика не установлена
+//! (UNKNOWN), в wire и формулы не входит.
 
 use super::time::timed_client_state_time;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
