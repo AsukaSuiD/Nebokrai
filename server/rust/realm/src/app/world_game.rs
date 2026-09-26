@@ -12,10 +12,13 @@
 //! Статус по модели `app` — **переходный агрегат-шов (decomposition seam),
 //! а не чистая оркестрация и не образец app-модуля**. Структура физически
 //! хранит первичные domain stores канонических владельцев: реестр `players`
-//! и счётчик `player_id` + очередь `team_session_ids` и присутствие
-//! (`creation/restore/deletion/online/offline/login_players`) — целевой
-//! владелец `characters`; реестры `regions`/`game_servers` и ping-индекс —
-//! `regions`; накопитель `db_data: WorldDbData` — `persistence`;
+//! и счётчик `player_id` — целевой владелец `characters`; transitional
+//! workflow/presence state (`creation/restore/deletion/online/offline/
+//! login_players`) — физически здесь, целевой владелец `characters`, а не
+//! постоянная оркестрация; индекс `team_session_ids` — session/team
+//! projection, целевой владелец `sessions`; реестры `regions`/`game_servers`
+//! и ping-индекс — `regions`; накопитель `db_data: WorldDbData` —
+//! `persistence`;
 //! `quest_system`, `script_resources` и setup/resource-таблицы — `content`
 //! (конкретные потребители); `system_broadcasts`/`goods_links` — `social`;
 //! `leave_word_id` — `organizations`; `honor_eliminate_list` — активности/
