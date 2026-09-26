@@ -5238,24 +5238,6 @@ impl CGame {
         db_data.countries.clear();
     }
 
- /// Удваивает одинарные кавычки как исходный `CheckPoint`.
- ///
- /// Вход уже является исходным видимым C-string prefix; отсутствие NUL в
- /// конкретном fixed field проверяет его владелец до этого вызова.
-    pub(crate) fn check_point(input: &[u8]) -> Vec<u8> {
-        let escaped_length = input
-            .len()
-            .saturating_add(input.iter().filter(|byte| **byte == b'\'').count());
-        let mut escaped = Vec::with_capacity(escaped_length);
-        for byte in input {
-            escaped.push(*byte);
-            if *byte == b'\'' {
-                escaped.push(*byte);
-            }
-        }
-        escaped
-    }
-
  /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
  ///
  /// Успешное открытие остаётся успешной загрузкой даже после stream
