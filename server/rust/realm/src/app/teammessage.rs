@@ -1,4 +1,4 @@
-//! Входящий Team-owner WorldServer, перенесённый в Realm `app/`.
+//! Входящий Team-owner WorldServer в составе Realm `app/`.
 //!
 //! Источник контракта `OnTeamMessage` — `worldserver.exe` и
 //! `worldserver.pdb`.

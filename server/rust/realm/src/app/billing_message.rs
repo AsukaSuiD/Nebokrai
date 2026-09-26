@@ -1,8 +1,8 @@
 //! Сообщение направления GameServer ↔ BillingServer из
-//! `nets/netbilling/message.cpp`, перенесённое в Realm — владельца
-//! Billing-направления объединённого Realm-процесса.
+//! `nets/netbilling/message.cpp`; Realm — владелец Billing-направления
+//! объединённого Realm-процесса.
 //!
-//! Точная пара зафиксирована заново для этого прохода: `.exe/billingserver.exe`
+//! Источник контракта — точная пара `.exe/billingserver.exe`
 //! SHA-256 `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`,
 //! ImageBase `0x400000`, PE timestamp `0x53ABDA0D` ↔ `.exe/billingserver.pdb`
 //! GUID `CAFACA76-74E6-4ED3-981C-D2963EEB2C3C` age 1 (CodeView RSDS, match).

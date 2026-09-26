@@ -1,12 +1,11 @@
 //! Save-worker и save-runtime процесса WorldServer (`SaveThreadFunc` launcher
-//! и barriers), перенесённые из `src/worldserver/worldserver/runtime.rs` в
-//! Realm `app/` волной C5-D.
+//! и barriers).
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает). Это рантайм-проводка: save-пайплайн и контракт
-//! сохранения сверены прежними волнами (см. `persistence::saveworker`);
-//! сам перенос новой машинной сверки не требует, тела перенесены буквально.
+//! RSDS совпадает). Машинные основания save-пайплайна и контракт сохранения
+//! зафиксированы у владельца пайплайна (см. `persistence::saveworker`); этот
+//! файл — его process-проводка.
 //!
 //! `WorldSaveWorker::launch` строит двенадцать конкретных Tiberius save-DB
 //! owner-ов и зовёт [`save_thread_func`]; thread-serialization, сборка

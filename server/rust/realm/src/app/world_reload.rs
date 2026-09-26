@@ -1,12 +1,12 @@
-//! `ReLoad` и связанные reload-стадии `CGame` из `worldserver/game.cpp/.h`,
-//! перенесённые в Realm волной C5-C (см. [`crate::app::world_game`]).
+//! `ReLoad` и связанные reload-стадии `CGame` из `worldserver/game.cpp/.h`
+//! (см. [`crate::app::world_game`]).
 //!
 //! Статус: тело `reload` (`1:14740`) и семейство reload-стадий (war/time-to-
-//! return/city/string-table/initial config/`reload_conf_log`) перенесены
-//! буквально. По полной машинной досверке C5-C (та же точная пара
-//! `Nworldserver.exe` + `WorldServer.pdb`, RSDS `289F1FB3-…` age 1; дампы
-//! `.local/verify-c5c/`, `dis_reload.txt`/`dis_reload_profiles.txt`) закрыты
-//! наблюдаемые расхождения диспетчера `reload_profiles` и таблицы
+//! return/city/string-table/initial config/`reload_conf_log`). По полной
+//! машинной досверке (та же точная пара `Nworldserver.exe` + `WorldServer.pdb`,
+//! RSDS `289F1FB3-…` age 1; дампы `.local/verify-c5c/`,
+//! `dis_reload.txt`/`dis_reload_profiles.txt`) закрыты наблюдаемые
+//! расхождения диспетчера `reload_profiles` и таблицы
 //! [`WORLD_RELOAD_ACTIONS`]: DIFF-3 (обработка любого low-бита выполняет
 //! `low &= ~mask; high = 0` — первый обработанный low-профиль гасит все
 //! pending high-флаги), DIFF-4 (ChangeBodyConf, lo 0x80000000;
@@ -28,7 +28,7 @@
 //! four-nation reload) и внутренности статических `Load*` — их статусы
 //! ведутся у соответствующих owner-ов, а не здесь.
 //!
-//! Нормализации — общие для волны (см. `crate::app::world_game`).
+//! Имена и проекции типов — Realm/Shared формы (см. `crate::app::world_game`).
 
 use crate::activities::attackcitysys::{AttackCityCallbacks, AttackCityReloadBlock, CAttackCitySys};
 use crate::activities::countrywarsys::{CountryWarCallbacks, CountryWarSys};
@@ -302,7 +302,7 @@ where
                 });
                 Ok(0)
             } else if action.reload_profile == b"Broadcast" {
- // DIFF-5 (машинная досверка C5-C по точной паре, дамп
+ // DIFF-5 (машинная досверка по точной паре, дамп
  // `.local/verify-c5c/dis_reload_profiles.txt`): при отсутствии
  // `setup/sysboardcast.ini` оригинал формирует
  // "file '%s' can't found!" и показывает MessageBox, после чего

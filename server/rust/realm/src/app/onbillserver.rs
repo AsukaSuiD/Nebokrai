@@ -1,6 +1,6 @@
 //! Служебные ветви `onbillserver.cpp`, подтверждённые `miscserver.exe` и
 //! `miscserver.pdb`.
-//! Перенесены в Realm `app/` как служебные ветви роли MiscServer.
+//! В составе Realm `app/` — служебные ветви роли MiscServer.
 //!
 //! Close сначала ставит `m_bClientClose`, затем полностью дожидается reconnect,
 //! не позволяя следующему FIFO-элементу его обогнать. Очистка auction room

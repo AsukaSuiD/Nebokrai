@@ -1,12 +1,12 @@
 //! Принятое GameServer-соединение BillingServer из
-//! `nets/netbilling/clientforgs.cpp`, перенесённое в Realm — владельца состояния
-//! принятого клиента направления Billing. Источник контракта — та же точная
-//! пара, что у [`crate::app::billing_message`].
+//! `nets/netbilling/clientforgs.cpp`; Realm — владелец состояния принятого
+//! клиента направления Billing. Источник контракта — та же точная пара, что у
+//! [`crate::app::billing_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/billingserver.exe`):
 //! - ctor `CClientForGS` `0x40F180`: base `0x40E0F0`, vtable `0x42DEE8`,
 //!   receive buffer ровно `0xA00000` (`push 0xA00000` + alloc), два компаньона
-//!   `0x100000` в `+0x64/+0x70`-семействе (जैस буферы);
+//!   `0x100000` в семействе смещений `+0x64/+0x70`;
 //!   send-buffer семьи `0x100000` — точных значений типа ObjectSize;
 //! - `OnReceive` `0x40F320`: gate owner `+0xA8`, цикл, пока накоплено `>= 0xC`;
 //!   CRC длины через общий `DataCrc32 0x413530` (mismatch → discard

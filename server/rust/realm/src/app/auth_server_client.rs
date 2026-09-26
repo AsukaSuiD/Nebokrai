@@ -1,6 +1,6 @@
 //! Component-поведение принятого LoginServer-соединения из
-//! `nets/netauth/mynetserverclient_auth.cpp`, перенесённое в Realm — состояние
-//! принятого клиента Auth-направления. Источник контракта — та же точная пара,
+//! `nets/netauth/mynetserverclient_auth.cpp`; Realm — состояние принятого
+//! клиента Auth-направления. Источник контракта — та же точная пара,
 //! что у [`crate::app::auth_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/authserver.exe`):

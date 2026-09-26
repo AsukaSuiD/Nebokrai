@@ -1,6 +1,6 @@
 //! Производный владелец GameServer-соединений BillingServer из
-//! `nets/netbilling/serverforgs.cpp`, перенесённый в Realm — сервер принятого
-//! направления Billing. Источник контракта — та же точная пара, что у
+//! `nets/netbilling/serverforgs.cpp`; Realm — сервер принятого направления
+//! Billing. Источник контракта — та же точная пара, что у
 //! [`crate::app::billing_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/billingserver.exe`):

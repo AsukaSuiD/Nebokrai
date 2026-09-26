@@ -13,26 +13,22 @@
 //! и DB-шов [`WorldExploitDbView`](crate::app::world_game_view::WorldExploitDbView)
 //! по ADR-0013.
 //!
-//! Волной governance перенесены ветви `0x60301`, `0x60304`, `0x60306`,
-//! `0x60307`, `0x60308`, `0x60309`, `0x6030A`, `0x6030B`, `0x6030C`,
-//! `0x6030D`, `0x6030E` и `0x60313` с исходными цепочками
-//! `authorize_king → can_* → действие`: доступ к живому `CCountryHandler`
-//! даёт узкий шов [`WorldCountryGovernanceGate`] с адаптером в старом
-//! пакете, смена страны `0x60301` — [`WorldCountryPlayerChangeView`] поверх
-//! [`WorldGameView`] и [`WorldCountryView`]. Старый файл держит
-//! делегирующие обёртки с теми же именами с отображением исходов один к
-//! одному.
+//! Governance-ветви `0x60301`, `0x60304`, `0x60306`, `0x60307`, `0x60308`,
+//! `0x60309`, `0x6030A`, `0x6030B`, `0x6030C`, `0x6030D`, `0x6030E` и
+//! `0x60313` держат исходные цепочки `authorize_king → can_* → действие`:
+//! доступ к живому `CCountryHandler` даёт узкий шов
+//! [`WorldCountryGovernanceGate`] с адаптером в старом пакете, смена страны
+//! `0x60301` — [`WorldCountryPlayerChangeView`] поверх [`WorldGameView`] и
+//! [`WorldCountryView`].
 //!
-//! Финальной war-волной сюда перенесены ветви `0x60317` и `0x60318`
+//! War-ветви `0x60317` и `0x60318`
 //! ([`dispatch_country_war_declaration_message`],
-//! [`dispatch_country_war_victory_message`]) вместе с типами
+//! [`dispatch_country_war_victory_message`]) живут здесь вместе с типами
 //! [`WorldCountryWarDeclarationSync`], [`WorldCountryWarVictorySync`] и
-//! агрегатом [`WorldCountryMessageOutcome`]/[`WorldCountryMessageDispatch`]:
+//! агрегатом [`WorldCountryMessageOutcome`]/[`WorldCountryMessageDispatch`];
 //! владелец [`CountryWarSys`](crate::activities::countrywarsys::CountryWarSys)
-//! уже в Realm, переходный `WorldCountryMessageTailOutcome` слит в общий
-//! агрегат. В старом `appworld/message/countrymessage.rs` остаются только
-//! маршрутные обёртки и адаптеры швов `CCountryHandler`/`CGame`; имена
-//! доступны старым потребителям через его glob-реэкспорт.
+//! — Realm. Адаптеры швов `CCountryHandler`/`CGame` остаются у старого
+//! пакета.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 use nebokrai_shared::runtime::put_string_to_file;
@@ -1562,7 +1558,7 @@ pub fn dispatch_country_exile_request_message(
 /// повторяет исходный диспетчер; guard-ы списка — добавленная Rust-закалка:
 /// их у машины нет (цикл `count×GetDWord` без проверок, при усечении
 /// GetDWord отдаёт 0 и ответ всё равно уходит) — дивергенция только на
-/// порченом wire [досверка диспетчера 2026-09-26].
+/// порченом wire (машинная досверка диспетчера).
 pub fn dispatch_country_exile_result_message(
     message: &mut CMessage,
     countries: &mut dyn WorldCountryGovernanceGate,

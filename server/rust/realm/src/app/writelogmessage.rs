@@ -1,4 +1,4 @@
-//! Журналы `OnWriteLogMessage` из `writelogmessage.cpp`, перенесённые в Realm
+//! Журналы `OnWriteLogMessage` из `writelogmessage.cpp` в составе Realm
 //! `app/`: диспетчер write-log опкодов `0x60201..0x60218` с reserved no-op
 //! `0x60211..0x60213`.
 //!

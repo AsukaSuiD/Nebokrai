@@ -1,5 +1,5 @@
 //! Прочие сообщения `OnOtherMessage` WorldServer из `othermessage.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`, перенесённые в Realm `app/`. Файл назван
+//! `worldserver.exe` и `worldserver.pdb`; в составе Realm `app/`. Файл назван
 //! `worldothermessage`, поскольку `app/othermessage.rs` занят ответными ветвями MiscServer.
 //!
 //! Ветки `0x5FD01..0x5FD10` сохраняют transport relays, rename, copy-number,

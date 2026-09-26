@@ -1,6 +1,6 @@
 //! Сервер принятых GameServer-соединений WorldServer из
-//! `nets/networld/mynetserver.cpp`, перенесённый в Realm — общий обладатель
-//! принятого server-направления World. Источник контракта — та же точная
+//! `nets/networld/mynetserver.cpp`; Realm — общий обладатель принятого
+//! server-направления World. Источник контракта — та же точная
 //! пара, что у [`crate::app::world_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):

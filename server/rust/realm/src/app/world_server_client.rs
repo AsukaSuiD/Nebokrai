@@ -1,5 +1,5 @@
-//! Принятое GameServer-соединение WorldServer из `nets/networld/myserverclient.cpp`,
-//! перенесённое в Realm — владельца принятого server-направления World.
+//! Принятое GameServer-соединение WorldServer из `nets/networld/myserverclient.cpp`;
+//! Realm — владелец принятого server-направления World.
 //! Источник контракта — та же точная пара, что у [`crate::app::world_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):

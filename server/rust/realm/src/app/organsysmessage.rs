@@ -1,8 +1,7 @@
 //! Session терминальный слой async confirm-подтверждений organizing-сообщений:
 //! типы-конечники, их in-memory очередь и четыре endpoint-узла слиты в одного
-//! владельца [`WorldOrganizingSessionRuntimeOwner`]; старый
-//! `appworld/message/organsysmessage.rs` держит type-алиас прежнего имени
-//! владельца для main-loop runtime и адаптеров.
+//! владельца [`WorldOrganizingSessionRuntimeOwner`]; старый пакет держит
+//! type-алиас прежнего имени владельца для main-loop runtime и адаптеров.
 //!
 //! Здесь же чистые data-контракты диспетчера: opcode-константы и
 //! dispatch/outcome/block/response-семейства, чьи поля цитируют только
@@ -18,19 +17,16 @@
 //! контроллера); их `CGame`/war-зависимые context-адаптеры остаются у старого
 //! пакета и передаются generic-параметрами, а goods-war member контекст
 //! целиком видовой — поверх `WorldOrganizingDispatchView` и
-//! [`WorldGameView`]. Финальная волна довезла и session-result семейство,
-//! decode-only `0x60121/0x60123`, маршрутные `0x6012E`/`0x60144`, billboard
-//! `0x60125` с OnceLock-инициализацией заголовков, quest/run-script
-//! `0x6013B`—`0x6013D`, invite/application `0x60116`/`0x60118`, initial data
-//! `0x60104`, creation `0x60103`, upgrade `0x60126` и city transfer
-//! `0x60130`: ветви, чья середина связана с concrete `&CGame`/`&CCountryHandler`
-//! inherent-вызовами контроллера, получили bridge-швы (`Organizing*Bridge`),
-//! реализуемые адаптерами старого пакета; порядок wire-полей, гейтов и
-//! публикации держит realm-обработчик. Старый файл больше не содержит
-//! ветвевой логики: он реэкспортирует контракты и держит адаптеры CGame c
-//! делегирующей обвязкой — включая двухфазную `0x6011F`, чей decode игрока
-//! из wire-хвоста выполняется старым владельцем игры между realm-разбором
-//! и realm-завершением.
+//! [`WorldGameView`]. Здесь же session-result семейство, decode-only
+//! `0x60121/0x60123`, маршрутные `0x6012E`/`0x60144`, billboard `0x60125` с
+//! OnceLock-инициализацией заголовков, quest/run-script `0x6013B`—`0x6013D`,
+//! invite/application `0x60116`/`0x60118`, initial data `0x60104`, creation
+//! `0x60103`, upgrade `0x60126` и city transfer `0x60130`: ветви, чья середина
+//! связана с concrete `&CGame`/`&CCountryHandler` inherent-вызовами
+//! контроллера, получили bridge-швы (`Organizing*Bridge`), реализуемые
+//! адаптерами старого пакета; порядок wire-полей, гейтов и публикации держит
+//! realm-обработчик. Двухфазная `0x6011F` декодирует игрока из wire-хвоста
+//! стороной старого владельца игры между realm-разбором и realm-завершением.
 //!
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 
@@ -3366,12 +3362,11 @@ where
     }))
 }
 
-// Ветви `0x60139`/`0x6013A` перенесены ниже волной war-ветвей: заёмный
-// блокер волны организационного view закрыт тем, что goods-war member
-// контекст здесь целиком видовой (`WorldGoodsWarMemberDispatchContext`
-// поверх `WorldOrganizingDispatchView`, чей `set_faction_goods_war_count`
-// добавлен той волной, и `WorldGameView` с `login_server_id`), а не держит
-// конкретных заёмов owner-ов старого пакета.
+// Goods-war member контекст ветвей `0x60139`/`0x6013A` здесь целиком
+// видовой (`WorldGoodsWarMemberDispatchContext` поверх
+// `WorldOrganizingDispatchView` с `set_faction_goods_war_count` и
+// `WorldGameView` с `login_server_id`), а не держит конкретных заёмов
+// owner-ов старого пакета.
 
 /// Выполняет `0x6013E`: `(player ID, parameter[0x32], value)`,
 /// master-faction lookup и controller `SetFactionParameter`.
@@ -3479,8 +3474,8 @@ where
 /// остаётся у старого владельца игры и выполняется обвязкой между realm-
 /// разбором и realm-завершением: заранее построенный effects-адаптер ветви
 /// держит общий заём той же игры, и два заёма одного owner-а не проходят одну
-/// границу вызова (та же семья блокировки, что волна организационного view
-/// зафиксировала у `0x60126`); разбивка сохраняет исходный порядок «разбор →
+/// границу вызова (та же семья блокировки, что зафиксирована у `0x60126`);
+/// разбивка сохраняет исходный порядок «разбор →
 /// decode → declaration/response» буквально.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrganizingDeclareFactionWarRequest {
@@ -3786,8 +3781,8 @@ where
 
 /// Goods-war member контекст ветвей `0x60139`/`0x6013A`, целиком поверх
 /// видов: организационный доступ — [`WorldOrganizingDispatchView`]
-/// (`faction_by_id` и `set_faction_goods_war_count` волны организационного
-/// view), игровой — [`WorldGameView`] (`current_game_server_sender`,
+/// (`faction_by_id` и `set_faction_goods_war_count` организационного view),
+/// игровой — [`WorldGameView`] (`current_game_server_sender`,
 /// `configured_world_number`, `login_server_id`, `map_player`). В отличие от
 /// прежнего адаптера старого файла он не держит конкретных заёмов owner-ов,
 /// поэтому winner-снимок ветви `0x6013A` может читаться тем же view до
@@ -3956,7 +3951,7 @@ pub fn dispatch_goods_war_faction_win(
 }
 
 // ---------------------------------------------------------------------------
-// Финальная волна диспетчера: session-result семейство, маршрутные и
+// Остальные ветви диспетчера: session-result семейство, маршрутные и
 // decode-only ветви, billboard с OnceLock-инициализацией, а также ветви,
 // чья середина связана с concrete `&CGame`/`&CCountryHandler` inherent-
 // вызовами контроллера (creation `0x60103`, upgrade `0x60126`, city
@@ -4225,9 +4220,8 @@ pub trait OrganizingCreateFactionBridge {
     ) -> OrganizingInfoDelivery;
 }
 
-/// Local-time snapshot wire-полей creation-ветви `0x60103`; перенесённая
-/// формула `TagTime::local_now` сохраняет исходные поля диспетчера один в
-/// один.
+/// Local-time snapshot wire-полей creation-ветви `0x60103`; формула
+/// `TagTime::local_now` сохраняет исходные поля диспетчера один в один.
 fn capture_local_tag_time() -> TagTimeValue {
     let local_time = TagTime::local_now();
     TagTimeValue {

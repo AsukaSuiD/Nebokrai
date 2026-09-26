@@ -1,9 +1,8 @@
 //! BaiTan-реестр мирового game: очередь заявок, маршруты игроков и счётчики IP.
 //!
-//! Состав перенесён из `worldserver/worldserver/game.rs`. Исходные методы
-//! `CGame` и их четыре `std::map` (+0x56c..+0x594 в образце) подтверждены
-//! машинным кодом `Nworldserver.exe` и pubs `WorldServer.pdb` (RSDS
-//! 289F1FB3-96A0-4FF4-8B5D-1FD17B50B751 совпадает с образцом, sha256
+//! Исходные методы `CGame` и их четыре `std::map` (+0x56c..+0x594 в образце)
+//! подтверждены машинным кодом `Nworldserver.exe` и pubs `WorldServer.pdb`
+//! (RSDS 289F1FB3-96A0-4FF4-8B5D-1FD17B50B751 совпадает с образцом, sha256
 //! f3ac454d…):
 //! `?AddItemToBaiTanRequestList@CGame@@QAEXKJ@Z` 1:0000de30,
 //! `?DelItemFromBaiTanList@CGame@@QAEXJ@Z` 1:000119f0,

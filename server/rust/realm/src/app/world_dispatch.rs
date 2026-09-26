@@ -1,22 +1,19 @@
 //! Диспетчер мировых сообщений `CGame` (`process_world_message`) и glue
-//! старого пакета к Realm-обработчикам, перенесённые волной C5-C из
-//! `worldserver/worldserver/game.rs` и старой обвязки
-//! `worldserver/appworld/message/{organsysmessage,countrymessage}.rs`.
+//! между process-owner-ом и Realm-обработчиками ветвей.
 //!
 //! Async `process_world_message` снимает вход FIFO через `WorldOwnerSelector`
-//! и передаёт ветви realm-диспетчерам; country/organizing effect-glue,
-//! адаптеры `WorldUnionApplicationEffect*` и `World*Effects`/`Bridge` типы
-//! остаются неизменными и собирают те же исходные владельцы. DeleteRole и
-//! CreateRole мосты сохранены как есть.
+//! и передаёт ветви realm-диспетчерам; country/organizing effect-glue и
+//! адаптеры `WorldUnionApplicationEffect*`/`World*Effects`/`Bridge` собирают
+//! те же исходные владельцы. DeleteRole и CreateRole мосты замыкают ветви,
+//! чья середина остаётся inherent-логикой игры.
 //!
 //! Тело `process_message` World-направления недосверено на уровне ветвей —
 //! PARTIAL (см. `crate::app::world_main_loop`); сам диспетчер разбирает
 //! опубликованные исходы без новых gate-ев.
 //!
-//! Нормализации — общие для волны (см. `crate::app::world_game`); glue из
-//! старых message-файлов дополнительно переписан на `crate::` пути, старые
-//! файлы остаются чистыми реэкспортными shim-ами (orphan-правило: impl-ы швов
-//! для `CGame` допустимы только в crate типа).
+//! Имена и проекции типов здесь — Realm/Shared формы (см.
+//! `crate::app::world_game`); impl-ы швов для `CGame` допустимы только в
+//! crate типа (orphan-правило).
 
 use crate::activities::attackcitysys::{AttackCityApplicationContext, AttackCityCallbacks, AttackCityEnemyRelationContext, AttackCityReloadBlock, AttackCityReloadReport, AttackCityWarEndContext, AttackCityWarResultContext, AttackCityWarResultFaction, AttackCityWarResultFormatArgument, AttackCityWarResultRegion, CAttackCitySys};
 use crate::activities::countrywarsys::{CountryWarDeclarationAuthority, CountryWarDeclarationContext, CountryWarDeclarationPlayer, CountryWarPhaseContext, CountryWarSys, CountryWarTopInfoContext, CountryWarVictoryContext, CountryWarVictoryRegion};
@@ -3934,9 +3931,8 @@ pub(crate) fn add_legacy_c_string(message: &mut nebokrai_shared::network::CBaseM
     message.add_byte(0);
 }
 
-// Gate `ShowSaveInfo` перенесён в Realm persistence/savedb вместе со своей
-// единственной save-публикующей семьёй; старый пакет получает его через
-// реэкспорт модуля `savedb`.
+// Gate `ShowSaveInfo` живёт в Realm persistence/savedb вместе со своей
+// save-публикующей семьёй.
 pub(crate) fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     let end = value
         .iter()
@@ -5175,7 +5171,7 @@ impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_
 }
 
 /// Session-result семейство (`0x60117/0x60119/0x60120/0x60122/0x60124/0x60131`)
-/// перенесено в realm (`crate::app::organsysmessage`) вместе с общим
+/// обслуживает realm-модуль (`crate::app::organsysmessage`) вместе с общим
 /// runtime-менеджером; обвязка только сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_organizing_session_result(
     message: &mut CMessage,
@@ -5923,7 +5919,7 @@ pub(crate) fn dispatch_faction_dub(
     )
 }
 
-/// Ветви `0x60114/0x60115` перенесены в realm
+/// Ветви `0x60114/0x60115` обслуживает realm-модуль
 /// (`crate::app::organsysmessage`); обвязка лишь собирает purview
 /// effects адаптер старого пакета и передаёт ход realm-обработчику.
 #[allow(clippy::too_many_arguments)]
@@ -5953,7 +5949,7 @@ pub(crate) fn dispatch_faction_purview(
     )
 }
 
-/// Decode-only ветви `0x60121/0x60123` перенесены в realm
+/// Decode-only ветви `0x60121/0x60123` обслуживает realm-модуль
 /// (`crate::app::organsysmessage`); обвязка сохраняет прежнюю точку
 /// входа main-loop.
 pub(crate) fn dispatch_consumed_long(
@@ -6181,9 +6177,9 @@ pub(crate) fn dispatch_faction_experience(
     )
 }
 
-// `OrganizingRegionParamDispatch` и `dispatch_region_param_update` перенесены в
-// realm (`crate::app::organsysmessage`) первой без-организационной
-// ветвью диспетчера; имена доступны здесь через glob re-export выше.
+// `OrganizingRegionParamDispatch` и `dispatch_region_param_update` живут в
+// realm (`crate::app::organsysmessage`); имена доступны здесь через glob
+// re-export выше.
 /// Ветвь `0x6012E` region route перенесена в realm
 /// (`crate::app::organsysmessage`): её game-контакты покрыты
 /// `WorldGameView`; обвязка сохраняет прежнюю точку входа main-loop.
@@ -7383,7 +7379,7 @@ pub(crate) fn dispatch_city_war_result<Callback: Copy>(
 }
 
 /// Соединяет concrete `CAttackCitySys::Reload` с World runtime owners; сам
-/// reload-контракт перенесён в realm (`crate::app::organsysmessage`).
+/// reload-контракт живёт в realm (`crate::app::organsysmessage`).
 ///
 /// `Reload` сначала снимает прежние timer events и завершает активные войны;
 /// поэтому вызывающий не имеет права превращать ошибку последующего `Initialize`
@@ -7429,7 +7425,7 @@ pub(crate) fn reload_attack_city<Callback: Copy>(
     )
 }
 
-/// Ветви `0x6013B/0x6013C` quest-команд перенесены в realm
+/// Ветви `0x6013B/0x6013C` quest-команд обслуживает realm-модуль
 /// (`crate::app::organsysmessage`): их game-контакты покрыты
 /// `WorldGameView`; обвязка сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_player_quest_command(
@@ -7768,7 +7764,7 @@ impl WorldCountryMutGate for CountryHandlerMutGate<'_> {
 }
 
 /// Хвостовые ветви `OnCountryMessage` (`0x6030F`, `0x6031B`,
-/// `0x60314..0x60316`, relay `0x60310`/`0x60311`, no-op) перенесены в realm
+/// `0x60314..0x60316`, relay `0x60310`/`0x60311`, no-op) обслуживает realm
 /// `crate::app::countrymessage::on_country_message`, который уже
 /// возвращает общий `WorldCountryMessageOutcome`; здесь только подача
 /// адаптера `CCountryHandler` в шов [`WorldCountryMutGate`].

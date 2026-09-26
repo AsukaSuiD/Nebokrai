@@ -1,16 +1,16 @@
-//! `Init`/`Release` и net init/reconnect `CGame` из `worldserver/game.cpp/.h`,
-//! перенесённые в Realm волной C5-C вместе с типом (см. [`crate::app::world_game`]).
+//! `Init`/`Release` и net init/reconnect `CGame` из `worldserver/game.cpp/.h`
+//! (см. [`crate::app::world_game`]).
 //!
 //! `Init` (`1:00017ee0`) сохраняет порядок загрузки ресурсов, подключения БД,
-//! создания игровых registry, сетевых владельцев и workers; точка заякорена
-//! прежними волнами. Ошибка не откатывает уже созданное; вызывающий всегда
-//! выполняет `Release` над частичным состоянием. `Release` (`1:0000d7f0`)
-//! останавливает producers, закрывает сеть, проводит save barrier, дожидается
-//! БД/workers и освобождает владельцев в исходном порядке.
+//! создания игровых registry, сетевых владельцев и workers. Ошибка не
+//! откатывает уже созданное; вызывающий всегда выполняет `Release` над
+//! частичным состоянием. `Release` (`1:0000d7f0`) останавливает producers,
+//! закрывает сеть, проводит save barrier, дожидается БД/workers и освобождает
+//! владельцев в исходном порядке.
 //!
-//! Нормализации — общие для волны (см. `crate::app::world_game`): пути
-//! старого пакета заменены на Realm/Shared эквиваленты, inherent-методы `pub`
-//! до волны C5-D.
+//! Имена и проекции типов — Realm/Shared формы (см.
+//! `crate::app::world_game`); inherent-методы `pub` для process-owner-а и
+//! старого пакета.
 
 use crate::activities::attackcitysys::{AttackCityCallbacks, CAttackCitySys};
 use crate::activities::countrywarsys::{CountryWarCallbacks, CountryWarSys};

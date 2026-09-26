@@ -1,7 +1,7 @@
 //! Владелец runtime из `miscserver/game.cpp`, подтверждённый `miscserver.exe` и
 //! `miscserver.pdb`. Он управляет World-соединением, auction room, FIFO сообщений,
 //! статистикой и жизненным циклом процесса.
-//! Перенесён в Realm `app/` как runtime-владелец роли MiscServer.
+//! В составе Realm `app/` — runtime-владелец роли MiscServer.
 //!
 //! Первичное соединение и reconnect удаляют прежний client и используют общий
 //! десятисекундный IPv4 connect. Оба отправляют регистрацию; первый добавляет

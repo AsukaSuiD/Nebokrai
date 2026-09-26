@@ -1,6 +1,6 @@
 //! Исходящее AuthServer-направление LoginServer из
-//! `nets/netlogin/mynetclient_auth.cpp` и `.h`, перенесённое в Realm — исходящий
-//! край Login к Auth. Источник контракта — та же точная пара, что у
+//! `nets/netlogin/mynetclient_auth.cpp` и `.h`; Realm — исходящий край Login
+//! к Auth. Источник контракта — та же точная пара, что у
 //! [`crate::app::login_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):

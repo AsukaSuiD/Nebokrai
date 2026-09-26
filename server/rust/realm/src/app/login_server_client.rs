@@ -1,6 +1,6 @@
 //! Входное соединение игрового клиента LoginServer из
-//! `nets/netlogin/mynetserverclient_client.cpp`, перенесённое в Realm — состояние
-//! принятого игрока Login-направления. Источник контракта — та же точная пара,
+//! `nets/netlogin/mynetserverclient_client.cpp`; Realm — состояние принятого
+//! игрока Login-направления. Источник контракта — та же точная пара,
 //! что у [`crate::app::login_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
@@ -23,12 +23,11 @@
 //! - четыре пути с `AddForbidIP 0x469390` + `QUIT 0x466730`: предел длины,
 //!   length CRC (`0x46EA79`), content CRC (`0x46EAD4`), opcode вне диапазона
 //!   (`0x46EB1F`, плюс deleting dtor `[edx]` с `push 1`); create-null
-//!   без ban — точное отличие прежнего Rust, теперь прямое;
+//!   без ban — доказанное отличие ветки;
 //! - `OnClose` `0x46E660`: при пустом CD-key — НИ публикации, НИ вызова
 //!   общего close (`je` сразу в эпилог); при непустом — `new(0x48)`
 //!   `CMessage(0x10001)` через ctor `0x465540`, `Add` CD-key с NUL,
-//!   publish owner `+0xDC` через `0x46AE90` и общий close `0x46C740(0)` —
-//!   странность буквально совпадает с прежним Rust `bool`-ветвлением;
+//!   publish owner `+0xDC` через `0x46AE90` и общий close `0x46C740(0)`;
 //!   фактическое удаление соединения остаётся общему `CServer`.
 //!
 //! Owner сохраняет проверки длины/CRC, RLE create-путь, opcode-range,

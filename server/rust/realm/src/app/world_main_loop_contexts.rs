@@ -1,6 +1,5 @@
 //! Post-init контексты рантайма WorldServer (JJC weekly reset и LeiTing
-//! daily reset), перенесённые из `worldserver/worldserver/runtime.rs` в Realm
-//! `app/`.
+//! daily reset) в составе Realm.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
@@ -10,21 +9,19 @@
 //! `WritePrivateProfileString` вебсторони `JJcConfig.ini` через замену только
 //! значения ключа (без перезаписи файла целиком). Типы owner-ов (`CJJcSystem`,
 //! `CLeiTing`, `TiberiusRsJjcSys`, workers — см. их модули в `activities/`) уже
-//! Realm; `ServerCommandHandle` — Shared; старый `CGame` сюда не тянется.
+//! Realm; `ServerCommandHandle` — Shared; `CGame` сюда не тянется.
 //!
 //! Glue-логирование наблюдаемости остаётся process-edge строками; исходные
-//! события typed (`JjcLogEvent`, worker events). Новых Send-обязательств
-//! перенос не вводит: dyn-совместимость сохраняется по правилу ADR-0013, а
+//! события typed (`JjcLogEvent`, worker events). Файл не вводит новых
+//! Send-обязательств: dyn-совместимость сохраняется по правилу ADR-0013, а
 //! форма владения detached worker-ами остаётся у модулей `activities/`.
 //!
-//! Волной C5-B сюда переехали также runtime-швы `WorldJjcRuntimeContext` и
-//! `WorldLeiTingRuntimeContext` с их worker-мостами (`WorldJjcWorkerContext`,
-//! `WorldLeiTingWorkerContext`) из `worldserver/worldserver/game.rs` и
-//! process-impl этих швов из `runtime.rs` — все одной волной: после переезда
-//! самих process-контекстов прежняя посадка impl дала бы orphan-нарушение.
-//! Мосты конструируются владельцем хода (`world_main_loop`) через `new`;
-//! glue-строки impl перенесены без изменений (JjcLogEvent-подход
-//! наблюдаемости исходно принят).
+//! Здесь же runtime-швы `WorldJjcRuntimeContext` и `WorldLeiTingRuntimeContext`
+//! с их worker-мостами (`WorldJjcWorkerContext`, `WorldLeiTingWorkerContext`)
+//! и process-impl этих швов: посадка impl вне этого crate дала бы
+//! orphan-нарушение, потому что process-контексты живут здесь. Мосты
+//! конструируются владельцем хода (`world_main_loop`) через `new`; наблюдаемость
+//! держится на исходно принятом JjcLogEvent-подходе.
 
 use std::error::Error;
 use std::fmt;
@@ -306,9 +303,8 @@ impl JjcRunContext for WorldJjcProcessContext {
 /// Platform/log дополнение к `JjcRunContext`, необходимое concrete DB-worker-у.
 /// Сам доменный `CJJcSystem` по-прежнему не знает о Tokio либо system threads.
 ///
-/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B вместе с
-/// worker-мостом и process-impl ниже: прежняя посадка impl в `runtime.rs` стала
-/// бы orphan-нарушением, потому что process-контекст уже живёт здесь.
+/// Worker-мост и process-impl живут здесь же: посадка impl вне этого crate
+/// стала бы orphan-нарушением, потому что process-контекст уже живёт здесь.
 pub trait WorldJjcRuntimeContext: JjcRunContext {
     fn on_week_clear_spawn_failed(&mut self, error: io::Error);
     fn on_week_clear_worker_event(&mut self, event: WorldJjcWeekClearWorkerEvent);
@@ -498,9 +494,8 @@ impl LeiTingContext for WorldLeiTingProcessContext {
 /// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
 /// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
 ///
-/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B вместе с
-/// worker-мостом и process-impl ниже: прежняя посадка impl в `runtime.rs` стала
-/// бы orphan-нарушением, потому что process-контекст уже живёт здесь.
+/// Worker-мост и process-impl живут здесь же: посадка impl вне этого crate
+/// стала бы orphan-нарушением, потому что process-контекст уже живёт здесь.
 pub trait WorldLeiTingRuntimeContext: LeiTingContext {
     fn on_database_reset_spawn_failed(
         &mut self,

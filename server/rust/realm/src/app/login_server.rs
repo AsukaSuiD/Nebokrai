@@ -1,8 +1,8 @@
 //! Производный владелец игровых client-соединений LoginServer из
-//! `nets/netlogin/mynetserver_client.cpp`, перенесённый в Realm — listener
-//! игровых клиентов Login-направления. Источник контракта — та же точная пара,
-//! что у [`crate::app::login_message`]; доказанные call sites `CGame` сохранены
-//! прежним владельцем процесса.
+//! `nets/netlogin/mynetserver_client.cpp`; Realm — listener игровых клиентов
+//! Login-направления. Источник контракта — та же точная пара,
+//! что у [`crate::app::login_message`]; доменные call sites `CGame` остаются
+//! у владельца процесса.
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
 //! - ctor `CMyNetServer_Client` `0x46A870`: базовый `CServer` ctor `0x46A480`,

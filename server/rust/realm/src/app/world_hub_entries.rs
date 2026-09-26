@@ -1,7 +1,6 @@
-//! Записи и транспортные контексты таблиц состояния WorldServer, перенесённые
-//! из `src/worldserver/worldserver/game.rs` волной C5-A (hub-data уровень):
-//! materialized-регион, системная рассылка `tagSysBroadcast` и её AI-отчёт,
-//! деньги аукциона с точным x87-усечением, записи `tagGameServer` и
+//! Записи и транспортные контексты таблиц состояния WorldServer (hub-data
+//! уровень): materialized-регион, системная рассылка `tagSysBroadcast` и её
+//! AI-отчёт, деньги аукциона с точным x87-усечением, записи `tagGameServer` и
 //! login-игрока, отчёты origin-снаряжения и organizing/доставка-контексты
 //! обновления faction-информации игрока. Источник контракта — та же точная
 //! пара, что у [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +

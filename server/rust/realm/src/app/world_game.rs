@@ -1,33 +1,26 @@
-//! Тип `CGame` старого WorldServer из `worldserver/game.cpp/.h` (сборка
-//! `worldserver.exe`/`worldserver.pdb`), перенесённый в Realm волной C5-C.
-//! До волны тип жил в старом пакете `worldserver/worldserver/game.rs`; старый
-//! файл теперь glob-shim над `nebokrai_realm::app::{world_game, world_game_init,
-//! world_main_loop, world_reload, world_dispatch}`.
+//! Тип `CGame` исторического WorldServer из `worldserver/game.cpp/.h` (сборка
+//! `Nworldserver.exe`/`WorldServer.pdb`) в составе Realm.
 //!
 //! Здесь — объявление структуры, конструктор `new`, hub-таблицы и accessors,
 //! timer/effect glue (WorldTimerHandler, war/city timer-контексты) и impl-ы
-//! Realm-швов (`WorldGameView` и соседи), включая бывшие
+//! Realm-швов (`WorldGameView` и соседи), включая
 //! `EnemyFactionSink`/`CountrySaveSink`/`OrganizingSaveSink`/`HonorRanksGameView`
 //! и `WorldGameThreadGame`. Inherent-тела загрузки/хода/reload/save/dispatch
 //! лежат в соседних файлах `world_game_init`, `world_main_loop`, `world_reload`,
 //! `world_dispatch` и `persistence::world_db_data_collect`.
 //!
-//! Нормализации волны (тела методов совпадают с переносимым состоянием):
-//! пути старого пакета заменены на Realm/Shared эквиваленты
-//! (`crate::worldserver::appworld::*` -> `crate::{organizations, activities,
-//! characters, content, regions, sessions, billing, auction}::*`,
-//! `crate::dbaccess::worlddb::*` -> `crate::{persistence, organizations,
-//! activities, characters, regions}::*`, `crate::nets::*` -> `crate::app::world_*`
-//! и `nebokrai_shared::network`, `crate::public::*`/`crate::setup::*` ->
-//! `nebokrai_shared::{resources, runtime, values}`); ссылки `nebokrai_realm::`
-//! записаны через `crate::`; полям `CGame` добавлен `pub(crate)` (impl-блоки
-//! разнесены по соседям), inherent-методам — `pub` (переходная нормализация:
-//! старый process-owner `runtime.rs` и shim-пакет обращаются к ним до волны
-//! C5-D), glue-типам швов — `pub` как участникам pub-сигнатур; desugared-формы
-//! (`&dyn` view-швы) соответствуют ADR-0013.
+//! Имена и проекции типов здесь — Realm/Shared формы оригинальных
+//! (`organizations`, `activities`, `characters`, `content`, `regions`,
+//! `sessions`, `billing`, `auction`, `persistence`, `crate::app::world_*`,
+//! `nebokrai_shared::{network, resources, runtime, values}`). Полям `CGame`
+//! назначен `pub(crate)` (impl-блоки разнесены по соседним файлам),
+//! inherent-методам — `pub`: к ним обращаются process-owner
+//! `crate::app::world_process*` и старый пакет; glue-типам швов — `pub` как
+//! участникам pub-сигнатур; desugared-формы (`&dyn` view-швы) соответствуют
+//! ADR-0013.
 //!
 //! Генератор системных broadcast-maintenance полагается на CRT `rand` след:
-//! `0x453560` (закреплён прежними волнами, см. `world_reload`).
+//! `0x453560` (машинный якорь формулы — см. `world_reload`).
 
 use crate::activities::attackcitysys::{AttackCityCallbackKind, AttackCityCallbacks, AttackCityCountdownContext, AttackCityCountdownRequest, AttackCityPhaseContext, AttackCityPhaseEffect, CAttackCitySys};
 use crate::activities::countrywarsys::{CountryWarCallbackKind, CountryWarCallbacks, CountryWarPhase, CountryWarSys, CountryWarTopInfoKind};
@@ -559,8 +552,9 @@ impl<GetTick: FnMut() -> u32> FourNationWarCallbackContext
 }
 
 /// Adapter-путь timer-стадии: DB-owner статистики входит generic-параметром
-/// `RsPlayer` (шов `RsPlayerOwner<CPlayer>`), как в перенесённой связке хода;
-/// глубокие точки `process_*` сохраняют прежнюю конкретную декларацию.
+/// `RsPlayer` (шов `RsPlayerOwner<CPlayer>`), как в связке хода
+/// `world_main_loop_data`; глубокие точки `process_*` сохраняют конкретную
+/// декларацию.
 pub(crate) struct WorldTimerHandler<'a, Callback, RsPlayer> {
     pub(crate) game: &'a CGame,
     pub(crate) attack_city: &'a mut CAttackCitySys,
@@ -1836,7 +1830,7 @@ impl crate::app::world_game_view::WorldServerMessageGameView for CGame {
     }
 }
 
-/// Gate-адаптер хвоста завершённой save-волны ветви `0x5FA03`: owners,
+/// Gate-адаптер хвоста завершённого сохранения ветви `0x5FA03`: owners,
 /// остающиеся в старом пакете (faction war, страновая таблица, lifecycle и
 /// runtime save-потока), связываются один раз у вызова dispatcher-а; игра,
 /// organizing и realm-владельцы приходят параметрами. Порядок цепочки
@@ -2295,9 +2289,8 @@ impl RegionParameterLoadTarget for CGame {
     }
 }
 
-// Связка старого пакета с драйвером Realm `app::world_runtime`, пока `CGame`
-// живёт у этого owner-а: драйверу передаётся фабричный owner и его `Release`
-// через shim-трейт. После волны самого `CGame` переходный блок снимается.
+// Связка `CGame` с драйвером Realm `app::world_runtime`: драйверу
+// передаётся фабричный owner и его `Release` через этот трейт.
 impl crate::app::world_runtime::WorldGameThreadGame for CGame {
     fn release<Context: WorldGameReleaseContext>(
         &mut self,

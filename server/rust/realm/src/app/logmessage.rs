@@ -1,7 +1,7 @@
 //! Login lifecycle `OnLogMessage` из `logmessage.cpp`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Перенесённые ветви диспетчера `OnLogMessage`: списки восстановления и
+//! Ветви диспетчера `OnLogMessage`: списки восстановления и
 //! удаления, вход и отключение аккаунта изменяются в исходном порядке до
 //! wire-ответа LoginServer; форма payload не меняется. Create-role выполняет
 //! limit, sex/occupation, country, filter и name checks до выдачи ID и
@@ -12,10 +12,8 @@
 //! полный снимок до повторной публикации online. Player-return декодирует
 //! subtype-`1`, отвечает LoginServer и снимает login/online до уведомления
 //! друзей. Список персонажей `0x4FB01` живёт в соседнем `player_base.rs`.
-//! Вместе с ветвями сюда перенесён и сам match-диспетчер `OnLogMessage`:
-//! прежний dispatcher-адаптер старого пакета (`appworld/message/logmessage.rs`)
-//! удалён каскадом вместе с mod-декларацией, маршрут Log-сообщений идёт из
-//! единственного callsite-а `process_world_message` через dyn-швы seam.
+//! Здесь же сам match-диспетчер `OnLogMessage`: маршрут Log-сообщений идёт
+//! из единственного callsite-а `process_world_message` через dyn-швы.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 

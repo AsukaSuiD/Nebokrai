@@ -1,6 +1,5 @@
 //! Сетевая прокладка одного хода процесса WorldServer — Tokio-воплощение
-//! net-thread семейства `CServer`, перенесённое из
-//! `worldserver/worldserver/runtime.rs` в Realm `app/`.
+//! net-thread семейства `CServer`.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_server`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,

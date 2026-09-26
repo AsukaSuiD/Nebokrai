@@ -1,7 +1,7 @@
-//! Композиция и сетевой край Realm: сообщения направлений, слушающие порты и
-//! места диспетчеризации объединённого Realm-процесса по [карте владельцев].
-//! Старого процессного `realmserver` ещё нет; компонент растёт по мере
-//! переноса владельцев World/Auth/Login/Billing/Misc.
+//! Композиция и сетевой край Realm: сообщения направлений, слушающие порты,
+//! места диспетчеризации и действующая realm-оркестрация объединённого
+//! Realm-процесса (CGame, MainLoop, драйвер процесса WorldServer) по
+//! [карте владельцев]. Старого процессного `realmserver` ещё нет.
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md
 
@@ -41,28 +41,28 @@ pub mod servermessage; // диспетчер server-сообщений World.
 pub mod teammessage; // входящий team-диспетчер 0x600xx World.
 pub mod world_client; // исходящий клиент World->Login.
 pub mod world_game_view; // узкий game-view обработчиков мировых сообщений.
-pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов (волна C5-C).
-pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers (волна C5-C).
-pub mod world_dispatch; // process_world_message: диспетчер мировых сообщений, drain union runtime, country/organizing effect-glue и DeleteRole/CreateRole мосты (волна C5-C).
-pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры (волна C5-A).
-pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты и organizing player-контексты (волна C5-A).
+pub mod world_game; // тип CGame старого WorldServer: объявление, new, hub-таблицы/accessors, timer/effect glue и impl-ы Realm-швов.
+pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers.
+pub mod world_dispatch; // process_world_message: диспетчер мировых сообщений, drain union runtime, country/organizing effect-glue и DeleteRole/CreateRole мосты.
+pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры.
+pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты и organizing player-контексты.
 pub mod world_message; // wire-сообщение направлений Login/Game<->World.
-pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration, typed-доставка его событий и runtime-контракт Init с region-load швом dyn RegionParameterLoadTarget (impl у process-owner-а; волна C5-B)
-pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, runtime-швы с worker-мостами и process-impl (волна C5-B), INI-замена, build error MainLoop DB-stage
-pub mod world_main_loop_data; // данные хода MainLoop World: stage-отчёты, конфигурация, JJC/LeiTing worker-адаптеры и связка StateOwners/Owners/Callbacks/Block/Report; rs_player/largess/Game входят generic-параметрами (волна C5-A).
-pub mod world_main_loop; // MainLoop и stage-функции хода CGame: ai, process_message, timer/faction-war/lei-ting/db-misc/net-session/ping/minute/bai-tan/tail/refresh/maintenance стадии, largess/profile (волна C5-C).
+pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration, typed-доставка его событий и runtime-контракт Init с region-load швом dyn RegionParameterLoadTarget (impl у process-owner-а)
+pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, runtime-швы с worker-мостами и process-impl, INI-замена, build error MainLoop DB-stage
+pub mod world_main_loop_data; // данные хода MainLoop World: stage-отчёты, конфигурация, JJC/LeiTing worker-адаптеры и связка StateOwners/Owners/Callbacks/Block/Report; rs_player/largess/Game входят generic-параметрами.
+pub mod world_main_loop; // MainLoop и stage-функции хода CGame: ai, process_message, timer/faction-war/lei-ting/db-misc/net-session/ping/minute/bai-tan/tail/refresh/maintenance стадии, largess/profile.
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view; // узкие organizing-view мировых диспетчеров.
-pub mod world_process; // process owners исторического WorldServer: domain owners + initialize_game, состояние MainLoop, network-обвязка хода, post-init DB-контексты и WorldProcessRuntime (волна C5-D)
-pub mod world_process_init; // Init-контекст процесса World: 12 Option DB-owner-ов + Largess Arc + instance guard, impl WorldGameInitContext и player-load БД (волна C5-D)
-pub mod world_process_release; // Release-контекст процесса World и impl-ы драйвера world_runtime для WorldProcessRuntime, включая Game = CGame (волна C5-D)
-pub mod world_process_resources; // ресурсный держатель World (registries + WorldReloadContext); transition-посадка: целевое место content/, пока в app/ (волна C5-D)
-pub mod world_process_save; // save-worker процесса World: launch строит 12 Tiberius save-DB owner-ов и зовёт save_thread_func; save-runtime и trigger-guard (волна C5-D)
-pub mod world_reload_profiles; // refresh/reload-контракт хода World: snapshot-gate, atomic reload-flags с таблицей профилей, resource snapshot, maintenance ranks и profile-init helpers (волна C5-A).
-pub mod world_reload; // ReLoad CGame и reload-стадии: war-семейство, string-table, initial configuration, reload profiles/reload_conf_log (PARTIAL, волна C5-C).
+pub mod world_process; // process owners исторического WorldServer: domain owners + initialize_game, состояние MainLoop, network-обвязка хода, post-init DB-контексты и WorldProcessRuntime
+pub mod world_process_init; // Init-контекст процесса World: 12 Option DB-owner-ов + Largess Arc + instance guard, impl WorldGameInitContext и player-load БД
+pub mod world_process_release; // Release-контекст процесса World и impl-ы драйвера world_runtime для WorldProcessRuntime, включая Game = CGame
+pub mod world_process_resources; // ресурсный держатель World (registries + WorldReloadContext); посадка переходная: целевое место content/, пока в app/
+pub mod world_process_save; // save-worker процесса World: launch строит 12 Tiberius save-DB owner-ов и зовёт save_thread_func; save-runtime и trigger-guard
+pub mod world_reload_profiles; // refresh/reload-контракт хода World: snapshot-gate, atomic reload-flags с таблицей профилей, resource snapshot, maintenance ranks и profile-init helpers.
+pub mod world_reload; // ReLoad CGame и reload-стадии: war-семейство, string-table, initial configuration, reload profiles/reload_conf_log (PARTIAL).
 pub mod world_runtime; // драйвер потока игры World: CreateGame→Init→turn→Release→DeleteGame + init/release data-bundle; CGame входит assoc-типом и фабрикой, context-impl у process-owner-а
-pub mod world_save_reports; // save-state и trigger/notify отчёты сохранения хода World: collect player-data, pre-gate, launch и терминальный trigger-итог (волна C5-A).
-pub mod world_setup; // позиционная конфигурация tagSetup WorldServer: поля, plain/encoded парсинг и разрешение runtime-файла (волна C5-A).
+pub mod world_save_reports; // save-state и trigger/notify отчёты сохранения хода World: collect player-data, pre-gate, launch и терминальный trigger-итог.
+pub mod world_setup; // позиционная конфигурация tagSetup WorldServer: поля, plain/encoded парсинг и разрешение runtime-файла.
 pub mod worldothermessage; // прочие сообщения World 0x5FDxx.
 pub mod world_server; // принимающий сервер Game-соединений World.
 pub mod world_server_client; // состояние принятого Game-соединения у World.

@@ -1,8 +1,7 @@
-//! Сообщение сетевого направления MiscServer из `nets/netmisc/message.cpp`,
-//! перенесённое в Realm — владельца Misc-направления объединённого
-//! Realm-процесса.
+//! Сообщение сетевого направления MiscServer из `nets/netmisc/message.cpp`;
+//! Realm — владелец Misc-направления объединённого Realm-процесса.
 //!
-//! Точная пара зафиксирована заново для этого прохода: `.exe/miscserver.exe`
+//! Источник контракта — точная пара `.exe/miscserver.exe`
 //! SHA-256 `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`,
 //! ImageBase `0x400000`, PE timestamp `0x53A26D7D` ↔ `.exe/miscserver.pdb`
 //! GUID `FE6CDEF1-D110-4C25-ABE9-F66D5E665F3B` age 1 (CodeView RSDS).
@@ -30,8 +29,7 @@
 //!   destructor-стаб `0x4057A0` и возврат `1`, `0x14ED00` → `0x4036B0`
 //!   (OnMSG_W2M_AUCTION) и `1`, `0x16EA00` → `0x403C10` (OnMSG_M2M_Fuction)
 //!   и `1`, прочие → `0x403CC0` (OnOtherMsg) и строго `0` — в отличие от
-//!   World-направления. Прежний текст «`Run` возвращает исходный long»
-//!   подтверждён буквально.
+//!   World-направления.
 //!
 //! Конструктор создаёт базовый 16-байтовый header, записывает `MsgType` в слово
 //! `+4` и обнуляет `MapID`, `SocketID`, IP и receive tick. Оба create-пути

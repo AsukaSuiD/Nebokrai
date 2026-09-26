@@ -1,6 +1,6 @@
 //! Конфигурация `miscserver/setup/setup.cpp/.h`, подтверждённая
 //! `miscserver.exe` и `miscserver.pdb`.
-//! Перенесена в Realm `app/` как конфигурация роли MiscServer.
+//! В составе Realm `app/` — конфигурация роли MiscServer.
 //!
 //! `LoadIpPort` читает из `setup.ini` четыре позиционные пары: World IP и порт,
 //! local bind IP и listen port. Имена слева игнорируются, строки остаются

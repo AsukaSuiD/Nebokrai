@@ -1,8 +1,7 @@
-//! Позиционная конфигурация `tagSetup` WorldServer и её парсинг, перенесённые
-//! из `src/worldserver/worldserver/game.rs` волной C5-A (hub-data уровень).
-//! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
-//! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает).
+//! Позиционная конфигурация `tagSetup` WorldServer и её парсинг (hub-data
+//! уровень). Источник контракта — та же точная пара, что у
+//! [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
+//! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
 //! Две формы входа повторяют исходные прочтения: plain `setup.txt` идёт в
 //! порядке MSVC `operator>>` поверх whitespace-токенов, encoded DAT держит

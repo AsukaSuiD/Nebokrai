@@ -1,5 +1,4 @@
-//! DB-слой Init-context рантайма WorldServer, перенесённый из
-//! `worldserver/worldserver/runtime.rs` в Realm `app/`.
+//! DB-слой Init-context рантайма WorldServer в составе Realm.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
@@ -7,20 +6,20 @@
 //! привязка семейства post-init, тела DB-owner-ов подтверждаются их
 //! собственными модулями в `persistence/` и `organizations/`).
 //!
-//! Сам держатель `WorldProcessInitContext` и impl контракта перенесены в
-//! [`crate::app::world_process_init`] волной C5-D вместе с остальными process
-//! owners. Здесь живёт realm-shaped состав этого Init-context: snapshot
-//! player-load, reloadable конфигурация `DbMiscContext`, сборка самого
-//! контекста двенадцати DB-stage и typed-доставка его событий. Seller-fee
-//! `get_opt_money_jin` остаётся static-методом `CGame` (волной C5-C он в
-//! [`crate::app::world_game`]) и подставляется callback-ом, поэтому этот файл
-//! не тянет игровой владелец и сохраняет reload-aware чтение Globe snapshot.
+//! Держатель `WorldProcessInitContext` и impl контракта живут в
+//! [`crate::app::world_process_init`] вместе с остальными process owners.
+//! Здесь — realm-shaped состав этого Init-context: snapshot player-load,
+//! reloadable конфигурация `DbMiscContext`, сборка самого контекста двенадцати
+//! DB-stage и typed-доставка его событий. Seller-fee `get_opt_money_jin`
+//! остаётся static-методом `CGame` (он в [`crate::app::world_game`]) и
+//! подставляется callback-ом, поэтому этот файл не тянет игровой владелец и
+//! сохраняет reload-aware чтение Globe snapshot.
 //!
-//! Волной C5-B сюда перенесён и сам контракт [`WorldGameInitContext`] из
-//! `worldserver/worldserver/game.rs`. Единственный CGame-типизированный метод
-//! исходной формы, `load_region_parameters`, получил готовый шов `&mut dyn
-//! RegionParameterLoadTarget` (`regions/rsregion.rs`): process owner пробрасывает
-//! target напрямую в `RsRegionOwner::load_region_parameters`, не зная типа игры.
+//! Здесь же объявлен контракт [`WorldGameInitContext`]. Единственный
+//! CGame-типизированный метод исходной формы, `load_region_parameters`,
+//! получил готовый шов `&mut dyn RegionParameterLoadTarget`
+//! (`regions/rsregion.rs`): process owner пробрасывает target напрямую в
+//! `RsRegionOwner::load_region_parameters`, не зная типа игры.
 
 use std::io;
 use std::sync::Arc;
@@ -211,10 +210,9 @@ pub fn report_db_misc_runtime_event(event: TiberiusDbMiscRuntimeEvent<'_>) {
 /// Контракт process-уровня `CGame::Init` между драйвером хода
 /// (`app/world_runtime`) и concrete owner-ами процесса.
 ///
-/// Перенесён из `worldserver/worldserver/game.rs` волной C5-B. CGame-typed
-/// параметр `load_region_parameters` исходной формы заменён готовым швом
-/// `&mut dyn RegionParameterLoadTarget`; impl — у process-owner-а Realm
-/// (`crate::app::world_process_init`) с волны C5-D.
+/// CGame-typed параметр `load_region_parameters` исходной формы заменён
+/// готовым швом `&mut dyn RegionParameterLoadTarget`; impl — у process-owner-а
+/// Realm (`crate::app::world_process_init`).
 #[allow(
     async_fn_in_trait,
     reason = "буквальный перенос pub(crate)-контракта init-стадий: единственные \

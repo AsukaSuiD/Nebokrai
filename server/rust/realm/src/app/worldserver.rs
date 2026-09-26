@@ -1,8 +1,10 @@
-//! Технические функции process-owner-а исторического WorldServer, перенесённые в Realm `app/`.
+//! Технические функции process-owner-а исторического WorldServer в составе
+//! Realm `app/`.
 //!
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`. Файл хранит
 //! operator-log адаптеры, имя/состояние процесса и узкие lifecycle helpers,
-//! используемые `CGame`; доменный `Init/MainLoop/Release` остаётся в `game.rs`.
+//! используемые `CGame`; доменный `Init/MainLoop/Release` живёт в
+//! `world_game_init`/`world_main_loop`.
 //!
 //! Windows MFC/console side effects заменены структурированными результатами и
 //! stderr process-оболочки. Byte-exact format keys, порядок публикации и
@@ -13,25 +15,24 @@
 //!
 //! В конце файла собраны data-контракты бывшего `CGame`, цитируемые полями
 //! диспетчерских outcome/report-типов `app::servermessage`: CD-key snapshot,
-//! reconnect/region transition/save response записи, ping/region decode итоги и
-//! запуск save-thread; completion-волна добавила отчёт offline-миграции
-//! терминала ветви `0x3FC02` (`WorldGameServerLostReport`). Их fn-владельцы и
-//! trait `WorldSaveRuntimeContext` остаются у process-owner-а `game.rs`.
+//! reconnect/region transition/save response записи, ping/region decode итоги,
+//! запуск save-thread и отчёт offline-миграции терминала ветви `0x3FC02`
+//! (`WorldGameServerLostReport`). Их fn-владельцы и trait
+//! `WorldSaveRuntimeContext` остаются у process-owner-а (`world_game*`).
 //!
 //! Там же свободный monitoring-owner `SendErrLog` (`send_err_log_to_login` +
 //! `WorldErrorLogDelivery`): исходная cdecl-функция принадлежит коду процесса
 //! WorldServer, а не nets-классу `CMessage` (S_PUB32 `?SendErrLog@@YAXDJJPBD@Z`
 //! `1:00000f30` той же пары `Nworldserver.exe`/`WorldServer.pdb`, RSDS
-//! совпадает, основание зафиксировано ранее), и публикует Login wire
+//! совпадает), и публикует Login wire
 //! `0x0001_FE08` средствами [`crate::app::world_message::CMessage`]. Поэтому
 //! её место у process-owner-а Realm `app/`, а не в `app::world_message`,
 //! который воспроизводит только сам nets-класс.
 //!
 //! Процессный environment-helper `resolve_first_local_ipv4` (первый локальный
-//! IPv4 через nodename-lookup системного resolver-а) перенесён из `game.rs`
-//! с неизменным телом и получил здесь единственного мирового владельца;
-//! приватные per-runtime копии той же формы у Auth/Billing/Login волной
-//! не сводились.
+//! IPv4 через nodename-lookup системного resolver-а) имеет здесь единственного
+//! мирового владельца; приватные per-runtime копии той же формы у
+//! Auth/Billing/Login не сводились.
 
 use std::error::Error;
 use std::fmt;
@@ -1105,9 +1106,6 @@ pub fn prepare_save_thread_launch(
 }
 
 /// Первый локальный IPv4 процесса через nodename-lookup системного resolver-а.
-///
-/// Тело перенесено из `worldserver/worldserver/game.rs` без изменений (нормализация
-/// только `pub(crate)` → `pub`); старый пакет получает форму реэкспортом.
 pub fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
     let hostname = uname();
     let hostname = hostname.nodename().to_str().ok()?;

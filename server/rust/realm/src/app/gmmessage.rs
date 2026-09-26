@@ -1,6 +1,5 @@
-//! GM-диспетчер `OnGMMessage` WorldServer, перенесённый в Realm `app/`.
-//! Типы маршрута именованных регионов и route-scan живут в том же модуле
-//! Realm app.
+//! GM-диспетчер `OnGMMessage` WorldServer в составе Realm `app/`.
+//! Типы маршрута именованных регионов и route-scan живут в том же модуле.
 //!
 //! GM-сообщения `OnGMMessage` из `gmmessage.cpp`, подтверждённые
 //! `worldserver.exe` и `worldserver.pdb`.

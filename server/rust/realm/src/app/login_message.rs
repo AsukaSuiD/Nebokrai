@@ -1,7 +1,7 @@
-//! Сообщение трёх сетевых направлений LoginServer из `nets/netlogin/message.cpp`,
-//! перенесённое в Realm — владельца Login-направления объединённого Realm-процесса.
+//! Сообщение трёх сетевых направлений LoginServer из `nets/netlogin/message.cpp`;
+//! Realm — владелец Login-направления объединённого Realm-процесса.
 //!
-//! Точная пара зафиксирована заново для этого прохода: `.exe/loginserver.exe`
+//! Источник контракта — точная пара `.exe/loginserver.exe`
 //! SHA-256 `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`,
 //! ImageBase `0x400000`, PE timestamp `0x53E0C388` ↔ `.exe/loginserver.pdb`
 //! GUID `48D4B1F2-97BB-4CF8-B9EA-B13F7E2F9645` age 1 (CodeView RSDS, match).

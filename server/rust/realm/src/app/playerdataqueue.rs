@@ -13,7 +13,7 @@
 //! повторяет pop, а извлечённая запись уходит в loaded-queue маршрут владельца
 //! игры (шов [`WorldPlayerQueueGameView`]) и безусловно завершает вызов.
 //! Стадия накапливает profile clock между теми же tick-вызовами, что исходный
-//! MainLoop; состояния clock/profile этой волной остаются в старом пакете,
+//! MainLoop; состояния clock/profile этой стадии остаются в старом пакете,
 //! handler получает их поля по ссылке и пишет в исходных позициях
 //! относительно tick-вызовов.
 
@@ -26,8 +26,7 @@ use crate::characters::playerdataqueue::CPlayerDataQueue;
 
 /// Отчёт одной queue-стадии MainLoop: при блокирующем дефекте — тот же
 /// producer-error, при завершении — исход прохода и времена двух закрывающих
-/// тиков вместе с накопленным profile time. Тип перенесён из `game.rs` вместе
-/// со stage-handler-ом; старый пакет реэкспортирует.
+/// тиков вместе с накопленным profile time.
 #[derive(Debug, Eq, PartialEq)]
 pub enum WorldMainLoopPlayerDataQueueStageReport {
     Complete {

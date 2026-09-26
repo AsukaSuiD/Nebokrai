@@ -1,5 +1,4 @@
-//! Refresh/reload-контракт и state-отчёты стадий MainLoop WorldServer,
-//! перенесённые из `src/worldserver/worldserver/game.rs` волной C5-A
+//! Refresh/reload-контракт и state-отчёты стадий MainLoop WorldServer
 //! (hub-data уровень): snapshot-gate RefreshInfo, atomic reload-flags с
 //! таблицей профилей `ReloadConf`, resource snapshot стадии, maintenance
 //! player-ranks/honor, report-снимки профилирования и profile-init helpers.
@@ -8,11 +7,10 @@
 //! RSDS совпадает).
 //!
 //! `current_country_save_limits` (`tagSaveCountry`) и snapshot-gate
-//! `legacy_refresh_count` ждали именно этой волны: обе опираются на типы
-//! `WorldMainLoop*`/`WorldRefreshSnapshotBlock`/`WorldProcessMessageError`,
-//! чей переезд закрыт здесь. Reload-диспетчер (`reload_profiles`,
-//! `reload_conf_log`) остаётся у process-owner-а: он типизирован живым
-//! `CGame` и переезжает с волной самой игры.
+//! `legacy_refresh_count` опираются на типы
+//! `WorldMainLoop*`/`WorldRefreshSnapshotBlock`/`WorldProcessMessageError`
+//! этого файла. Reload-диспетчер (`reload_profiles`, `reload_conf_log`)
+//! остаётся у process-owner-а: он типизирован живым `CGame`.
 
 use std::error::Error;
 use std::fmt;
@@ -326,7 +324,7 @@ impl WorldReloadProfileFlags {
         }
     }
 
- /// DIFF-3 (машинная досверка C5-C по точной паре `Nworldserver.exe` +
+ /// DIFF-3 (машинная досверка по точной паре `Nworldserver.exe` +
  /// `WorldServer.pdb`, RSDS `289F1FB3-…` age 1; дамп
  /// `.local/verify-c5c/dis_reload_profiles.txt`): при обработке любого
  /// low-бита оригинал выполняет `low &= ~mask; high = 0`, поэтому первый
@@ -508,7 +506,7 @@ impl WorldReloadAction {
 
 /// Таблица профилей `ReloadConf` в машинном порядке обхода.
 ///
-/// DIFF-4 (машинная досверка C5-C): ChangeBodyConf (lo 0x80000000),
+/// DIFF-4 (машинная досверка): ChangeBodyConf (lo 0x80000000),
 /// SynthesisList (lo 0x50000000) и Allthing (lo 0x100) оригинал вызывает
 /// `ReLoad` с `(send=1, resources=1)`, поэтому второй bool этих строк —
 /// `true`. DIFF-6: conf-log godsBattle записывается машинным написанием

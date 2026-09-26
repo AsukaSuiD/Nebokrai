@@ -2,11 +2,9 @@
 //! свободная `OnServerMessage`, pub `?OnServerMessage@@YAXPAVCMessage@@@Z`
 //! RVA `0x000ACCF0`), подтверждённый `Nworldserver.exe` (SHA-256 `F3AC454D…`)
 //! и парным `WorldServer.pdb` (RSDS `289F1FB3-96A0-4FF4-8B5D-1FD17B50B751`,
-//! age 1). Типовой уровень диспетчера жил здесь раньше; fn-волна перенесла
-//! сам диспетчер `on_server_message`, decode-helpers, `on_game_server_connected`,
-//! семейство `continue_game_server_*_configuration` и reconnect-цепочку.
-//! Старый `appworld/message/servermessage.rs` реэкспортирует этот модуль для
-//! переходных потребителей.
+//! age 1). Здесь — сам диспетчер `on_server_message`, decode-helpers,
+//! `on_game_server_connected`, семейство `continue_game_server_*_configuration`
+//! и reconnect-цепочка.
 //!
 //! Внутрипроцессный reconnect заменяет GameServer client в той же FIFO-позиции:
 //! старое соединение закрывается и уничтожается до публикации нового; уже
@@ -22,8 +20,8 @@
 //! только чтение, которое в оригинале выходило бы за буфер.
 //!
 //! Ветвь `0x3FC02` (GameServer disconnect, синтетическое close-сообщение
-//! `CMyServerClient::OnClose`) закрыта completion-порцией по машинной
-//! разборке той же точной пары (VA секции 1): `0x4ADD6F` decode
+//! `CMyServerClient::OnClose`) подтверждена машинной разборкой той же точной
+//! пары (VA секции 1): `0x4ADD6F` decode
 //! `CBaseMessage::GetDWord` (`0x423790`) → `GetGame` (`0x4017A0`) →
 //! `CGame::GetGameServer(K)` (`0x4132A0`, pub `1:0x122A0`). Not-found
 //! (`0x4ADE76`) — AddLogText (`0x41E630`) формата `0x5473AC`
@@ -46,17 +44,17 @@
 //!
 //! Игровой контекст диспетчер получает через [`WorldGameView`]; organizing-
 //! переходы игрока и save-материализацию — через [`WorldServerMessageGameView`]
-//! с ассоциированными типами владельцев старого пакета (generic-форма других
-//! fn-волн). Регистры и конфиги initial-цепочки приходят typed ссылками или
-//! owned-снимками payload; `CountryWarSys`/`CCountryHandler`, остающиеся в
-//! старом пакете, сериализуются вызывающей стороной в исходной позиции.
+//! с ассоциированными типами владельцев старого пакета. Регистры и конфиги
+//! initial-цепочки приходят typed ссылками или owned-снимками payload;
+//! `CountryWarSys`/`CCountryHandler`, остающиеся в старом пакете,
+//! сериализуются вызывающей стороной в исходной позиции.
 //!
-//! Типовые волны описаны ниже исторически: data-контракты бывшего `game.rs`
-//! (CD-key snapshot, reconnect records, region transition/snapshot,
-//! save-пайплайн, ping/region decode) лежат в `crate::app::worldserver`,
-//! reconnect restart-итоги — в `crate::app::loginreconnectworker`, network
-//! `CMessage` — в `crate::app::world_message`, `CountryHandlerSerializeError` —
-//! у `CountrySerializeError` в `crate::organizations`.
+//! Цитируемые data-контракты игры (CD-key snapshot, reconnect records,
+//! region transition/snapshot, save-пайплайн, ping/region decode) лежат в
+//! `crate::app::worldserver`, reconnect restart-итоги — в
+//! `crate::app::loginreconnectworker`, network `CMessage` — в
+//! `crate::app::world_message`, `CountryHandlerSerializeError` — у
+//! `CountrySerializeError` в `crate::organizations`.
 
 use std::error::Error;
 use std::fmt;
@@ -984,9 +982,7 @@ pub struct WorldLoginServerIdentity {
     pub payload_complete: bool,
 }
 
-// Типы второй волны: их поля цитируют data-контракты бывшего
-// `worldserver/worldserver/game.rs`, теперь размещённые в
-// `nebokrai_realm::app::worldserver`.
+// Типы ниже цитируют data-контракты игры из `crate::app::worldserver`.
 
 #[derive(Debug)]
 pub struct WorldLoginClientReplacement {
@@ -1264,10 +1260,9 @@ impl Error for WorldServerMessageError {
     }
 }
 
-// Финальная типовая волна: диспетчерная связка outcome/dispatch и пара
-// CountryHandler configuration. Их transitive-контракты (reconnect
-// restart-итоги, network `CMessage`, `CountryHandlerSerializeError`) уже
-// размещены в realm.
+// Диспетчерная связка outcome/dispatch и пара CountryHandler configuration;
+// их transitive-контракты (reconnect restart-итоги, network `CMessage`,
+// `CountryHandlerSerializeError`) размещены в realm.
 
 /// Наблюдаемые эффекты внутреннего `0x3FC01`, опубликованного
 /// `CMyNetClient::OnClose`.
@@ -1348,10 +1343,9 @@ pub enum WorldServerMessageDispatch {
 
 
 // Fn-уровень диспетчера: decode-helpers, reconnect/registration семейство и
-// initial-configuration цепочка. Wire-формат, signedness, byte-exact строки
-// и частичные эффекты не меняются относительно старого `appworld/message/
-// servermessage.rs`; изменился только доступ к владельцу игры — через
-// `WorldGameView`/`WorldServerMessageGameView` и typed снимки конфигов.
+// initial-configuration цепочка. Доступ к владельцу игры — через
+// `WorldGameView`/`WorldServerMessageGameView` и typed снимки конфигов;
+// wire-формат, signedness, byte-exact строки и частичные эффекты сохраняются.
 
 fn decode_spawn_routing_i32(payload: &[u8], cursor: &mut usize) -> Option<i32> {
     let bytes: [u8; 4] = payload

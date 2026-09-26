@@ -1,10 +1,10 @@
-//! Драйвер потока игры WorldServer (`GameThreadFunc`), перенесённый из
-//! `src/worldserver/worldserver/game.rs` вместе с data-bundle инициализации и
-//! release. Источник контракта — точная пара `.exe/Nworldserver.exe` +
-//! `.exe/WorldServer.pdb` (SHA-256 `F3AC454D…`, RSDS совпадает; S_PUB32
-//! `?GameThreadFunc@@YGIPAX@Z` `1:00019310`, `?CreateGame@@YAHXZ` `1:00014660`,
-//! `?DeleteGame@@YAHXZ` `1:00000780`, `?Init@CGame@@QAEHXZ` `1:00017ee0`,
-//! `?MainLoop@CGame@@QAEHXZ` `1:00018a00`, `?Release@CGame@@QAEHXZ` `1:0000d7f0`).
+//! Драйвер потока игры WorldServer (`GameThreadFunc`) вместе с data-bundle
+//! инициализации и release. Источник контракта — точная пара
+//! `.exe/Nworldserver.exe` + `.exe/WorldServer.pdb` (SHA-256 `F3AC454D…`,
+//! RSDS совпадает; S_PUB32 `?GameThreadFunc@@YGIPAX@Z` `1:00019310`,
+//! `?CreateGame@@YAHXZ` `1:00014660`, `?DeleteGame@@YAHXZ` `1:00000780`,
+//! `?Init@CGame@@QAEHXZ` `1:00017ee0`, `?MainLoop@CGame@@QAEHXZ` `1:00018a00`,
+//! `?Release@CGame@@QAEHXZ` `1:0000d7f0`).
 //!
 //! Драйвер выполняет исходный порядок `CreateGame -> Init -> MainLoop ->
 //! Release -> DeleteGame`: инициализация потока до принятия хода, turn-цикл
@@ -17,13 +17,12 @@
 //!
 //! Тип игры входит в generic-трейт [`WorldGameThreadRuntime`] ассоциированным
 //! `type Game`, а его создание отсечено фабричным параметром `fn() -> Box<Game>`
-//! у edge-оболочки `process/worldserver.rs`. Волной C5-C сам `CGame` переехал
-//! в [`crate::app::world_game`], волной C5-D в `crate::app::world_process*`
-//! переехали process owners с реализациями этого трейта напрямую с
-//! `type Game = CGame`. `WorldGameInitContext` переехал в
-//! [`crate::app::world_init_context`] волной C5-B (шов `&mut dyn
-//! RegionParameterLoadTarget` вместо CGame-typed `load_region_parameters`); его
-//! impl — в [`crate::app::world_process_init`] (волна C5-D).
+//! у edge-оболочки `process/worldserver.rs`. Сам `CGame` живёт в
+//! [`crate::app::world_game`], process owners с реализациями этого трейта
+//! (`type Game = CGame`) — в `crate::app::world_process*`.
+//! `WorldGameInitContext` объявлен в [`crate::app::world_init_context`]
+//! (шов `&mut dyn RegionParameterLoadTarget` вместо CGame-typed
+//! `load_region_parameters`); его impl — в [`crate::app::world_process_init`].
 
 use std::error::Error;
 use std::fmt;

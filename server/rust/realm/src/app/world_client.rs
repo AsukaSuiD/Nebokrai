@@ -1,5 +1,5 @@
-//! Исходящее LoginServer-направление WorldServer из `nets/networld/mynetclient.cpp/.h`,
-//! перенесённое в Realm — исходящий край World к Login. Источник контракта —
+//! Исходящее LoginServer-направление WorldServer из `nets/networld/mynetclient.cpp/.h`;
+//! Realm — исходящий край World к Login. Источник контракта —
 //! та же точная пара, что у [`crate::app::world_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):

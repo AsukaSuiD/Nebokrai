@@ -1,5 +1,5 @@
 //! Ответные ветви `miscserver/othermessage.cpp`, подтверждённые
-//! `miscserver.exe` и `miscserver.pdb`, перенесённые в Realm `app/`.
+//! `miscserver.exe` и `miscserver.pdb`; в составе Realm `app/`.
 //!
 //! Оба ответа несут одно нулевое 32-битное поле и отправляются без приоритета.
 //! Без client-а `0x7F809` завершается до создания ответа, тогда как `0x7F80B`

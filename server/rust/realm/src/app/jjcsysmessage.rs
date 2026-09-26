@@ -1,4 +1,4 @@
-//! Входящий JJC-owner WorldServer, перенесённый в Realm `app/`.
+//! Входящий JJC-owner WorldServer в составе Realm `app/`.
 //!
 //! `OnJJcSystemMessage` и leaf-ветви входят в контракт owner-а из
 //! `worldserver.exe` и `worldserver.pdb`.

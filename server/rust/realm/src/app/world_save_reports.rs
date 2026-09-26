@@ -1,5 +1,4 @@
-//! Save-state и отчёты save-триггера хода WorldServer, перенесённые из
-//! `src/worldserver/worldserver/game.rs` волной C5-A (hub-data уровень):
+//! Save-state и отчёты save-триггера хода WorldServer (hub-data уровень):
 //! запросы broadcast player-data, trigger-флаги ручного сохранения, pre-gate,
 //! launch/notify отчёты и терминальная форма trigger-итога. Источник
 //! контракта — та же точная пара, что у [`crate::app::world_runtime`]
@@ -7,7 +6,7 @@
 //! RSDS совпадает).
 //!
 //! Guard-обёртка [`WorldRunSaveGuard`] остаётся generic на типе игры: старый
-//! пакет закрепляет её `CGame` собственным alias-ом до волны самого `CGame`.
+//! пакет закрепляет её `CGame` собственным alias-ом.
 
 use crate::app::world_message::SendMessageError;
 use crate::app::worldserver::{

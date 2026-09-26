@@ -1,7 +1,7 @@
-//! Производный сетевой владелец AuthServer из `nets/netauth/mynetserver_auth.cpp`,
-//! перенесённый в Realm — сервер принятого Auth-направления. Источник контракта —
-//! та же точная пара, что у [`crate::app::auth_message`]. Доказанные call sites
-//! `CGame` сохранены прежним владельцем процесса.
+//! Производный сетевой владелец AuthServer из `nets/netauth/mynetserver_auth.cpp`;
+//! Realm — сервер принятого Auth-направления. Источник контракта — та же
+//! точная пара, что у [`crate::app::auth_message`]. Доменные call sites
+//! `CGame` остаются у владельца процесса.
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/authserver.exe`):
 //! - ctor `CMyNetServer_Auth` `0x412770`: базовый `CServer` ctor `0x4118B0`,

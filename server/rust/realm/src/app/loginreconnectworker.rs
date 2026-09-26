@@ -1,6 +1,5 @@
-//! Управляемый reconnect worker направления WorldServer -> LoginServer,
-//! перенесённый из `worldserver/worldserver/loginreconnectworker.rs` в Realm
-//! `app/`. Источник контракта — та же точная пара, что у
+//! Управляемый reconnect worker направления WorldServer -> LoginServer в
+//! составе Realm `app/`. Источник контракта — та же точная пара, что у
 //! [`crate::app::world_server`] (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`,
 //! SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
@@ -23,15 +22,14 @@
 //! и producer исходной World FIFO живёт здесь в `WorldLoginReconnectSpec`
 //! (поля публичны: snapshot собирает владелец `CGame` за пределами
 //! библиотеки). Фактическая попытка bind/connect бывшего owner-метода
-//! `CGame::reconnect_login_server_from_spec` перенесена сюда в
-//! [`WorldLoginReconnectSpec::reconnect_once`] без mutable игры; разрешение
-//! endpoint-а (`resolve_login_endpoint`) разделяет и initial client-owner.
+//! `CGame` живёт здесь как [`WorldLoginReconnectSpec::reconnect_once`] без
+//! mutable игры; разрешение endpoint-а (`resolve_login_endpoint`) разделяет
+//! и initial client-owner.
 //! Tokio runtime/blocking заменяет Win32 thread message и handle; stop всегда
-//! дожидается завершения задачи. Data-итоги restart финальной
-//! servermessage-волны (`WorldLoginReconnectThreadStart`,
-//! `WorldLoginReconnectThreadRestart`) живут здесь рядом с outcome/spec; setup
-//! thread-сборка и lifecycle thread-owner-а (`connect_login_worker`) остаются
-//! у `CGame`.
+//! дожидается завершения задачи. Data-итоги restart server-диспетчера
+//! (`WorldLoginReconnectThreadStart`, `WorldLoginReconnectThreadRestart`)
+//! живут здесь рядом с outcome/spec; setup thread-сборка и lifecycle
+//! thread-owner-а (`connect_login_worker`) остаются у `CGame`.
 
 use std::error::Error;
 use std::fmt;

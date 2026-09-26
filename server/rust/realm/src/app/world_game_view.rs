@@ -1,14 +1,14 @@
 //! Узкий game-view для обработчиков мировых сообщений Realm.
 //!
-//! Server-волна добавила reconnect/ping/route делегации диспетчера
-//! [`on_server_message`](crate::app::servermessage::on_server_message) и шов
-//! [`WorldServerMessageGameView`] с ассоциированными типами владельцев, которые
-//! пока остаются в старом пакете (организации, страна, save-пайплайн).
-//! Completion-волна ветви `0x3FC02` добавила рядом с connect-регистрацией
-//! disconnect-мутацию реестра [`WorldGameView::disconnect_game_server`] и шов
-//! [`WorldServerMessageGameView::on_game_server_lost`]: связная миграция
-//! игроков потерянного GameServer в offline с login-нотификацией `0x1FE03`
-//! остаётся inherent-методом `CGame` старого пакета.
+//! Server-диспетчер получает через этот шов reconnect/ping/route делегации
+//! (см. [`on_server_message`](crate::app::servermessage::on_server_message)) и
+//! расширение [`WorldServerMessageGameView`] с ассоциированными типами
+//! владельцев, которые пока остаются в старом пакете (организации, страна,
+//! save-пайплайн). Рядом с connect-регистрацией ветви `0x5FA01` живёт
+//! disconnect-мутация реестра [`WorldGameView::disconnect_game_server`] и шов
+//! [`WorldServerMessageGameView::on_game_server_lost`] ветви `0x3FC02`:
+//! связная миграция игроков потерянного GameServer в offline с
+//! login-нотификацией `0x1FE03` остаётся inherent-методом `CGame`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -589,7 +589,7 @@ pub trait WorldGameView {
 /// цепочек, чьи владельцы пока живут в старом пакете. Organizing-контекст
 /// наследуется от [`WorldPlayerBaseGameView`] — единственная реализация
 /// `CGame` делегирует одноимённые inherent-методы; порядок внутри цепочек не
-/// меняется. Хвост save-волны проходит отдельным швом
+/// меняется. Хвост завершённого сохранения проходит отдельным швом
 /// [`WorldCompletedSaveResponseMaterialization`]: его owners в старом пакете
 /// не выразимы методом игры без `&CGame`-контекста.
 pub trait WorldServerMessageGameView: WorldPlayerBaseGameView {
@@ -636,15 +636,15 @@ pub trait WorldServerMessageGameView: WorldPlayerBaseGameView {
     ) -> WorldGameServerLostReport;
 }
 
-/// Шов хвоста завершённой save-волны ветви `0x5FA03`: snapshot БД-данных,
+/// Шов хвоста завершённого сохранения ветви `0x5FA03`: snapshot БД-данных,
 /// cleanup live-карт игроков и launch save-потока остаются одной связной
 /// операцией владельца игры; уже выполненный snapshot/cleanup не откатывается
 /// при отказе launch, handle-state переходит только после успешного request.
 /// Реализация живёт в адаптере у dispatcher-а старого пакета и связывает
-/// owners, ещё не перенесённые в Realm (faction war, страновая таблица,
-/// lifecycle и runtime save-потока); игра, organizing и realm-владельцы
-/// приходят параметрами вызова (форма [`WorldDeleteRoleCountryGate`]) —
-/// поэтому шов generic по игре, а не dyn.
+/// owners старого пакета (faction war, страновая таблица, lifecycle и
+/// runtime save-потока); игра, organizing и realm-владельцы приходят
+/// параметрами вызова (форма [`WorldDeleteRoleCountryGate`]) — поэтому шов
+/// generic по игре, а не dyn.
 pub trait WorldCompletedSaveResponseMaterialization<Game: WorldServerMessageGameView + ?Sized> {
     #[allow(clippy::too_many_arguments, reason = "исходный handler повторно обращался к тем же singleton/static владельцам")]
     fn materialize_completed_save_response_snapshot(

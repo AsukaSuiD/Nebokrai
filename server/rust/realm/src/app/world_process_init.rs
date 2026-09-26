@@ -1,20 +1,17 @@
 //! Init-контекст процесса WorldServer: двенадцать Option DB-owner-ов и их
-//! соединений, Largess Arc, single-instance guard и player-load БД пула,
-//! перенесённые из `src/worldserver/worldserver/runtime.rs` в Realm `app/`
-//! волной C5-D.
+//! соединений, Largess Arc, single-instance guard и player-load БД пула.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает). Это рантайм-проводка: контракт [`WorldGameInitContext`]
-//! и realm-shaped состав построены волной C5-B (см.
-//! [`crate::app::world_init_context`]), тела DB-owner-ов подтверждены их
-//! модулями в `persistence/`, `organizations/`, `activities/` и `regions/`;
-//! сам перенос новой машинной сверки не требует, тела перенесены буквально.
+//! RSDS совпадает). Контракт [`WorldGameInitContext`] и realm-shaped состав
+//! объявлены в [`crate::app::world_init_context`], тела DB-owner-ов
+//! подтверждены их модулями в `persistence/`, `organizations/`, `activities/`
+//! и `regions/`; этот файл — их process-проводка.
 //!
 //! Process-означенный LCG `world_lcg_random` (`_rand_seed`-формула CRT
-//! `rand`, закрепление прежними волнами) обслуживает Largess-выдачу
-//! player-load пула; второй экземпляр той же формулы живёт в
-//! `WorldGameInitContext::random` и читает/пишет состояние самого контекста.
+//! `rand`) обслуживает Largess-выдачу player-load пула; второй экземпляр той
+//! же формулы живёт в `WorldGameInitContext::random` и читает/пишет состояние
+//! самого контекста.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};

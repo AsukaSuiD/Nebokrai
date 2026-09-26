@@ -1,7 +1,7 @@
-//! Сообщение направления LoginServer -> AuthServer из `nets/netauth/message.cpp`,
-//! перенесённое в Realm — владельца Auth-направления объединённого Realm-процесса.
+//! Сообщение направления LoginServer -> AuthServer из `nets/netauth/message.cpp`;
+//! Realm — владелец Auth-направления объединённого Realm-процесса.
 //!
-//! Точная пара зафиксирована заново для этого прохода: `.exe/authserver.exe`
+//! Источник контракта — точная пара `.exe/authserver.exe`
 //! SHA-256 `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`,
 //! ImageBase `0x400000`, PE timestamp `0x53A26AB9` ↔ `.exe/authserver.pdb`
 //! GUID `938C8E25-5ACD-4441-A197-1CED0D3E1B87` age 1 (CodeView RSDS, match).

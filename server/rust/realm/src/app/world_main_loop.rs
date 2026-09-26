@@ -1,21 +1,20 @@
-//! `MainLoop` и stage-функции хода `CGame` из `worldserver/game.cpp/.h`,
-//! перенесённые в Realm волной C5-C (см. [`crate::app::world_game`]).
+//! `MainLoop` и stage-функции хода `CGame` из `worldserver/game.cpp/.h`
+//! (см. [`crate::app::world_game`]).
 //!
-//! `MainLoop` (`1:00018a00`) — точка заякорена прежними волнами: 32-битные
-//! wrapping ticks и строгие интервалы; каждый сетевой/message turn снимает
-//! FIFO один раз, опубликованное callback-ом остаётся следующему проходу;
-//! порядок AI, сообщений, reconnect, обслуживания, сохранения и рассылок не
-//! распараллеливается.
+//! `MainLoop` (`1:00018a00`): 32-битные wrapping ticks и строгие интервалы;
+//! каждый сетевой/message turn снимает FIFO один раз, опубликованное
+//! callback-ом остаётся следующему проходу; порядок AI, сообщений, reconnect,
+//! обслуживания, сохранения и рассылок не распараллеливается.
 //!
 //! Статус: тела `process_message` (`1:00a30`) и `ai` (`1:138a0`) сверены
-//! полным машинным разбором досверки C5-C по точной паре `Nworldserver.exe`
-//! + `WorldServer.pdb` (RSDS `289F1FB3-…` age 1; дампы `.local/verify-c5c/`,
+//! полным машинным разбором по точной паре `Nworldserver.exe` +
+//! `WorldServer.pdb` (RSDS `289F1FB3-…` age 1; дампы `.local/verify-c5c/`,
 //! `dis_processmessage.txt` и `dis_ai.txt`) — VERIFIED-МАТЧИ; единственная
 //! правка по ней — statement-order DIFF-A1 в `ai` (см. тело). Остальные
 //! stage-функции полагаются на данные и отчёты
-//! `app::world_main_loop_data`/`app::world_hub_data` (волны C5-A/C5-B).
+//! `app::world_main_loop_data`/`app::world_hub_data`.
 //!
-//! Нормализации — общие для волны (см. `crate::app::world_game`).
+//! Имена и проекции типов — Realm/Shared формы (см. `crate::app::world_game`).
 
 use crate::activities::attackcitysys::{AttackCityCallbacks, CAttackCitySys};
 use crate::activities::countrywarsys::{CountryWarCallbacks, CountryWarSys};
@@ -211,7 +210,7 @@ impl CGame {
             };
 
             let broadcast = &mut self.system_broadcasts[index];
- // DIFF-A1 (машинная досверка C5-C): оригинал записывает
+ // DIFF-A1 (машинная досверка): оригинал записывает
  // `last_notify_time = now` до вызова `random(max-min)`; порядок —
  // контракт, сам по себе эффекта не даёт.
             broadcast.last_notify_time_seconds = now_seconds;
@@ -1730,8 +1729,8 @@ impl CGame {
         state: &mut WorldMainLoopStateOwners<'_>,
  // Generic-связка Realm `app/world_main_loop_data` закрепляется конкретными
  // DB/game владельцами на этой границе: глубокие точки process_message/
- // process_world_message/route_loaded_player держат прежнюю декларацию
- // до следующей порции.
+ // process_world_message/route_loaded_player держат конкретную декларацию
+ // на самой границе процесса.
         owners: &mut WorldMainLoopOwners<
             '_,
             TimerCallback,

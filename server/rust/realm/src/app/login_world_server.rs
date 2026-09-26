@@ -1,8 +1,8 @@
 //! Производный владелец WorldServer-соединений у LoginServer из
-//! `nets/netlogin/mynetserver_world.cpp`, перенесённый в Realm — listener
-//! World-соединений Login-направления. Источник контракта — та же точная пара,
-//! что у [`crate::app::login_message`]; доказанные call sites `CGame` сохранены
-//! прежним владельцем процесса.
+//! `nets/netlogin/mynetserver_world.cpp`; Realm — listener World-соединений
+//! Login-направления. Источник контракта — та же точная пара,
+//! что у [`crate::app::login_message`]; доменные call sites `CGame` остаются
+//! у владельца процесса.
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
 //! - ctor `CMyNetServer_World` `0x46A9B0`: базовый `CServer` ctor `0x46A480`,

@@ -1,7 +1,7 @@
 //! Сообщение направления Login/GameServer ↔ WorldServer из
 //! `nets/networld/message.cpp` (PDB-объект
-//! `E:\svn\fengyun_russia_dev\Nets\networld\Release\Message.obj`), перенесённое
-//! в Realm — сетевой край и диспетчеризация World-направления объединённого
+//! `E:\svn\fengyun_russia_dev\Nets\networld\Release\Message.obj`);
+//! Realm — сетевой край и диспетчеризация World-направления объединённого
 //! Realm-процесса. Источник контракта — точная пара `.exe/Nworldserver.exe`
 //! SHA-256 `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
 //! ImageBase `0x400000`, PE timestamp `0x53FB128F` ↔ `.exe/WorldServer.pdb`

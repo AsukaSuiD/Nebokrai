@@ -1,25 +1,22 @@
-//! Данные hub-уровня `CGame` WorldServer (Init/MainLoop) без самой игры,
-//! перенесённые из `src/worldserver/worldserver/game.rs` волной C5-A:
-//! сетевая конфигурация и отчёты string-table, init-callbacks, маршрутизированное
-//! сообщение и события диспетча (`ProcessedWorldEvent` с union terminal-
-//! семьёй), state-структуры и stage-отчёты MainLoop, effect-контексты
-//! faction-war/attack-city за объявленными view-швами. Источник контракта —
-//! та же точная пара, что у [`crate::app::world_runtime`]
-//! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает).
+//! Данные hub-уровня `CGame` WorldServer (Init/MainLoop) без самой игры:
+//! сетевая конфигурация и отчёты string-table, init-callbacks,
+//! маршрутизированное сообщение и события диспетча (`ProcessedWorldEvent` с
+//! union terminal-семьёй), state-структуры и stage-отчёты MainLoop,
+//! effect-контексты faction-war/attack-city за объявленными view-швами.
+//! Источник контракта — та же точная пара, что у
+//! [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
+//! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
 //! Effect-контексты не тянут `CGame`: игра входит generic-параметром `Game`
 //! через объявленные швы [`WorldGameView`] и [`WorldPlayerFactionInfoUpdateView`]
 //! (прецедент — `WorldFactionWarDeclarationEffects` в
 //! [`crate::organizations::organizingctrl`]); старый пакет специализирует их
-//! своим `CGame`. `WorldGameInitContext`/`WorldGameThreadRuntime` уехали в
-//! [`crate::app::world_init_context`]/[`crate::app::world_runtime`] волной C5-B
+//! своим `CGame`. `WorldGameInitContext`/`WorldGameThreadRuntime` живут в
+//! [`crate::app::world_init_context`]/[`crate::app::world_runtime`]
 //! (объявленные швы вместо CGame-typed подписей), а route-контракты загрузки
-//! игроков остаются у process-owner-а до волны самого `CGame`. Ветвь `0x60103`
-//! пишется в
+//! игроков остаются у process-owner-а. Ветвь `0x60103` пишется в
 //! `ProcessedWorldEvent` напрямую generic-формой realm
-//! `OrganizingCreateFactionDispatchBlock<FactionCreationBlock>` — прежний alias
-//! старого пакета развёрнут без смены типа.
+//! `OrganizingCreateFactionDispatchBlock<FactionCreationBlock>`.
 
 use std::fmt;
 

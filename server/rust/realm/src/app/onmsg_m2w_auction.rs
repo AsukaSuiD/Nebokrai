@@ -1,4 +1,4 @@
-//! Auction-dispatcher `OnMSG_M2W_AUCTION` WorldServer, перенесённый в Realm `app/`.
+//! Auction-dispatcher `OnMSG_M2W_AUCTION` WorldServer в составе Realm `app/`.
 //!
 //! Источник контракта — `worldserver.exe` и
 //! `worldserver.pdb`, исходный owner `OnMSG_M2W_AUCTION`.

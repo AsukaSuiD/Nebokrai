@@ -1,5 +1,5 @@
-//! Входной межсерверный поток MiscServer из `nets/netmisc/mynetclient.cpp` и `.h`,
-//! перенесённый в Realm — исходящий край Misc к World. Источник контракта —
+//! Входной межсерверный поток MiscServer из `nets/netmisc/mynetclient.cpp` и `.h`;
+//! Realm — исходящий край Misc к World. Источник контракта —
 //! та же точная пара, что у [`crate::app::misc_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/miscserver.exe`):

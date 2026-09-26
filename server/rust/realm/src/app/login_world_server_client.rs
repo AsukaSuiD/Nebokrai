@@ -1,7 +1,7 @@
 //! Входное соединение WorldServer у LoginServer из
-//! `nets/netlogin/mynetserverclient_world.cpp`, перенесённое в Realm — состояние
-//! принятого World-соединения Login-направления. Источник контракта — та же
-//! точная пара, что у [`crate::app::login_message`].
+//! `nets/netlogin/mynetserverclient_world.cpp`; Realm — состояние принятого
+//! World-соединения Login-направления. Источник контракта — та же точная
+//! пара, что у [`crate::app::login_message`].
 //!
 //! Машинно подтверждённые точки (первая секция `.exe/loginserver.exe`):
 //! - ctor `CMyNetServerClient_World` `0x46EC60`: base `0x46F160`, vtable

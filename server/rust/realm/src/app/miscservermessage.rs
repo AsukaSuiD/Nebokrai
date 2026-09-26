@@ -1,6 +1,6 @@
 //! Auction-handler `miscservermessage.cpp`, подтверждённый `miscserver.exe` и
 //! `miscserver.pdb` для `0x14ED01` и `0x14ED04..0x14ED09`.
-//! Перенесён в Realm `app/` как auction-handler роли MiscServer.
+//! В составе Realm `app/` — auction-handler роли MiscServer.
 //!
 //! Добавление безусловно увеличивает wrapping add-счётчик; auction room владеет
 //! отказом invalid/duplicate и del-счётчиком. Operation `3` сохраняет дефект

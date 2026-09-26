@@ -1,13 +1,12 @@
 //! Release-контекст процесса WorldServer и impl-ы драйвера
 //! [`crate::app::world_runtime`] для [`WorldProcessRuntime`] (включая
-//! `type Game = CGame`), перенесённые из
-//! `src/worldserver/worldserver/runtime.rs` в Realm `app/` волной C5-D.
+//! `type Game = CGame`).
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает). Это рантайм-проводка: порядок Release сверен прежними
-//! волнами (см. `world_game_init::release` и драйвер); сам перенос новой
-//! машинной сверки не требует, тела перенесены буквально.
+//! RSDS совпадает). Машинный порядок Release зафиксирован у владельца стадии
+//! (см. `world_game_init::release` и драйвер); этот файл — его process-
+//! проводка.
 //!
 //! `WorldProcessReleaseContext` держит ссылки на process owners во время
 //! `CGame::Release`; делегирующий `impl WorldGameReleaseContext` для самого

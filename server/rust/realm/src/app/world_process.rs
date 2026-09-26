@@ -1,27 +1,24 @@
-//! Process owners исторического WorldServer, перенесённые из
-//! `src/worldserver/worldserver/runtime.rs` в Realm `app/` волной C5-D:
-//! долгоживущие domain owners и их `initialize_game`, process-состояние
-//! MainLoop, network-обвязка хода, post-init DB-контексты и сам
-//! `WorldProcessRuntime` с `run_connected_main_loop`.
+//! Process owners исторического WorldServer в составе Realm: долгоживущие
+//! domain owners и их `initialize_game`, process-состояние MainLoop,
+//! network-обвязка хода, post-init DB-контексты и сам `WorldProcessRuntime`
+//! с `run_connected_main_loop`.
 //!
 //! Источник контракта — та же точная пара, что у [`crate::app::world_runtime`]
 //! (`.exe/Nworldserver.exe` + `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`,
-//! RSDS совпадает). Это рантайм-проводка: основания Init/MainLoop/Release
-//! сверены прежними волнами (см. `world_game_init`, `world_main_loop`,
-//! `world_runtime`); сам перенос новой машинной сверки не требует, тела
-//! перенесены буквально.
+//! RSDS совпадает). Машинные основания самих стадий Init/MainLoop/Release
+//! зафиксированы у их владельцев (см. `world_game_init`, `world_main_loop`,
+//! `world_runtime`); этот файл — их рантайм-проводка.
 //!
 //! Состав соседей: Init-контекст процесса — [`crate::app::world_process_init`],
 //! save-worker — [`crate::app::world_process_save`], ресурсный держатель —
 //! [`crate::app::world_process_resources`], release-контекст и impl драйвера —
 //! [`crate::app::world_process_release`]. JJC/LeiTing process-контексты и
-//! ошибка их сборки уже в [`crate::app::world_main_loop_contexts`] (волна
-//! C5-B), realm-shaped состав Init — в [`crate::app::world_init_context`]
-//! (волна C5-B), сам `CGame` — в [`crate::app::world_game`] (волна C5-C).
+//! ошибка их сборки — в [`crate::app::world_main_loop_contexts`], realm-shaped
+//! состав Init — в [`crate::app::world_init_context`], сам `CGame` — в
+//! [`crate::app::world_game`].
 //!
 //! StringTable и встроенные setup-владельцы остаются у единственного `CGame`;
-//! здесь собраны исторические process-global owners, передаваемые ему
-//! ссылками.
+//! здесь собраны process-global owners, передаваемые ему ссылками.
 
 use std::convert::Infallible;
 use std::error::Error;
