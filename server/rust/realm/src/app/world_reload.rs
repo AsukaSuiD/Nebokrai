@@ -3,8 +3,30 @@
 //!
 //! Статус: тело `reload` (`1:14740`) и семейство reload-стадий (war/time-to-
 //! return/city/string-table/initial config/`reload_conf_log`) перенесены
-//! буквально; машинная досверка тела в этой волне не закрыта — PARTIAL,
-//! не VERIFIED.
+//! буквально. По полной машинной досверке C5-C (та же точная пара
+//! `Nworldserver.exe` + `WorldServer.pdb`, RSDS `289F1FB3-…` age 1; дампы
+//! `.local/verify-c5c/`, `dis_reload.txt`/`dis_reload_profiles.txt`) закрыты
+//! наблюдаемые расхождения диспетчера `reload_profiles` и таблицы
+//! [`WORLD_RELOAD_ACTIONS`]: DIFF-3 (обработка любого low-бита выполняет
+//! `low &= ~mask; high = 0` — первый обработанный low-профиль гасит все
+//! pending high-флаги), DIFF-4 (ChangeBodyConf, lo 0x80000000;
+//! SynthesisList, lo 0x50000000; Allthing, lo 0x100 — машинный `ReLoad`
+//! вызывается с `(send=1, resources=1)`), DIFF-5 (Broadcast: при отсутствии
+//! `setup/sysboardcast.ini` `return 0` без записи conf-log; машинный
+//! MessageBox — единственный UI-side-effect ветки, без wire/DB-эффекта — в
+//! headless-сервисе осознанно не воспроизводится; при успехе лог
+//! `Load System Broadcast List...OK!`, result остаётся 0) и DIFF-6
+//! (conf-log пишет профиль машинным написанием `godsBattle`). Покрытие
+//! статических `Load*`-внутренностей досверкой не проверялось — статус
+//! тела `reload` остаётся PARTIAL, не VERIFIED.
+//!
+//! DIFF-1/DIFF-2 сознательно оставлены как есть: расхождение касается
+//! только внутреннего `legacy_result`, значение которого ни один машинный
+//! caller не читает, — наблюдаемости нет.
+//!
+//! Делегировано владельцам доменов: wwar-ветки (village/city/country/
+//! four-nation reload) и внутренности статических `Load*` — их статусы
+//! ведутся у соответствующих owner-ов, а не здесь.
 //!
 //! Нормализации — общие для волны (см. `crate::app::world_game`).
 
@@ -280,18 +302,34 @@ where
                 });
                 Ok(0)
             } else if action.reload_profile == b"Broadcast" {
-                let source = context.read_resource(b"setup/sysboardcast.ini");
-                let loaded = game.reload_system_broadcasts(
-                    source.as_deref(),
+ // DIFF-5 (машинная досверка C5-C по точной паре, дамп
+ // `.local/verify-c5c/dis_reload_profiles.txt`): при отсутствии
+ // `setup/sysboardcast.ini` оригинал формирует
+ // "file '%s' can't found!" и показывает MessageBox, после чего
+ // возвращает 0 без записи в conf-log. Этот MessageBox — единственный
+ // UI-side-effect ветки, без wire/DB-эффекта, поэтому в headless-сервисе
+ // он осознанно не воспроизводится (ни диалогом, ни operator-notice).
+ // При наличии файла оригинал пишет `Load System Broadcast List...OK!`,
+ // result остаётся 0 в обеих ветвях.
+                let Some(source) = context.read_resource(b"setup/sysboardcast.ini") else {
+                    events.push(WorldReloadProfileEvent {
+                        half: action.half,
+                        mask: action.mask,
+                        reload_profile: action.reload_profile,
+                        log_profile: action.log_profile,
+                        flags_after_clear,
+                        reload_result: 0,
+                        log: WorldReloadConfLogDisposition::SuppressedBroadcastMissingFile,
+                    });
+                    continue;
+                };
+                game.reload_system_broadcasts(
+                    Some(&source),
                     &mut *application_callbacks.random,
                     &mut *get_tick,
                 );
-                context.add_log_text(if loaded {
-                    b"Load sysboardcast.ini...OK!"
-                } else {
-                    b"Load sysboardcast.ini...FAILED!"
-                });
-                Ok(i32::from(loaded))
+                context.add_log_text(b"Load System Broadcast List...OK!");
+                Ok(0)
             } else {
                 game.reload(
                     context,

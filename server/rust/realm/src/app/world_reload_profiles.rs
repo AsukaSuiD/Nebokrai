@@ -326,14 +326,18 @@ impl WorldReloadProfileFlags {
         }
     }
 
+ /// DIFF-3 (машинная досверка C5-C по точной паре `Nworldserver.exe` +
+ /// `WorldServer.pdb`, RSDS `289F1FB3-…` age 1; дамп
+ /// `.local/verify-c5c/dis_reload_profiles.txt`): при обработке любого
+ /// low-бита оригинал выполняет `low &= ~mask; high = 0`, поэтому первый
+ /// обработанный low-профиль гасит все pending high-профили. High-бит
+ /// снимает только свою маску.
     pub fn consume(&self, action: WorldReloadAction) {
         match action.half {
             WorldReloadFlagHalf::Low => {
                 let remaining = self.low.load(Ordering::Relaxed) & !action.mask;
                 self.low.store(remaining, Ordering::Relaxed);
-                if action.zero_high_after_low {
-                    self.high.store(0, Ordering::Relaxed);
-                }
+                self.high.store(0, Ordering::Relaxed);
             }
             WorldReloadFlagHalf::High => {
                 let remaining = self.high.load(Ordering::Relaxed) & !action.mask;
@@ -358,6 +362,9 @@ pub enum WorldReloadConfLogBlock {
 #[derive(Debug, Eq, PartialEq)]
 pub enum WorldReloadConfLogDisposition {
     SuppressedEmptyProfile,
+ /// DIFF-5: Broadcast-профиль при отсутствии `setup/sysboardcast.ini`
+ /// машинно завершается ранним `return 0` до записи conf-log.
+    SuppressedBroadcastMissingFile,
     Published {
         text: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
@@ -421,11 +428,18 @@ pub enum WorldReloadActionKind {
     ReloadAllRegions,
 }
 
+/// Один шаг диспетчера reload-профилей.
+///
+/// `first_option`/`second_option` — буквальные аргументы машинного
+/// `ReLoad(profile, send_to_game_servers, reload_server_resources)`.
+/// Обнуление pending high-флагов при обработке любого low-бита —
+/// безусловная машинная форма (DIFF-3, см.
+/// [`WorldReloadProfileFlags::consume`]), отдельного per-row ключа здесь
+/// нет.
 #[derive(Clone, Copy)]
 pub struct WorldReloadAction {
     pub half: WorldReloadFlagHalf,
     pub mask: u32,
-    pub zero_high_after_low: bool,
     pub reload_profile: &'static [u8],
     pub log_profile: &'static [u8],
     pub first_option: bool,
@@ -438,16 +452,15 @@ impl WorldReloadAction {
         mask: u32,
         profile: &'static [u8],
         first_option: bool,
-        zero_high_after_low: bool,
+        second_option: bool,
     ) -> Self {
         Self {
             half: WorldReloadFlagHalf::Low,
             mask,
-            zero_high_after_low,
             reload_profile: profile,
             log_profile: profile,
             first_option,
-            second_option: true,
+            second_option,
             kind: WorldReloadActionKind::Reload,
         }
     }
@@ -456,7 +469,6 @@ impl WorldReloadAction {
         Self {
             half: WorldReloadFlagHalf::High,
             mask,
-            zero_high_after_low: false,
             reload_profile: profile,
             log_profile: profile,
             first_option: true,
@@ -473,7 +485,6 @@ impl WorldReloadAction {
         Self {
             half: WorldReloadFlagHalf::High,
             mask,
-            zero_high_after_low: false,
             reload_profile,
             log_profile,
             first_option: true,
@@ -486,7 +497,6 @@ impl WorldReloadAction {
         Self {
             half: WorldReloadFlagHalf::Low,
             mask,
-            zero_high_after_low: true,
             reload_profile: b"AllRegion",
             log_profile: b"AllRegion",
             first_option: false,
@@ -496,6 +506,13 @@ impl WorldReloadAction {
     }
 }
 
+/// Таблица профилей `ReloadConf` в машинном порядке обхода.
+///
+/// DIFF-4 (машинная досверка C5-C): ChangeBodyConf (lo 0x80000000),
+/// SynthesisList (lo 0x50000000) и Allthing (lo 0x100) оригинал вызывает
+/// `ReLoad` с `(send=1, resources=1)`, поэтому второй bool этих строк —
+/// `true`. DIFF-6: conf-log godsBattle записывается машинным написанием
+/// `godsBattle`.
 pub const WORLD_RELOAD_ACTIONS: &[WorldReloadAction] = &[
     WorldReloadAction::reload_low(0x4000_0000, b"StringTable", true, true),
     WorldReloadAction::reload_low(0x0000_0001, b"LogSystem", true, true),
@@ -526,19 +543,19 @@ pub const WORLD_RELOAD_ACTIONS: &[WorldReloadAction] = &[
     WorldReloadAction::reload_low(0x0400_0000, b"TimeToReturn", false, true),
     WorldReloadAction::reload_low(0x0800_0000, b"PreciousBoxConf", true, true),
     WorldReloadAction::reload_low(0x2000_0000, b"FairyExpConf", true, true),
-    WorldReloadAction::reload_low(0x8000_0000, b"ChangeBodyConf", true, false),
+    WorldReloadAction::reload_low(0x8000_0000, b"ChangeBodyConf", true, true),
     WorldReloadAction::reload_low(0x1000_0000, b"CountryWar", false, true),
     WorldReloadAction::reload_high(0x0000_0020, b"FourNationWar"),
     WorldReloadAction::reload_high(0x0000_0400, b"BattleFairyExpConfig"),
     WorldReloadAction::reload_high(0x0000_0800, b"BattleFairyCombineConfig"),
-    WorldReloadAction::reload_low(0x5000_0000, b"SynthesisList", true, false),
+    WorldReloadAction::reload_low(0x5000_0000, b"SynthesisList", true, true),
     WorldReloadAction::reload_high(0x0000_0080, b"EquipmentCompose"),
     WorldReloadAction::reload_high(0x0000_1000, b"HonorElimilate"),
     WorldReloadAction::reload_high(0x0000_2000, b"ciqing"),
-    WorldReloadAction::reload_high_with_log(0x0001_0000, b"godsBattle", b"godsbattle"),
+    WorldReloadAction::reload_high_with_log(0x0001_0000, b"godsBattle", b"godsBattle"),
     WorldReloadAction::reload_high(0x0000_8000, b"taozhuang"),
     WorldReloadAction::reload_high(0x0000_4000, b"JJcConfig"),
-    WorldReloadAction::reload_low(0x0000_0100, b"Allthing", true, false),
+    WorldReloadAction::reload_low(0x0000_0100, b"Allthing", true, true),
 ];
 
 #[derive(Debug, Default)]

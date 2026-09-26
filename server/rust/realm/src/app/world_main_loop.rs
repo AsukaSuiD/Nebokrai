@@ -7,9 +7,12 @@
 //! порядок AI, сообщений, reconnect, обслуживания, сохранения и рассылок не
 //! распараллеливается.
 //!
-//! Статус: тела `process_message` (`1:00a30`) и `ai` (`1:138a0`) перенесены
-//! буквально, но глубокая сверка с дизассемблером в этой волне не закрыта —
-//! PARTIAL, не VERIFIED. Остальные stage-функции полагаются на данные и отчёты
+//! Статус: тела `process_message` (`1:00a30`) и `ai` (`1:138a0`) сверены
+//! полным машинным разбором досверки C5-C по точной паре `Nworldserver.exe`
+//! + `WorldServer.pdb` (RSDS `289F1FB3-…` age 1; дампы `.local/verify-c5c/`,
+//! `dis_processmessage.txt` и `dis_ai.txt`) — VERIFIED-МАТЧИ; единственная
+//! правка по ней — statement-order DIFF-A1 в `ai` (см. тело). Остальные
+//! stage-функции полагаются на данные и отчёты
 //! `app::world_main_loop_data`/`app::world_hub_data` (волны C5-A/C5-B).
 //!
 //! Нормализации — общие для волны (см. `crate::app::world_game`).
@@ -207,11 +210,14 @@ impl CGame {
                 }
             };
 
+            let broadcast = &mut self.system_broadcasts[index];
+ // DIFF-A1 (машинная досверка C5-C): оригинал записывает
+ // `last_notify_time = now` до вызова `random(max-min)`; порядок —
+ // контракт, сам по себе эффекта не даёт.
+            broadcast.last_notify_time_seconds = now_seconds;
             let random_range = (max_time_seconds as i32).wrapping_sub(min_time_seconds as i32);
             let assigned_interval_seconds =
                 random(random_range).wrapping_add(min_time_seconds as i32) as u32;
-            let broadcast = &mut self.system_broadcasts[index];
-            broadcast.last_notify_time_seconds = now_seconds;
             broadcast.interval_seconds = assigned_interval_seconds;
             broadcasts.push(WorldSystemBroadcastDisposition::Broadcast {
                 roll,
