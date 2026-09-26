@@ -1536,3 +1536,34 @@ struct JjcFightSnapshot {
     first_player_id: i32,
     second_player_id: i32,
 }
+
+/// World-адаптер JJC-конфигурации поверх `GlobeSetupSnapshot`: собирает
+/// исходный кортеж `jjc_run_config_fields` в [`JjcRunConfig`]. До волны C5-C
+/// трейт жил в старом пакете (`setup/globesetup.rs`) рядом с реэкспортом
+/// snapshot; с переносом `CGame` единственные потребители (`world_main_loop`,
+/// `world_dispatch`) в Realm, поэтому расширение переехало к владельцу
+/// `JjcRunConfig`.
+pub trait GlobeSetupJjcWorldConfig {
+    fn jjc_run_config_world(&self) -> JjcRunConfig;
+}
+
+impl GlobeSetupJjcWorldConfig for nebokrai_shared::resources::GlobeSetupSnapshot {
+    fn jjc_run_config_world(&self) -> JjcRunConfig {
+        let (
+            use_jjc,
+            rank_interval_seconds,
+            pk_timeout_seconds,
+            region_id_min,
+            region_id_max,
+            max_regions_in_use,
+        ) = self.jjc_run_config_fields();
+        JjcRunConfig {
+            use_jjc,
+            rank_interval_seconds,
+            pk_timeout_seconds,
+            region_id_min,
+            region_id_max,
+            max_regions_in_use,
+        }
+    }
+}
