@@ -95,14 +95,14 @@ pub mod zonalcast; // hub-швы и скелет Begin/Check/AI/visual/End об�
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use lifecycle::skill_is_restored;
-pub use baseattackruntime::{BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
+pub use baseattackruntime::{BASE_ATTACK_SKILL_ID,
     BaseAttackExecutionOutcome, BaseAttackContact, BaseAttackGame, BaseAttackMoveShape,
     BaseAttackPkPermissions, BaseAttackPlayer, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     abort_player_base_attack_on_region_change, cancel_player_base_attack,
     execute_owned_monster_base_attack, execute_player_base_attack, publish_base_attack_visual};
 pub use battlefairy::{BattleFairyResetItemChange, BattleFairyResetItemLookup,
-    BattleFairyResetPreflight, BattleFairyResetSlot,
+    BattleFairyResetPreflight,
     BattleFairySkillProperty, battle_fairy_mana_text_cost,
     battle_fairy_reset_item, battle_fairy_reset_item_change,
     battle_fairy_reset_preflight,
@@ -124,18 +124,18 @@ pub use battlefairytransfer::{BattleFairyTransferKind, HUOXIESHU_SKILL_ID, LINGZ
 pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
     PlayerSkillRequestFacts, SkillTarget, SkillTargetForm};
-pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
-pub use poisonfog::{PoisonFogPhalanx, PoisonFogPhalanxTick};
+pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick};
+pub use poisonfog::PoisonFogPhalanxTick;
 pub use spidermist::{SPIDER_MIST_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
     SKILL_USAGE_TARGET_AFFECT_FREQUENCY, SpiderMistPhalanx, SpiderMistPhalanxTick,
     apply_spider_mist_targets, cancel_player_spider_mist, execute_owned_spider_mist,
     execute_player_spider_mist, is_player_spider_mist_dispatch, spider_mist_cell_targets,
     spider_mist_entry_message};
 pub use summoncreatureskill::{BOSS_FIEND_SUMMON_SKILL_ID, SKILL_USAGE_CAN_BE_BREAKED,
-    SKILL_USAGE_CONST, SKILL_USAGE_SUMMONED_CREATURE_ID, SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME,
+    SKILL_USAGE_CONST, SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME,
     SUMMON_CORPSE_CANDLE_SKILL_ID, SUMMON_SKELETON_SKILL_ID, SUMMON_SPORE_SKILL_ID,
     SummonMonsterCast, SummonMonsterFacts, SummonSkillContact, SummonSkillGame,
-    SummonSkillOutcome, SummonSkillPlayer, boss_fiend_summoned_creature_usage,
+    SummonSkillOutcome, SummonSkillPlayer,
     cancel_player_summon_creature, execute_owned_summon_creature,
     execute_player_summon_creature, is_player_summon_creature_dispatch,
     summon_face_direction, summon_visual_fire_message, summon_visual_start_message};
@@ -147,8 +147,7 @@ pub use fatalblowphalanx::{CFatalBlowPhalanx, FATAL_BLOW_SKILL_ID, FatalBlowPhal
     calculate_owned_fatal_blow_attack};
 pub use battlefairybasemagic::{BattleFairyBaseMagicSummon, execute_battle_fairy_base_magic};
 pub use battlefairybasemagicphalanx::{BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, BattleFairyPhalanxTick,
-    CBattleFairyBaseMagicPhalanx, calculate_battle_fairy_base_magic_attack,
-    calculate_owned_battle_fairy_base_magic_attack};
+    CBattleFairyBaseMagicPhalanx, calculate_owned_battle_fairy_base_magic_attack};
 pub use lifeshield::{LIFE_SHIELD_SKILL_ID, execute_battle_fairy_life_shield};
 pub use thunder::{SummonCloudGame, THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY,
     ThunderSummon, execute_battle_fairy_thunder, thunder_base_damage};
@@ -161,22 +160,19 @@ pub use thunderphalanx::{CThunderPhalanx, ThunderPhalanxGame, ThunderPhalanxTick
 pub use thunder2phalanx::{CLeimingPhalanx2, Leiming2PhalanxTick,
     calculate_owned_leiming2_attack};
 pub use tianhuophalanx::{CTianhuoPhalanx, TianhuoPhalanxTick, calculate_owned_tianhuo_attack};
-pub use masked_area::{MaskedArea, MaskedAreaPulse, MaskedElementPhalanx};
+pub use masked_area::{MaskedAreaPulse, MaskedElementPhalanx};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};
 pub use elementphalanx::{ElementPhalanxAttack, ElementSummonLiveField};
 pub use godthunder::{CGodThunderPhalanx, GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
-    ROUNDED_THUNDER_SCOPE, ROUNDED_THUNDER_SCOPE_SIDE,
-    GodThunderParametersError, GodThunderPhalanx, GodThunderSummonParameters};
-pub use chaossphere::{CChaosSpherePhalanx, CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
-    ChaosSphereSummonParameters, chaos_sphere_path_length};
-pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParameters,
-    soul_mirror_scope_size, soul_mirror_scope_cell};
-pub use cure::{cure_threshold, is_cure_removable_state_id};
+    ROUNDED_THUNDER_SCOPE, ROUNDED_THUNDER_SCOPE_SIDE};
+pub use chaossphere::{CChaosSpherePhalanx, CHAOS_SPHERE_SKILL_ID};
+pub use soulmirror::SOUL_MIRROR_SKILL_ID;
+pub use cure::is_cure_removable_state_id;
 pub use daubpoison::{DAUB_POISON_SKILL_ID, daub_poison_keep_time_ms};
 pub use fury::is_fury_conflicting_state_id;
-pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
-pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};
+pub use pillar::PILLAR_SKILL_ID;
+pub use roar::{ROAR_SKILL_ID, roar_bounds};
 pub use godbless::GodBlessGains;
 pub use hearten::hearten_state;
 pub use immediate::{ImmediateStatePayload, ImmediateStatePlacement,
@@ -186,16 +182,15 @@ pub use selfstate::{AGILITY_2_VISUAL_LOOP, PERSISTENT_AGILITY_FAMILY_VISUAL_LOOP
     SelfStateBranch, agility_state_2, is_self_shield_skill,
     persistent_agility_family_state, self_state_branch, self_state_mana_failure_text};
 pub use wuxing::{is_wuxing_skill, prepare_wuxing_parameters};
-pub use wangsheng::{WANGSHENG_SKILL_ID, execute_battle_fairy_wangsheng, wangsheng_restored_health};
+pub use wangsheng::{WANGSHENG_SKILL_ID, execute_battle_fairy_wangsheng};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
 pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
     encode_related_phalanx_snapshot, next_summon_shape_id};
 pub use projectile::{ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack,
     ArcheryProjectileLiveField, BaseProjectileFlight, CFireBallPhalanx,
     CGodPunishmentPhalanx, ElementProjectileAttack,
-    ElementProjectileLiveField, FIRE_BALL_SKILL_ID, FireBallPath,
-    GOD_PUNISHMENT_SKILL_ID,
-    ProjectileServerSnapshotPrefix, SoulProjectileAmplification};
+    ElementProjectileLiveField, FIRE_BALL_SKILL_ID,
+    GOD_PUNISHMENT_SKILL_ID, SoulProjectileAmplification};
 
 // Порция T5 «zonalcast-хаб»: скелет и швы, тела Summon владельцев,
 // композиты областей и применение элементных ударов.
