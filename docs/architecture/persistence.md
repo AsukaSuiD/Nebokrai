@@ -23,7 +23,7 @@
 
 Накопитель `WorldDbData` содержит разные структуры: карту персонажей по unsigned ID, FIFO копий организаций и списки отдельных операций. `append_db_player` заменяет прежнюю копию того же ID; `append_db_creation_player` удаляет первое совпадение и добавляет новую копию в хвост. Это объединяет обновления только внутри текущего накопителя, а не между всеми уже запущенными сохранениями.
 
-Первичное хранилище накопителя принадлежит `persistence`: [`WorldSaveDataAccumulator`](../../server/rust/realm/src/persistence/savedata.rs) владеет типом и append/swap/clear-примитивами, а переходный `CGame` хранит только composition handle и делегирующий facade до разборки остальных состояний агрегата.
+Первичное хранилище накопителя принадлежит `persistence`: [`WorldSaveDataAccumulator`](../../server/rust/realm/src/persistence/savedata.rs) владеет типом и append/swap/clear-примитивами, а переходный `CGame` хранит только composition handle и делегирующий facade до разборки остальных состояний агрегата. Живые записи персонажей и очереди creation/restore/deletion, читаемые prefix-сборкой, принадлежат владельцу `characters` ([`WorldPlayerRegistry`](../../server/rust/realm/src/characters/worldplayers.rs)); оркестрация `generate_db_data*` остаётся на `CGame` и читает их через его handle.
 
 ## Когда данные передаются worker-у
 
