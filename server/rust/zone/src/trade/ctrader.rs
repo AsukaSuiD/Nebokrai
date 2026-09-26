@@ -1,19 +1,25 @@
-//! Скалярные правила рамки двустороннего обмена GameServer `CTrader`,
+//! Правила и агрегат рамки двустороннего обмена GameServer `CTrader`,
 //! перенесённые в Zone `trade/`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/session/ctrader.cpp` (правила рамки и
+//! `server/gameserver/appserver/session/ctrader.cpp` (агрегат, правила рамки и
 //! предложений) и `server/gameserver/appserver/game.cpp` (маршрутизация
-//! источника предложения и сверка количества на commit). Мгновенный владелец
-//! трёх shadow-контейнеров `(goods, Gold, YuanBao)` и конкретных
-//! shadow-отчётов остаётся прежним `appserver/session/ctrader.rs`
-//! (`CPersonalShopSeller`-прецедент: container-владеющий plug живёт у старого
-//! пакета, потому что контейнеры и их listener-отчёты ещё принадлежат
-//! контейнерной порции). Registry поиск plug-ов выполняет `CSessionFactory`,
-//! wire доставку — message runtime caller-ы. Здесь — объявленные kind индексов
-//! рамки, скалярная приёмка предложения до занятия ячейки, таблица
-//! допустимых player-контейнеров источника, сверка количества и правила
-//! обратимости stack-merge при rollback.
+//! источника предложения и сверка количества на commit). Агрегат `CTrader` с
+//! тремя trade-shadow container-ами `(goods, Gold, YuanBao)`, ready-state,
+//! source metadata, terminal clear и отчётами `TraderOfferAdded`/
+//! `TraderOfferRemoved` перенесён сюда волной Z-C4: все его поля — типы Zone
+//! items (волна Z-C3) и скаляры, методы принимают `CGoods`/`CGoodsFactory` по
+//! ссылке (Zone items/content), хранимого доступа к живому `CPlayer`/`CGame`
+//! нет — hub-форма не требуется, и агрегат следует карте в Zone вместо
+//! прецедента container-owner старого пакета. `CGame` по-прежнему выполняет
+//! достигнутую двухфазную проверку и ownership transaction: исходные goods
+//! остаются у player до commit, затем переходят в packet второго участника;
+//! при частичном отказе они удаляются у получателя и возвращаются в packet
+//! владельца, как исходный `RollBack`. Registry поиск plug-ов выполняет
+//! `CSessionFactory`, wire доставку — message runtime caller-ы. Здесь — сам
+//! агрегат, объявленные kind индексов рамки, скалярная приёмка предложения до
+//! занятия ячейки, таблица допустимых player-контейнеров источника, сверка
+//! количества и правила обратимости stack-merge при rollback.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
@@ -36,24 +42,38 @@
 //!
 //! Риск-ноты переноса (разведка порции T):
 //!
-//! - Reset ready: `record_offer`/`remove_offer`/`clear` прежнего owner
-//!   немедленно сбрасывают собственный `ready`, а `CGame` затем сбрасывает
-//!   готовность ОБОИХ участников и рассылает `0xBF716`. Между своим локальным
-//!   сбросом и внешним сбросом второго участника есть micro-окно исходного
-//!   порядка — оно является контрактом очерёдности оригинала и сознательно не
-//!   уплотняется.
+//! - Reset ready: `record_offer`/`remove_offer`/`clear` агрегата немедленно
+//!   сбрасывают собственный `ready`, а `CGame` затем сбрасывает готовность
+//!   ОБОИХ участников и рассылает `0xBF716`. Между своим локальным сбросом и
+//!   внешним сбросом второго участника есть micro-окно исходного порядка — оно
+//!   является контрактом очерёдности оригинала и сознательно не уплотняется.
 //! - Rollback в commit: когда доставленный предмет слился со стеком
 //!   получателя НЕ полностью (исходный `RollBack` получает неслитый остаток),
-//!   обратного удаления части стека в Rust-владельце нет — как и у
-//!   release-формы оригинала вопрос о частичном unmerge остаётся
+//!   обратного удаления части стека в Rust-владельце commit-прохода (`CGame`)
+//!   нет — как и у release-формы оригинала вопрос о частичном unmerge остаётся
 //!   [`trade_rollback_merge_reversible`] == `false` (возврат `None` caller-а).
 //!
-//! Швы переноса: числовые index рамки и скалярные предикаты перенесены
-//! буквально (pub/пути нормализованы); контейнерные операции `record_offer`
-//! (occupy/record/clear) и отчёты `ShadowPresenceReport/ShadowRemovedReport`
-//! остаются у прежнего владельца, который вызывает правила ниже в исходном
-//! порядке. Константы сессии обмена материализованы здесь же, потому что
-//! `CSessionFactory` создаёт рамку именно с этими параметрами.
+//! Швы переноса: числовые index рамки, скалярные предикаты и агрегат
+//! перенесены буквально (pub/пути нормализованы); shadow-контейнеры и их
+//! отчёты `GoodsShadow`/`PlacedShadowGoods`/`ShadowPresenceReport`/
+//! `ShadowRemovedReport` — Zone `items/` владельцы (волна Z-C3), `CGoods` —
+//! Zone `items/cgoods.rs`, реестр `CGoodsFactory` — Zone
+//! `content/goodsfactory.rs` (волна Z-G0b), `CGuid` — Shared. Двухфазная
+//! ownership transaction commit/rollback и reset готовности второго участника
+//! остаются у `CGame`. Константы сессии обмена материализованы здесь же,
+//! потому что `CSessionFactory` создаёт рамку именно с этими параметрами.
+
+use crate::content::goods::GAP_PARTICULAR_ATTRIBUTE;
+use crate::content::goodsfactory::CGoodsFactory;
+use crate::items::ccontainer::PreviousContainer;
+use crate::items::cgoods::CGoods;
+use crate::items::cgoodsshadowcontainer::{
+    GoodsShadow, PlacedShadowGoods, ShadowPresenceReport, ShadowRemovedReport,
+};
+use crate::items::cshadowwallet::CShadowWallet;
+use crate::items::cshadowyuanbao::CShadowYuanBao;
+use crate::items::cvolumelimitgoodsshadowcontainer::CVolumeLimitGoodsShadowContainer;
+use nebokrai_shared::values::CGuid;
 
 /// Owner type shadow-контейнеров рамки: `(10, session_id)` исходного owner.
 pub const SESSION_OWNER_TYPE: i32 = 10;
@@ -245,3 +265,256 @@ pub const fn trade_offer_amount_satisfies(
 pub const fn trade_rollback_merge_reversible(merged_amount: u32, original_amount: u32) -> bool {
     merged_amount == original_amount
 }
+
+/// Подтверждённая запись предложения рамки `CTrader::record_offer`: presence
+/// shadow и отчёт о вытесненной записи рамки валюты для listener-следствий
+/// caller-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraderOfferAdded {
+    pub plug_id: i32,
+    pub kind: TraderContainerKind,
+    pub position: u32,
+    pub record: GoodsShadow,
+    pub presence: ShadowPresenceReport,
+    pub replaced: Option<ShadowRemovedReport>,
+}
+
+/// Подтверждённое снятие предложения рамки `CTrader::remove_offer`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraderOfferRemoved {
+    pub plug_id: i32,
+    pub kind: TraderContainerKind,
+    pub position: u32,
+    pub removed: ShadowRemovedReport,
+}
+
+/// Агрегат рамки двустороннего обмена исходного `CTrader`: три trade-shadow
+/// container-а `(goods 32 ячейки, Gold, YuanBao)` с owner `(10, session_id)` и
+/// extend-id `plug << 8 | kind`, ready-state и source metadata одного
+/// участника. Ready немедленно сбрасывается любой сменой рамки (risk-note
+/// этого файла); сброс второго участника и wire — у `CGame`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CTrader {
+    plug_id: i32,
+    session_id: i32,
+    owner_id: i32,
+    goods: CVolumeLimitGoodsShadowContainer,
+    gold: CShadowWallet,
+    yuan_bao: CShadowYuanBao,
+    ready: bool,
+}
+
+impl CTrader {
+    pub fn inserted(plug_id: i32, session_id: i32, owner_id: i32) -> Self {
+        let mut goods = CVolumeLimitGoodsShadowContainer::new();
+        goods.set_container_volume(TRADE_GOODS_CELLS);
+        goods
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .set_owner(SESSION_OWNER_TYPE, session_id);
+        goods
+            .base_mut()
+            .base_mut()
+            .set_container_extend_id(trade_container_extend_id(plug_id, TraderContainerKind::Goods));
+
+        let mut gold = CShadowWallet::new();
+        gold.set_owner(SESSION_OWNER_TYPE, session_id);
+        gold.set_container_extend_id(trade_container_extend_id(plug_id, TraderContainerKind::Gold));
+        let mut yuan_bao = CShadowYuanBao::new();
+        yuan_bao.set_owner(SESSION_OWNER_TYPE, session_id);
+        yuan_bao.set_container_extend_id(trade_container_extend_id(
+            plug_id,
+            TraderContainerKind::YuanBao,
+        ));
+        Self {
+            plug_id,
+            session_id,
+            owner_id,
+            goods,
+            gold,
+            yuan_bao,
+            ready: false,
+        }
+    }
+
+    pub const fn plug_id(&self) -> i32 {
+        self.plug_id
+    }
+
+    pub const fn session_id(&self) -> i32 {
+        self.session_id
+    }
+
+    pub const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
+
+    pub const fn ready(&self) -> bool {
+        self.ready
+    }
+
+    pub const fn set_trade_state(&mut self, ready: bool) {
+        self.ready = ready;
+    }
+
+    pub fn goods_offers(&self) -> Vec<GoodsShadow> {
+        self.goods
+            .base()
+            .base()
+            .shadows()
+            .values()
+            .copied()
+            .collect()
+    }
+
+    pub fn gold_amount(&self) -> u32 {
+        self.gold.currency_amount()
+    }
+
+    pub fn yuan_bao_amount(&self) -> u32 {
+        self.yuan_bao.currency_amount()
+    }
+
+    pub fn currency_offer(&self, kind: TraderContainerKind) -> Option<GoodsShadow> {
+        let container = match kind {
+            TraderContainerKind::Gold => self.gold.base(),
+            TraderContainerKind::YuanBao => self.yuan_bao.base(),
+            TraderContainerKind::Goods => return None,
+        };
+        container.base().shadows().values().next().copied()
+    }
+
+    pub fn record_offer(
+        &mut self,
+        kind: TraderContainerKind,
+        position: u32,
+        goods: &CGoods,
+        amount: u32,
+        previous: PreviousContainer,
+        factory: &CGoodsFactory,
+    ) -> Result<TraderOfferAdded, TraderOfferBlock> {
+        if trade_offer_missing_goods(amount, goods.amount()) {
+            return Err(TraderOfferBlock::MissingGoods);
+        }
+        let base_index = goods.base_properties_index();
+        let expected_gold = factory.get_gold_coin_index();
+        let expected_yuan_bao = factory.get_yuan_bao_index();
+        let placed = PlacedShadowGoods {
+            identity: goods.identity().ex_id,
+            position: previous.goods_position,
+            base_properties_index: base_index,
+            amount,
+        };
+        let (record, presence, replaced) = match kind {
+            TraderContainerKind::Goods => {
+                if let Some(block) = trade_goods_offer_block(
+                    base_index,
+                    expected_gold,
+                    expected_yuan_bao,
+                    goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32,
+                    position,
+                    self.goods.size(),
+                ) {
+                    return Err(block);
+                }
+                if !self.goods.is_space_enough(position) {
+                    return Err(TraderOfferBlock::Occupied);
+                }
+                let added = self
+                    .goods
+                    .base_mut()
+                    .record_placed_goods(previous, placed)
+                    .map_err(|_| TraderOfferBlock::ShadowRejected)?;
+                if !self
+                    .goods
+                    .occupy_cell(position, added.recorded.record.goods_id)
+                {
+                    let _ = self.goods.remove_shadow(added.recorded.record.goods_id);
+                    return Err(TraderOfferBlock::Occupied);
+                }
+                (added.recorded.record, added.presence, None)
+            }
+            TraderContainerKind::Gold | TraderContainerKind::YuanBao => {
+                if let Some(block) = trade_currency_offer_block(
+                    kind,
+                    base_index,
+                    expected_gold,
+                    expected_yuan_bao,
+                    position,
+                ) {
+                    return Err(block);
+                }
+                let container = if kind == TraderContainerKind::Gold {
+                    self.gold.base_mut()
+                } else {
+                    self.yuan_bao.base_mut()
+                };
+                let replaced_id = container.base().shadows().keys().next().copied();
+                let replaced = replaced_id.and_then(|id| container.base_mut().remove_shadow(id));
+                container.clear();
+                container.set_goods_amount_limit(1);
+                let added = container
+                    .record_placed_goods(previous, placed)
+                    .map_err(|_| TraderOfferBlock::ShadowRejected)?;
+                (added.recorded.record, added.presence, replaced)
+            }
+        };
+        self.ready = false;
+        Ok(TraderOfferAdded {
+            plug_id: self.plug_id,
+            kind,
+            position,
+            record,
+            presence,
+            replaced,
+        })
+    }
+
+    pub fn remove_offer(
+        &mut self,
+        kind: TraderContainerKind,
+        position: u32,
+        goods_id: CGuid,
+    ) -> Option<TraderOfferRemoved> {
+        let removed = match kind {
+            TraderContainerKind::Goods => {
+                if self.goods.query_goods_position(goods_id)? != position {
+                    return None;
+                }
+                self.goods.remove_shadow(goods_id)?
+            }
+            TraderContainerKind::Gold => {
+                if position != 0 {
+                    return None;
+                }
+                self.gold.base_mut().base_mut().remove_shadow(goods_id)?
+            }
+            TraderContainerKind::YuanBao => {
+                if position != 0 {
+                    return None;
+                }
+                self.yuan_bao
+                    .base_mut()
+                    .base_mut()
+                    .remove_shadow(goods_id)?
+            }
+        };
+        self.ready = false;
+        Some(TraderOfferRemoved {
+            plug_id: self.plug_id,
+            kind,
+            position,
+            removed,
+        })
+    }
+
+    pub fn clear(&mut self) -> usize {
+        self.ready = false;
+        self.goods.clear() + self.gold.clear() + self.yuan_bao.clear()
+    }
+}
+
+// Полный достигнутый CTrader lifecycle исполняется typed owner-ами: агрегат
+// здесь, двухфазная transaction commit/rollback — у `CGame`; отдельной
+// сохранённой RAW-копии замещённых функций в owner-файле нет.

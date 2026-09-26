@@ -1,6 +1,10 @@
 //! Состояние и правила игровых клиентских сессий Zone.
 
+pub mod cequipmentcompose; // CEquipmentCompose: compose plug с трёхслотовой shadow-сессией.
+pub mod cequipmentdakong; // CEquipmentDaKong: DaKong/XiangQian plug с восьмислотовой тенью.
+pub mod cequipmentupgrade; // CEquipmentUpgrade: upgrade plug с пятислотовой shadow-сессией.
 pub mod cpersonalshopbuyer; // buyer plug личной лавки.
+pub mod cpersonalshopseller; // CPersonalShopSeller: seller plug лавки — имя, цены, shadow 8×6.
 pub mod cplug; // CPlug: owner-часть plug GameServer.
 pub mod csession; // CSession: plug-list storage-часть сессии.
 pub mod cteam; // CTeam: сеанс команды.
