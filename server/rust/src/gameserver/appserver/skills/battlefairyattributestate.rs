@@ -1,8 +1,13 @@
 //! Живые Begin/restart/AI/End состояний Po/Yu (0x212..0x219) в переходном
-//! Game. Источник: gameserver.exe/GameServer.pdb,
+//! Game. Источник: gameserver.exe `4F5C98E0…` + GameServer.pdb (RSDS match),
 //! appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}state.cpp.
 //! Данные, вид, 12-байтная запись и числовые формулы перенесены в Zone
-//! `effects/battlefairy.rs` (там же адреса конструкторов и общего кодека).
+//! `effects/battlefairy.rs` (там же адреса конструкторов и общего кодека);
+//! skill-сторона октета (Check/AI, диспетчер определений) — в Zone
+//! `skills/battlefairyattribute.rs` порцией №6b. Этот hub-lifecycle (state —
+//! 9-fold AI/End/Serialize/Unserialize/GetRemainedTime/OnChangeRegion)
+//! остаётся здесь до переноса общей арены состояний; координатор вызывает его
+//! через шов `BattleFairyGame::begin_battle_fairy_attribute_state`.
 //!
 //! User всегда держатель арены; Sufferer у Po — caster, у Yu — сам держатель.
 //! Object Begin требует User, читает собственные часы и создаёт silent loop1.

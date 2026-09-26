@@ -1,5 +1,10 @@
 //! Переходный End CLifeShieldState: Cure и обновление живой фигуры в Game.
-//! Источник поведения: appserver/skills/lifeshieldstate.cpp/.h.
+//! Источник поведения: gameserver.exe `4F5C98E0…` + GameServer.pdb (RSDS
+//! match), appserver/skills/lifeshieldstate.cpp/.h (ctor `0x1F29C0`, AddCure
+//! `0x1F2FD0` зависит от CureState — уже в Zone). Skill-сторона щита (Check/AI)
+//! перенесена в Zone `skills/lifeshield.rs` порцией №6b; этот hub-lifecycle
+//! остаётся здесь до переноса hub самозащитных состояний и вызывается навыком
+//! через шов `BattleFairyGame::begin_life_shield_state`.
 
 use super::curestate::{CURE_STATE_SKILL_ID, CureState, begin_primary_cure_state};
 use super::lifeshield::SKILL_USAGE_STATE_PERSIST_TIME;
