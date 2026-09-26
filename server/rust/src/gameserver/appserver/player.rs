@@ -516,6 +516,7 @@ use nebokrai_zone::skills::{
     select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill,
 };
+use nebokrai_zone::skills::battlefairysummon::{BattleFairyHeadgearOperation, BattleFairyWarSoul};
 use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
@@ -534,6 +535,10 @@ use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapsh
 use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
 use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress, append_client_quest_record};
+use nebokrai_zone::trade::auction::{
+    AuctionBuyGate, AuctionListingGate, AuctionMoneyMoveCapacity, PlayerAuction,
+    check_auction_money_move, legacy_ipv4_text,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -627,10 +632,6 @@ const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
 const BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE: u32 = 0x0b_f71d;
 const BATTLE_FAIRY_FETCH_POWER_MESSAGE_TYPE: u32 = 0x0b_f80c;
 const BATTLE_FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0c;
-const MONSTER_TAMING_SKILL_ID: u32 = 0xd4;
-const BATTLE_FAIRY_MOVE_MESSAGE_TYPE: u32 = 0x0b_f605;
-const BATTLE_FAIRY_STATUS_MESSAGE_TYPE: u32 = 0x0b_f930;
-const BATTLE_FAIRY_SUMMON_MESSAGE_TYPE: u32 = 0x0b_f92e;
 const BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE: u32 = 0x0b_f71e;
 const BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING: &str = "ZHGS0022";
 const SKILL_EFFECT_MESSAGE_TYPE: u32 = 0x0b_fe01;
@@ -712,56 +713,21 @@ pub(crate) struct BattleFairyCombineReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyWarSoulAction {
-    SetPosition {
-        previous: WarSoulPoint,
-        target: WarSoulPoint,
-    },
-    Delete {
-        previous: WarSoulPoint,
-        player_position: WarSoulPoint,
-    },
-}
+// Порция №7a: типы, wire-константы кадров и правила war-soul перенесены
+// буквально в Zone `skills/battlefairysummon.rs`; report/plan-структуры с
+// журнальным полем остаются здесь, потому что журнал — прежний
+// `GameEffectJournal`.
+pub(crate) use nebokrai_zone::skills::battlefairysummon::{
+    BattleFairyDeathOutcome, BattleFairyFollowEffect, BattleFairyFollowOutcome,
+    BattleFairySummonEffect, BattleFairySummonOutcome, BattleFairyWarSoulAction,
+    BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WarSoulHitOutcome {
     pub(crate) broken: bool,
     pub(crate) broadcast_previous_status: bool,
     pub(crate) update: super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySummonOutcome {
-    FeatureDisabled,
-    AlreadySummoned,
-    AlreadyRecalled,
-    MissingHeadgear,
-    InvalidHeadgear,
-    NoHitPoints,
-    ActivePet,
-    MonsterTamingActive,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    Summoned,
-    Recalled,
-    IgnoredMode,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySummonEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-    },
-    AroundMessage {
-        message_type: u32,
-        player_id: i32,
-        values: Vec<i32>,
-    },
-    PropertiesChanged {
-        player_id: i32,
-    },
 }
 
 #[must_use = "summon report хранит точный порядок адресных broadcast и property effects"]
@@ -774,29 +740,6 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyFollowOutcome {
-    ActiveSkill,
-    NotSummoned,
-    Dead,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    NonFiniteVisualState,
-    InsideDeadZone,
-    Moved,
-    Snapped,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyFollowEffect {
-    AroundMove {
-        message_type: u32,
-        player_id: i32,
-        object_type: i32,
-        x: u32,
-        y: u32,
-    },
-}
-
 #[must_use = "план следования содержит пространственное действие и обязательную рассылку движения"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyFollowPlan {
@@ -805,14 +748,6 @@ pub(crate) struct BattleFairyFollowPlan {
     pub(crate) region_id: Option<i32>,
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) effects: GameEffectJournal,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyDeathOutcome {
-    MissingHeadgear,
-    NotBattleFairy,
-    Alive,
-    Died,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1599,19 +1534,7 @@ pub(crate) struct GoodsSessionPlayerRelease {
     pub(crate) moveable: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AuctionSelfGoodsRefresh {
-    Throttled {
-        sampled_tick_ms: u32,
-        previous_tick_ms: u32,
-    },
-    Requested {
-        sampled_tick_ms: u32,
-        recorded_tick_ms: u32,
-        goods_space: u32,
-        wallet_space: u32,
-    },
-}
+pub(crate) use nebokrai_zone::trade::auction::AuctionSelfGoodsRefresh;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingPacketConsumption {
@@ -1674,14 +1597,6 @@ pub(crate) enum PlayerAuctionMoneyChangeOutcome {
     Decreased(CurrencyDecreaseOutcome),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuctionMoneyMoveCapacity {
-    pub(crate) wallet_amount: u32,
-    pub(crate) auction_amount: u32,
-    pub(crate) maximum: u32,
-    pub(crate) allowed: bool,
-}
-
 #[must_use = "возврат с аукциона содержит container, bind и ownership outcome"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAuctionGoodsReturn {
@@ -1692,30 +1607,6 @@ pub(crate) struct PlayerAuctionGoodsReturn {
     pub(crate) resulting_goods: Option<ShapeIdentity>,
     pub(crate) resulting_amount: Option<u32>,
     pub(crate) bind_stored: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AuctionBuyGate {
-    Throttled {
-        sampled_tick_ms: u32,
-        previous_tick_ms: u32,
-    },
-    Ready {
-        sampled_tick_ms: u32,
-        recorded_tick_ms: u32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AuctionListingGate {
-    Throttled {
-        sampled_tick_ms: u32,
-        previous_tick_ms: u32,
-    },
-    Ready {
-        sampled_tick_ms: u32,
-        recorded_tick_ms: u32,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1940,19 +1831,7 @@ pub(crate) struct CPlayer {
     auction_listing: CVolumeLimitGoodsContainer,
     auction_goods: CVolumeLimitGoodsContainer,
     auction_wallet: CWallet,
-    auction_open: bool,
-    auction_search_name: Vec<u8>,
-    auction_search_lower_level: i32,
-    auction_search_upper_level: i32,
-    auction_search_use_self: i32,
-    auction_search_money_type: i32,
-    auction_search_weapon_type: i32,
-    auction_current_page: i32,
-    last_auction_limit_tick_ms: u32,
-    last_auction_option_tick_ms: u32,
-    current_auction_node: Option<CGoodsNode>,
-    auction_listing_fee: u32,
-    current_auction_buy_node: Option<CGoodsNode>,
+    auction: PlayerAuction<CGoodsNode>,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
     fairy_container: CFairyContainer,
@@ -2491,19 +2370,7 @@ impl CPlayer {
             auction_listing,
             auction_goods,
             auction_wallet: CWallet::new(),
-            auction_open: false,
-            auction_search_name: Vec::new(),
-            auction_search_lower_level: 0,
-            auction_search_upper_level: 0,
-            auction_search_use_self: 0,
-            auction_search_money_type: 0,
-            auction_search_weapon_type: 0,
-            auction_current_page: 0,
-            last_auction_limit_tick_ms: 0,
-            last_auction_option_tick_ms: 0,
-            current_auction_node: None,
-            auction_listing_fee: 0,
-            current_auction_buy_node: None,
+            auction: PlayerAuction::default(),
             ci_qing,
             ci_qing_compose,
             fairy_container,
@@ -7207,34 +7074,34 @@ impl CPlayer {
         Self::combat_type_values_from(self.combat_properties)
     }
 
+    /// Серверный домен `GetCurrentTypeValue` — ровно 15 ключей `2..0x10`:
+    /// 2/3/4/5 = strength/dexterity/constitution/intelligence, 6/7 = min/max
+    /// attack, 8 = element_modify, 9 = cch, 0xa = defense,
+    /// 0xb = element_resistance, 0xc/0xd = max HP/MP, 0xe/0xf = blast attack /
+    /// blast element attack, 0x10 = full_miss. Ключи в провод не уходят:
+    /// клиент (CiQing-ветвь `0x53990E`) читает 15 позиционных DWORD после
+    /// `(type, id)`, порядок задаётся возрастанием ключей BTreeMap. Соседний
+    /// домен `0x0e..0x60` живёт отдельно в `apply_tao_zhuang_properties`
+    /// (серверный `AddPreItemToPlayer`) и здесь не используется.
     pub(crate) fn combat_type_values_from(
         properties: PlayerCombatProperties,
     ) -> BTreeMap<u32, u32> {
         BTreeMap::from([
-            (0x0e, properties.minimum_attack),
-            (0x0f, properties.maximum_attack),
-            (0x10, properties.element_modify as u32),
-            (0x11, properties.defense),
-            (0x12, u32::from(properties.attack_speed)),
-            (0x13, u32::from(properties.hit)),
-            (0x14, u32::from(properties.cch)),
-            (0x15, u32::from(properties.dodge)),
-            (0x17, properties.element_resistance),
-            (0x19, u32::from(properties.hp_recovery)),
-            (0x1a, u32::from(properties.mp_recovery)),
-            (0x1b, properties.strength),
-            (0x1c, properties.dexterity),
-            (0x1d, properties.constitution),
-            (0x1e, properties.intelligence),
-            (0x1f, properties.maximum_hp),
-            (0x20, properties.maximum_mp),
-            (0x33, u32::from(properties.reank)),
-            (0x34, u32::from(properties.burden)),
-            (0x5b, u32::from(properties.attack_avoid)),
-            (0x5c, u32::from(properties.element_avoid)),
-            (0x5d, u32::from(properties.full_miss)),
-            (0x5f, u32::from(properties.blast_attack)),
-            (0x60, u32::from(properties.blast_element_attack)),
+            (0x02, properties.strength),
+            (0x03, properties.dexterity),
+            (0x04, properties.constitution),
+            (0x05, properties.intelligence),
+            (0x06, properties.minimum_attack),
+            (0x07, properties.maximum_attack),
+            (0x08, properties.element_modify as u32),
+            (0x09, u32::from(properties.cch)),
+            (0x0a, properties.defense),
+            (0x0b, properties.element_resistance),
+            (0x0c, properties.maximum_hp),
+            (0x0d, properties.maximum_mp),
+            (0x0e, u32::from(properties.blast_attack)),
+            (0x0f, u32::from(properties.blast_element_attack)),
+            (0x10, u32::from(properties.full_miss)),
         ])
     }
 
@@ -9425,35 +9292,17 @@ impl CPlayer {
         self.auction_wallet.currency_amount()
     }
 
-    /// Exact state-часть `CheckAuctionMoneyMove`: checked unsigned sum
-    /// основного и auction wallet сравнивается с max stack основного wallet.
-    /// Уведомление `GPM015` остаётся у message runtime caller-а.
+    /// Правило `CheckAuctionMoneyMove` исполняет Zone trade над снятыми с
+    /// кошельков и фабрики скалярами; уведомление `GPM015` у caller-а.
     pub(crate) fn auction_money_move_capacity(
         &self,
         factory: &CGoodsFactory,
     ) -> AuctionMoneyMoveCapacity {
-        let wallet_amount = self.wallet.currency_amount();
-        let auction_amount = self.auction_wallet.currency_amount();
-        let maximum = self.wallet.max_stack_number(factory);
-        let allowed = wallet_amount
-            .checked_add(auction_amount)
-            .is_some_and(|total| total <= maximum);
-        AuctionMoneyMoveCapacity {
-            wallet_amount,
-            auction_amount,
-            maximum,
-            allowed,
-        }
-    }
-
-    /// Exact `AuctionLimit`: listing slot `0` принимает только предмет без
-    /// particular-флагов `0x20/0x04` и без life-type addon. Player state в
-    /// формуле не участвует; owner остаётся здесь из-за исходного dispatch.
-    pub(crate) fn auction_listing_goods_allowed(goods: &CGoods, factory: &CGoodsFactory) -> bool {
-        let particular = goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
-        particular & 0x20 == 0
-            && particular & 0x04 == 0
-            && !goods.query_attribute(GAP_GOODS_LIFE_TYPE)
+        check_auction_money_move(
+            self.wallet.currency_amount(),
+            self.auction_wallet.currency_amount(),
+            self.wallet.max_stack_number(factory),
+        )
     }
 
     pub(crate) fn auction_money_goods(&self) -> Option<&CGoods> {
@@ -9495,7 +9344,7 @@ impl CPlayer {
     }
 
     pub(crate) const fn set_auction_open(&mut self, open: bool) {
-        self.auction_open = open;
+        self.auction.set_open(open);
     }
 
     /// State/container часть exact `TellClientScale`; закрытый аукцион не
@@ -9505,7 +9354,8 @@ impl CPlayer {
         &mut self,
         factory: &CGoodsFactory,
     ) -> Option<Vec<CGuid>> {
-        self.auction_open
+        self.auction
+            .is_open()
             .then(|| self.auction_goods.get_scale_goods(factory))
     }
 
@@ -9513,48 +9363,23 @@ impl CPlayer {
         self.auction_goods.get_goods(position).map(CGoods::identity)
     }
 
-    /// Exact `BuyItemFromAauction` clock gate: strict wrapping threshold и
-    /// отдельный второй sample записываются до GUID decode/query.
-    pub(crate) fn begin_auction_buy(&mut self, mut tick_ms: impl FnMut() -> u32) -> AuctionBuyGate {
-        let sampled_tick_ms = tick_ms();
-        let previous_tick_ms = self.last_auction_option_tick_ms;
-        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
-            return AuctionBuyGate::Throttled {
-                sampled_tick_ms,
-                previous_tick_ms,
-            };
-        }
-        let recorded_tick_ms = tick_ms();
-        self.last_auction_option_tick_ms = recorded_tick_ms;
-        AuctionBuyGate::Ready {
-            sampled_tick_ms,
-            recorded_tick_ms,
-        }
+    /// Clock-гейт покупки лота исполняет вложенное в игрока состояние
+    /// аукциона из Zone trade.
+    pub(crate) fn begin_auction_buy(&mut self, tick_ms: impl FnMut() -> u32) -> AuctionBuyGate {
+        self.auction.begin_buy(tick_ms)
     }
 
-    /// Exact `MakeCurAucNode` 5-second gate с отдельным вторым tick sample.
+    /// Пятисекундный гейт выставления исполняет вложенное состояние аукциона
+    /// из Zone trade.
     pub(crate) fn begin_auction_listing(
         &mut self,
-        mut tick_ms: impl FnMut() -> u32,
+        tick_ms: impl FnMut() -> u32,
     ) -> AuctionListingGate {
-        let sampled_tick_ms = tick_ms();
-        let previous_tick_ms = self.last_auction_option_tick_ms;
-        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
-            return AuctionListingGate::Throttled {
-                sampled_tick_ms,
-                previous_tick_ms,
-            };
-        }
-        let recorded_tick_ms = tick_ms();
-        self.last_auction_option_tick_ms = recorded_tick_ms;
-        AuctionListingGate::Ready {
-            sampled_tick_ms,
-            recorded_tick_ms,
-        }
+        self.auction.begin_listing(tick_ms)
     }
 
-    /// Exact `IsAollowAuction` 1-second gate: timestamp обновляется до limit
-    /// queries, а failed limit также поглощает текущую попытку.
+    /// Секундный limit-гейт исполняет вложенное состояние аукциона из Zone
+    /// trade; счётчики комнаты и пределы setup снимает message caller.
     pub(crate) fn begin_auction_limit_check(
         &mut self,
         tick_ms: u32,
@@ -9564,70 +9389,56 @@ impl CPlayer {
         global_maximum: f32,
         extension_bonus: i32,
     ) -> bool {
-        if tick_ms.wrapping_sub(self.last_auction_limit_tick_ms) <= 1_000 {
-            return false;
-        }
-        self.last_auction_limit_tick_ms = tick_ms;
-        (owner_goods_count as f32) < extension_bonus as f32 + player_maximum
-            && (global_goods_count as f32) < global_maximum
+        self.auction.begin_limit_check(
+            tick_ms,
+            owner_goods_count,
+            global_goods_count,
+            player_maximum,
+            global_maximum,
+            extension_bonus,
+        )
     }
 
     pub(crate) fn current_auction_node(&self) -> Option<&CGoodsNode> {
-        self.current_auction_node.as_ref()
+        self.auction.current_node()
     }
 
     pub(crate) fn set_current_auction_node(&mut self, node: CGoodsNode) -> bool {
-        if self.current_auction_node.is_some() {
-            return false;
-        }
-        self.current_auction_node = Some(node);
-        true
+        self.auction.set_current_node(node)
     }
 
-    /// Точная запись `AutoAddAuctionGoods`: каждый созданный предмет целиком
-    /// заменяет предыдущий `m_CurrentAucNode` без проверки занятости узла.
+    /// Делегирует запись узла вложенному состоянию аукциона из Zone trade
+    /// (точное безусловное замещение `AutoAddAuctionGoods`).
     pub(crate) fn replace_current_auction_node(&mut self, node: CGoodsNode) {
-        self.current_auction_node = Some(node);
+        self.auction.replace_current_node(node);
     }
 
     pub(crate) fn take_current_auction_node(&mut self) -> Option<CGoodsNode> {
-        self.current_auction_node.take()
+        self.auction.take_current_node()
     }
 
     pub(crate) const fn auction_listing_fee(&self) -> u32 {
-        self.auction_listing_fee
+        self.auction.listing_fee()
     }
 
     pub(crate) const fn set_auction_listing_fee(&mut self, fee: u32) {
-        self.auction_listing_fee = fee;
+        self.auction.set_listing_fee(fee);
     }
 
     pub(crate) fn current_auction_buy_node(&self) -> Option<&CGoodsNode> {
-        self.current_auction_buy_node.as_ref()
+        self.auction.current_buy_node()
     }
 
     pub(crate) fn set_current_auction_buy_node(&mut self, node: CGoodsNode) -> bool {
-        if self.current_auction_buy_node.is_some() {
-            return false;
-        }
-        self.current_auction_buy_node = Some(node);
-        true
+        self.auction.set_current_buy_node(node)
     }
 
     pub(crate) fn take_current_auction_buy_node(&mut self) -> Option<CGoodsNode> {
-        self.current_auction_buy_node.take()
+        self.auction.take_current_buy_node()
     }
 
     pub(crate) fn client_ip_text(&self) -> Vec<u8> {
-        let ip = self.client_ip;
-        format!(
-            "{}.{}.{}.{}",
-            ip & 0xff,
-            (ip >> 8) & 0xff,
-            (ip >> 16) & 0xff,
-            ip >> 24
-        )
-        .into_bytes()
+        legacy_ipv4_text(self.client_ip)
     }
 
     pub(crate) fn begin_auction_search(
@@ -9639,41 +9450,30 @@ impl CPlayer {
         money_type: i32,
         weapon_type: i32,
     ) {
-        self.auction_search_name.clear();
-        self.auction_search_name.extend_from_slice(name);
-        self.auction_search_lower_level = lower_level;
-        self.auction_search_upper_level = upper_level;
-        self.auction_search_use_self = use_self;
-        self.auction_search_money_type = money_type;
-        self.auction_search_weapon_type = weapon_type;
-        self.auction_current_page = 0;
+        self.auction.begin_search(
+            name,
+            lower_level,
+            upper_level,
+            use_self,
+            money_type,
+            weapon_type,
+        );
     }
 
-    /// Exact `ReFlushSelfGoods`: strict wrapping `last + 5000 < first sample`,
-    /// затем отдельный второй `timeGetTime` sample записывается до World send.
+    /// Гейт `ReFlushSelfGoods` исполняет вложенное состояние аукциона из Zone
+    /// trade; оба space-скаляра снимаются с контейнеров до вызова.
     pub(crate) fn refresh_auction_self_goods(
         &mut self,
         factory: &CGoodsFactory,
-        mut tick_ms: impl FnMut() -> u32,
+        tick_ms: impl FnMut() -> u32,
     ) -> AuctionSelfGoodsRefresh {
-        let sampled_tick_ms = tick_ms();
-        let previous_tick_ms = self.last_auction_option_tick_ms;
-        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
-            return AuctionSelfGoodsRefresh::Throttled {
-                sampled_tick_ms,
-                previous_tick_ms,
-            };
-        }
-        let recorded_tick_ms = tick_ms();
-        self.last_auction_option_tick_ms = recorded_tick_ms;
         let wallet_amount = self.auction_wallet.currency_amount();
         let wallet_maximum = self.auction_wallet.max_stack_number(factory);
-        AuctionSelfGoodsRefresh::Requested {
-            sampled_tick_ms,
-            recorded_tick_ms,
-            goods_space: self.auction_goods.space(),
-            wallet_space: wallet_maximum.wrapping_sub(wallet_amount),
-        }
+        self.auction.begin_self_goods_refresh(
+            tick_ms,
+            self.auction_goods.space(),
+            wallet_maximum.wrapping_sub(wallet_amount),
+        )
     }
 
     /// Exact derived `bHasPet`: отдельный pet owner materializes list later;
@@ -9839,23 +9639,21 @@ impl CPlayer {
     }
 
     /// Exact `SetWarSoulStaus`: around status публикуется по прежнему state,
-    /// затем любое значение кроме единицы нормализуется к нулю.
+    /// затем любое значение кроме единицы нормализуется к нулю. Правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) const fn set_war_soul_status(&mut self, value: u32) -> bool {
-        let broadcast_previous = self.war_soul_state == 1;
-        if value == 1 {
-            self.battle_fairy_summoned = true;
-            self.war_soul_state = 1;
-        } else {
-            self.battle_fairy_summoned = false;
-            self.war_soul_state = 0;
-        }
-        broadcast_previous
+        nebokrai_zone::skills::battlefairysummon::set_war_soul_status(
+            &mut self.battle_fairy_summoned,
+            &mut self.war_soul_state,
+            value,
+        )
     }
 
     /// Исполняет player-часть `CBattleFairyContainer::SummonBF`. Spatial map
     /// принадлежит `CServerRegion`, поэтому действие возвращается явным
     /// tail-ом для `CGame`; ordered notify/broadcast/property effects там
-    /// сериализуются concrete wire после spatial mutation.
+    /// сериализуются concrete wire после spatial mutation. Правило перенесено
+    /// буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) fn summon_battle_fairy(
         &mut self,
         battle_fairy_enabled: bool,
@@ -9863,116 +9661,38 @@ impl CPlayer {
         factory: &CGoodsFactory,
     ) -> BattleFairySummonReport {
         let player_id = self.player_id();
-        let mut report = BattleFairySummonReport {
+        let has_pet = self.has_pet();
+        let active_skill_id = self.move_shape.current_skill_id();
+        let shape = self.move_shape.shape();
+        let resolution = nebokrai_zone::skills::battlefairysummon::summon_battle_fairy(
+            &mut BattleFairyWarSoul {
+                summoned: &mut self.battle_fairy_summoned,
+                state: &mut self.war_soul_state,
+                recall: &mut self.base_properties.battle_fairy_recall,
+                died: &mut self.base_properties.battle_fairy_died,
+                visual_x_bits: &mut self.war_soul_visual_x_bits,
+                visual_y_bits: &mut self.war_soul_visual_y_bits,
+                point: &mut self.war_soul_point,
+            },
             player_id,
-            outcome: BattleFairySummonOutcome::IgnoredMode,
+            battle_fairy_enabled,
+            mode,
+            has_pet,
+            active_skill_id,
+            |property| {
+                self.equipment
+                    .get_goods(10)
+                    .map(|goods| goods.addon_property_value(factory, property, 1))
+            },
+            || (shape.get_tile_x(), shape.get_tile_y()),
+        );
+        BattleFairySummonReport {
+            player_id,
+            outcome: resolution.outcome,
             region_id: self.server_region_id,
-            spatial_action: None,
-            effects: GameEffectJournal::default(),
-        };
-        if !battle_fairy_enabled {
-            report.outcome = BattleFairySummonOutcome::FeatureDisabled;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0023", 0xffff_ffff);
-            return report;
+            spatial_action: resolution.spatial_action,
+            effects: resolution.effects.into_iter().collect(),
         }
-        if mode == 1 && self.war_soul_state == 1 {
-            report.outcome = BattleFairySummonOutcome::AlreadySummoned;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0024", 0xffff_ffff);
-            return report;
-        }
-        if mode == -1 && self.base_properties.battle_fairy_recall {
-            report.outcome = BattleFairySummonOutcome::AlreadyRecalled;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0025", 0xffff_ffff);
-            return report;
-        }
-        let Some(goods) = self.equipment.get_goods(10) else {
-            report.outcome = BattleFairySummonOutcome::MissingHeadgear;
-            return report;
-        };
-        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            report.outcome = BattleFairySummonOutcome::InvalidHeadgear;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0009", 0xffff_ffff);
-            return report;
-        }
-        if goods.addon_property_value(factory, GAP_BF_HP, 1) < 1 {
-            report.outcome = BattleFairySummonOutcome::NoHitPoints;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0026", 0xffff_0000);
-            return report;
-        }
-        if self.has_pet() {
-            report.outcome = BattleFairySummonOutcome::ActivePet;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0027", 0xffff_ffff);
-            return report;
-        }
-        if self.move_shape.current_skill_id() == Some(MONSTER_TAMING_SKILL_ID) {
-            report.outcome = BattleFairySummonOutcome::MonsterTamingActive;
-            push_battle_fairy_summon_notification(&mut report, "ZHGS0028", 0xffff_ffff);
-            return report;
-        }
-        let player_position = match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
-            (Ok(x), Ok(y)) => WarSoulPoint { x, y },
-            (Err(error), _) | (_, Err(error)) => {
-                report.outcome = BattleFairySummonOutcome::CoordinateBlocked(error);
-                return report;
-            }
-        };
-
-        match mode {
-            1 => {
-                self.battle_fairy_summoned = true;
-                self.war_soul_state = 1;
-                self.base_properties.battle_fairy_recall = false;
-                self.base_properties.battle_fairy_died = false;
-                self.war_soul_visual_x_bits = (player_position.x as f32).to_bits();
-                self.war_soul_visual_y_bits = (player_position.y as f32).to_bits();
-                report.outcome = BattleFairySummonOutcome::Summoned;
-                report.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
-                    previous: self.war_soul_point,
-                    target: player_position,
-                });
-                report.effects.push(BattleFairySummonEffect::AroundMessage {
-                    message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
-                    player_id,
-                    values: vec![player_id, 700, player_position.x, player_position.y],
-                });
-                // `SetWarSoulStaus(1)` наблюдает уже записанный state `1` и
-                // поэтому публикует exact `0xbf930 {400, player_id}`.
-                let _broadcast_previous = self.set_war_soul_status(1);
-                report.effects.push(BattleFairySummonEffect::AroundMessage {
-                    message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
-                    player_id,
-                    values: vec![400, player_id],
-                });
-                report.effects.push(BattleFairySummonEffect::AroundMessage {
-                    message_type: BATTLE_FAIRY_SUMMON_MESSAGE_TYPE,
-                    player_id,
-                    values: vec![400, 1],
-                });
-            }
-            -1 => {
-                self.battle_fairy_summoned = false;
-                self.war_soul_state = 0;
-                self.base_properties.battle_fairy_recall = true;
-                self.base_properties.battle_fairy_died = false;
-                self.war_soul_visual_x_bits = (-1.0f32).to_bits();
-                self.war_soul_visual_y_bits = (-1.0f32).to_bits();
-                report.outcome = BattleFairySummonOutcome::Recalled;
-                report.spatial_action = Some(BattleFairyWarSoulAction::Delete {
-                    previous: self.war_soul_point,
-                    player_position,
-                });
-                report.effects.push(BattleFairySummonEffect::AroundMessage {
-                    message_type: BATTLE_FAIRY_STATUS_MESSAGE_TYPE,
-                    player_id,
-                    values: vec![400, -1],
-                });
-            }
-            _ => {}
-        }
-        report
-            .effects
-            .push(BattleFairySummonEffect::PropertiesChanged { player_id });
-        report
     }
 
     /// Полный player-tail успешного `CEquipmentContainer::Remove`: container
@@ -10203,171 +9923,93 @@ impl CPlayer {
     }
 
     /// Завершает принадлежащий `CGame` хвост области: `spatial_applied`
-    /// означает найденную нужную area, а не изменение её map entry.
+    /// означает найденную нужную area, а не изменение её map entry. Правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) const fn apply_war_soul_action(
         &mut self,
         action: BattleFairyWarSoulAction,
         spatial_applied: bool,
     ) {
-        match action {
-            BattleFairyWarSoulAction::SetPosition { target, .. } if spatial_applied => {
-                self.war_soul_point = target;
-            }
-            BattleFairyWarSoulAction::Delete {
-                player_position, ..
-            } if spatial_applied => {
-                self.war_soul_point = player_position;
-            }
-            BattleFairyWarSoulAction::SetPosition { .. }
-            | BattleFairyWarSoulAction::Delete { .. } => {}
-        }
+        nebokrai_zone::skills::battlefairysummon::apply_war_soul_action(
+            &mut self.war_soul_point,
+            action,
+            spatial_applied,
+        )
     }
 
     /// Active WarSoul tail `CPlayer::OnEnterRegion`: visual float координаты
     /// возвращаются к клетке хозяина; spatial point применяет координатор
-    /// после target-area gate и End(int,0) выбранного навыка.
+    /// после target-area gate и End(int,0) выбранного навыка. Правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) fn prepare_war_soul_region_entry(
         &mut self,
     ) -> Option<(BattleFairyWarSoulAction, u32, u32)> {
-        if self.war_soul_state != 1 {
-            return None;
-        }
-        let target = WarSoulPoint {
-            x: self.shape().get_tile_x().ok()?,
-            y: self.shape().get_tile_y().ok()?,
-        };
-        self.war_soul_visual_x_bits = (target.x as f32).to_bits();
-        self.war_soul_visual_y_bits = (target.y as f32).to_bits();
-        Some((
-            BattleFairyWarSoulAction::SetPosition {
-                previous: self.war_soul_point,
-                target,
-            },
-            self.war_soul_visual_x_bits,
-            self.war_soul_visual_y_bits,
-        ))
+        let shape = self.move_shape.shape();
+        nebokrai_zone::skills::battlefairysummon::prepare_war_soul_region_entry(
+            self.war_soul_state,
+            &mut self.war_soul_visual_x_bits,
+            &mut self.war_soul_visual_y_bits,
+            self.war_soul_point,
+            || -> Option<(i32, i32)> { Some((shape.get_tile_x().ok()?, shape.get_tile_y().ok()?)) },
+        )
     }
 
     /// Один проход живой ветви `ComputeWarSoulXY`. `Some(false)` означает
     /// найденный текущий навык боевой феи с `IsRestored()==0`; `None` точно
-    /// соответствует отсутствующему навыку и не блокирует следование.
+    /// соответствует отсутствующему навыку и не блокирует следование. Правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) fn compute_war_soul_xy(
         &mut self,
         current_war_soul_skill_restored: Option<bool>,
     ) -> BattleFairyFollowPlan {
         let player_id = self.player_id();
-        let mut plan = BattleFairyFollowPlan {
+        let shape = self.move_shape.shape();
+        let resolution = nebokrai_zone::skills::battlefairysummon::compute_war_soul_xy(
+            &mut BattleFairyWarSoul {
+                summoned: &mut self.battle_fairy_summoned,
+                state: &mut self.war_soul_state,
+                recall: &mut self.base_properties.battle_fairy_recall,
+                died: &mut self.base_properties.battle_fairy_died,
+                visual_x_bits: &mut self.war_soul_visual_x_bits,
+                visual_y_bits: &mut self.war_soul_visual_y_bits,
+                point: &mut self.war_soul_point,
+            },
             player_id,
-            outcome: BattleFairyFollowOutcome::NotSummoned,
+            current_war_soul_skill_restored,
+            || (shape.get_tile_x(), shape.get_tile_y()),
+        );
+        BattleFairyFollowPlan {
+            player_id,
+            outcome: resolution.outcome,
             region_id: self.server_region_id,
-            spatial_action: None,
-            effects: GameEffectJournal::default(),
-        };
-        if current_war_soul_skill_restored == Some(false) {
-            plan.outcome = BattleFairyFollowOutcome::ActiveSkill;
-            return plan;
+            spatial_action: resolution.spatial_action,
+            effects: resolution.effects.into_iter().collect(),
         }
-        if self.war_soul_state != 1 {
-            return plan;
-        }
-        let (tile_x, tile_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
-            (Ok(x), Ok(y)) => (x, y),
-            (Err(error), _) | (_, Err(error)) => {
-                plan.outcome = BattleFairyFollowOutcome::CoordinateBlocked(error);
-                return plan;
-            }
-        };
-        let current_x = tile_x as f32;
-        let current_y = tile_y as f32;
-        let mut visual_x = f32::from_bits(self.war_soul_visual_x_bits);
-        let mut visual_y = f32::from_bits(self.war_soul_visual_y_bits);
-        let delta_x = current_x - visual_x;
-        let delta_y = current_y - visual_y;
-        let distance = (delta_x * delta_x + delta_y * delta_y).sqrt().abs();
-        if !distance.is_finite() {
-            plan.outcome = BattleFairyFollowOutcome::NonFiniteVisualState;
-            return plan;
-        }
-        if distance < 0.5 {
-            plan.outcome = BattleFairyFollowOutcome::InsideDeadZone;
-            return plan;
-        }
-
-        let (target, outcome) = if distance <= 5.0 {
-            let coefficient = if distance > 3.75 {
-                0.265f32
-            } else if distance > 0.75 {
-                0.065f32
-            } else {
-                0.045f32
-            };
-            let step = distance * (coefficient + coefficient);
-            if (current_x - visual_x).abs() > 0.1 {
-                visual_x = if current_x <= visual_x {
-                    visual_x - step
-                } else {
-                    visual_x + step
-                };
-            }
-            if (current_y - visual_y).abs() > 0.1 {
-                visual_y = if current_y <= visual_y {
-                    visual_y - step
-                } else {
-                    visual_y + step
-                };
-            }
-            (
-                WarSoulPoint {
-                    // EXE временно ставит x87 RC=truncate перед обоими fistp.
-                    x: visual_x.trunc() as i32,
-                    y: visual_y.trunc() as i32,
-                },
-                BattleFairyFollowOutcome::Moved,
-            )
-        } else {
-            visual_x = current_x;
-            visual_y = current_y;
-            (
-                WarSoulPoint {
-                    x: tile_x,
-                    y: tile_y,
-                },
-                BattleFairyFollowOutcome::Snapped,
-            )
-        };
-        self.war_soul_visual_x_bits = visual_x.to_bits();
-        self.war_soul_visual_y_bits = visual_y.to_bits();
-        plan.outcome = outcome;
-        plan.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
-            previous: self.war_soul_point,
-            target,
-        });
-        plan.effects.push(BattleFairyFollowEffect::AroundMove {
-            message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
-            player_id,
-            object_type: 700,
-            x: visual_x.to_bits(),
-            y: visual_y.to_bits(),
-        });
-        plan
     }
 
     /// Мёртвая ветвь сразу после `CMoveShape::AI`: пространственная позиция
     /// получает точное `(-1,-1)`, обе визуальные координаты `float` становятся
-    /// `-1.0`, но исходник не публикует пакет движения вокруг.
+    /// `-1.0`, но исходник не публикует пакет движения вокруг. Правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) fn clear_dead_war_soul_xy(&mut self) -> BattleFairyFollowPlan {
-        let target = WarSoulPoint { x: -1, y: -1 };
-        self.war_soul_visual_x_bits = (-1.0f32).to_bits();
-        self.war_soul_visual_y_bits = (-1.0f32).to_bits();
+        let player_id = self.player_id();
+        let resolution = nebokrai_zone::skills::battlefairysummon::clear_dead_war_soul_xy(
+            &mut BattleFairyWarSoul {
+                summoned: &mut self.battle_fairy_summoned,
+                state: &mut self.war_soul_state,
+                recall: &mut self.base_properties.battle_fairy_recall,
+                died: &mut self.base_properties.battle_fairy_died,
+                visual_x_bits: &mut self.war_soul_visual_x_bits,
+                visual_y_bits: &mut self.war_soul_visual_y_bits,
+                point: &mut self.war_soul_point,
+            },
+        );
         BattleFairyFollowPlan {
-            player_id: self.player_id(),
-            outcome: BattleFairyFollowOutcome::Dead,
+            player_id,
+            outcome: resolution.outcome,
             region_id: self.server_region_id,
-            spatial_action: Some(BattleFairyWarSoulAction::SetPosition {
-                previous: self.war_soul_point,
-                target,
-            }),
-            effects: GameEffectJournal::default(),
+            spatial_action: resolution.spatial_action,
+            effects: resolution.effects.into_iter().collect(),
         }
     }
 
@@ -11054,25 +10696,28 @@ impl CPlayer {
     /// Периодический префикс `CPlayer::AI`: нулевой HP надетой боевой феи при
     /// каждом проходе повторно нормализует четыре поля состояния и вызывает
     /// `PropertiesChanged`. Исходник не удаляет устаревшую запись карты области
-    /// и не рассылает состояние.
+    /// и не рассылает состояние. Правило перенесено буквально в Zone
+    /// `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) fn refresh_battle_fairy_death(
         &mut self,
         factory: &CGoodsFactory,
     ) -> BattleFairyDeathOutcome {
-        let Some(goods) = self.equipment.get_goods(10) else {
-            return BattleFairyDeathOutcome::MissingHeadgear;
-        };
-        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            return BattleFairyDeathOutcome::NotBattleFairy;
-        }
-        if goods.addon_property_value(factory, GAP_BF_HP, 1) != 0 {
-            return BattleFairyDeathOutcome::Alive;
-        }
-        self.battle_fairy_summoned = false;
-        self.war_soul_state = 0;
-        self.set_battle_fairy_recall(true);
-        self.set_battle_fairy_died(true);
-        BattleFairyDeathOutcome::Died
+        nebokrai_zone::skills::battlefairysummon::refresh_battle_fairy_death(
+            &mut BattleFairyWarSoul {
+                summoned: &mut self.battle_fairy_summoned,
+                state: &mut self.war_soul_state,
+                recall: &mut self.base_properties.battle_fairy_recall,
+                died: &mut self.base_properties.battle_fairy_died,
+                visual_x_bits: &mut self.war_soul_visual_x_bits,
+                visual_y_bits: &mut self.war_soul_visual_y_bits,
+                point: &mut self.war_soul_point,
+            },
+            |property| {
+                self.equipment
+                    .get_goods(10)
+                    .map(|goods| goods.addon_property_value(factory, property, 1))
+            },
+        )
     }
 
     fn apply_battle_fairy_property(
@@ -12767,14 +12412,23 @@ impl CPlayer {
         value
     }
 
+    /// Прямое чтение `m_BaseProperty.bFairyContainerEnabled`; правило
+    /// перенесено буквально в Zone `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) const fn fairy_container_enabled(&self) -> bool {
-        self.base_properties.fairy_container_enabled
+        nebokrai_zone::skills::battlefairysummon::fairy_container_enabled(
+            self.base_properties.fairy_container_enabled,
+        )
     }
 
     /// Граница восстановления `m_BaseProperty.bFairyContainerEnabled` из
     /// persisted player snapshot; default остаётся выключенным до decode.
+    /// Правило перенесено буквально в Zone `skills/battlefairysummon.rs`
+    /// (порция №7a).
     pub(crate) const fn set_fairy_container_enabled(&mut self, value: bool) {
-        self.base_properties.fairy_container_enabled = value;
+        nebokrai_zone::skills::battlefairysummon::set_fairy_container_enabled(
+            &mut self.base_properties.fairy_container_enabled,
+            value,
+        )
     }
 
     pub(crate) const fn restore_appearance_and_mode(
@@ -13220,40 +12874,59 @@ impl CPlayer {
 
     /// Player-owned mutation `ReviveBattleFairy`; client goods/state wire
     /// остаётся у вызывающего `CGame`, уже после изменения всех полей.
+    /// Правило перенесено буквально в Zone `skills/battlefairysummon.rs`
+    /// (порция №7a).
     pub(crate) fn revive_battle_fairy(&mut self, factory: &CGoodsFactory) -> bool {
-        let Some(goods) = self.equipment.get_goods_mut(10) else {
-            return false;
-        };
-        if goods.addon_property_value(factory, GAP_BF_HP, 1) > 0 {
-            return false;
-        }
-        let maximum_hp = goods.addon_property_value(factory, GAP_BF_MAX_HP, 1);
-        let maximum_mp = goods.addon_property_value(factory, GAP_BF_MAX_MP, 1);
-        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, maximum_hp);
-        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, maximum_mp);
-        self.base_properties.battle_fairy_recall = true;
-        self.base_properties.battle_fairy_died = false;
-        self.battle_fairy_summoned = false;
-        self.war_soul_state = 0;
-        true
+        nebokrai_zone::skills::battlefairysummon::revive_battle_fairy(
+            &mut BattleFairyWarSoul {
+                summoned: &mut self.battle_fairy_summoned,
+                state: &mut self.war_soul_state,
+                recall: &mut self.base_properties.battle_fairy_recall,
+                died: &mut self.base_properties.battle_fairy_died,
+                visual_x_bits: &mut self.war_soul_visual_x_bits,
+                visual_y_bits: &mut self.war_soul_visual_y_bits,
+                point: &mut self.war_soul_point,
+            },
+            |operation| match operation {
+                BattleFairyHeadgearOperation::Read(property) => self
+                    .equipment
+                    .get_goods(10)
+                    .map(|goods| goods.addon_property_value(factory, property, 1)),
+                BattleFairyHeadgearOperation::Write(property, value) => {
+                    if let Some(goods) = self.equipment.get_goods_mut(10) {
+                        let _ = goods.set_addon_property_value_core(property, 1, value);
+                    }
+                    None
+                }
+            },
+        )
     }
 
     pub(crate) const fn set_battle_fairy_recall(&mut self, value: bool) {
-        self.base_properties.battle_fairy_recall = value;
+        nebokrai_zone::skills::battlefairysummon::set_battle_fairy_recall(
+            &mut self.base_properties.battle_fairy_recall,
+            value,
+        )
     }
 
     pub(crate) const fn set_battle_fairy_died(&mut self, value: bool) {
-        self.base_properties.battle_fairy_died = value;
+        nebokrai_zone::skills::battlefairysummon::set_battle_fairy_died(
+            &mut self.base_properties.battle_fairy_died,
+            value,
+        )
     }
 
     /// Scalar tail `ApplyDeathFinalWarSoulReset`. В отличие от гибели самой
     /// боевой феи смерть хозяина снимает summon/state, разрешает recall и
-    /// очищает `bBFDied`.
+    /// очищает `bBFDied`. Правило перенесено буквально в Zone
+    /// `skills/battlefairysummon.rs` (порция №7a).
     pub(crate) const fn reset_war_soul_after_player_death(&mut self) {
-        self.battle_fairy_summoned = false;
-        self.war_soul_state = 0;
-        self.base_properties.battle_fairy_recall = true;
-        self.base_properties.battle_fairy_died = false;
+        nebokrai_zone::skills::battlefairysummon::reset_war_soul_after_player_death(
+            &mut self.battle_fairy_summoned,
+            &mut self.war_soul_state,
+            &mut self.base_properties.battle_fairy_recall,
+            &mut self.base_properties.battle_fairy_died,
+        )
     }
 
     /// Exact `SetSilence`: начало хранится в минутах `timeGetTime`, а
@@ -13575,18 +13248,6 @@ impl CPlayer {
             figure: self.figure,
         })
     }
-}
-
-fn push_battle_fairy_summon_notification(
-    report: &mut BattleFairySummonReport,
-    string_id: &'static str,
-    color: u32,
-) {
-    report.effects.push(BattleFairySummonEffect::Notification {
-        player_id: report.player_id,
-        string_id,
-        color,
-    });
 }
 
 fn push_battle_fairy_upgrade_notification(

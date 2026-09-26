@@ -756,6 +756,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use nebokrai_zone::content::{QuestCatalog, ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
 use nebokrai_zone::quests::append_client_quest_record;
 use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
+use nebokrai_zone::trade::auction::auction_listing_goods_allowed;
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
 use std::ffi::CString;
@@ -854,7 +855,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP,
     GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1,
     GAP_DAKONG_1, GAP_EQUIP_ACTIVE, GAP_EQUIP_STATE, GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE,
+    GAP_GOODS_LIFE_TYPE, GAP_GOODS_PACKAGE_EXTENTION, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE,
     GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
@@ -6016,6 +6017,12 @@ impl CGame {
         )
     }
 
+    /// Провод `0xC010E`: `(PLAYER_TYPE, player_id)` + ровно 15 позиционных
+    /// DWORD без счётчика — клиентская ветвь `0x53990E` выполняет 15 вызовов
+    /// reader (`0x53993B..0x539ACE`) и уничтожает хвост с кадром. Домен map —
+    /// 15 ключей `2..0x10` серверного `GetCurrentTypeValue`
+    /// (`combat_type_values_from`); BTreeMap отдаёт значения по возрастанию
+    /// ключей, ключи сами в провод не уходят.
     fn send_ci_qing_property_result(
         &self,
         player_id: i32,
@@ -6797,7 +6804,10 @@ impl CGame {
             return Err(AuctionListingTransferBlock::MissingBaseProperties);
         }
         if destination_position == 0
-            && !CPlayer::auction_listing_goods_allowed(goods, &self.goods_factory)
+            && !auction_listing_goods_allowed(
+                goods.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32,
+                goods.query_attribute(GAP_GOODS_LIFE_TYPE),
+            )
         {
             return Err(AuctionListingTransferBlock::AuctionLimitRejected);
         }
@@ -10066,12 +10076,17 @@ impl CGame {
 
         if destination_extend_id == 13
             && destination_position == 0
-            && !CPlayer::auction_listing_goods_allowed(
-                incoming
+            && !{
+                let listing_goods = incoming
                     .as_ref()
-                    .expect("listing limit получает detached goods"),
-                &self.goods_factory,
-            )
+                    .expect("listing limit получает detached goods");
+                auction_listing_goods_allowed(
+                    listing_goods
+                        .addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                        as u32,
+                    listing_goods.query_attribute(GAP_GOODS_LIFE_TYPE),
+                )
+            }
         {
             let rollback = self.add_hand_auction_listing_goods(
                 &mut player,
@@ -42556,7 +42571,9 @@ impl CGame {
 
     /// Полный `CPlayer::DoneTaoZhuang`: live equipment/CiQing state идёт через
     /// setup thresholds к combat/skill state, completion scripts и точным
-    /// адресным `BF81A/C0110/BF71D/BF71E/BF721` результатам.
+    /// адресным `BF81A/C010E/C0110/BF71D/BF71E/BF721` результатам. `C010E`
+    /// несёт property-результат (15 DWORD домена `2..0x10`), `C0110` —
+    /// только индикаторы комплекта `(0)`/`(set_id)`.
     fn done_player_tao_zhuang(&mut self, player_id: i32) -> bool {
         if !self.globe_setup.tao_zhuang_enabled()
             || !self
@@ -42683,13 +42700,13 @@ impl CGame {
             player.replace_ci_qing_tao_zhuang_add_values(difference);
             player.ci_qing_property_result()
         };
-        let mut result = CMessage::new(0x000c_0110);
-        result.add_long(player_id);
-        result.add_long(player_id);
-        for value in result_values.values() {
-            result.add_ulong(*value);
-        }
-        let _ = result.send_to_player(self.net_server(), player_id);
+        // Property-результат DoneTaoZhuang уходит тем же `0xC010E (type, id,
+        // 15 DWORD)`-путём: клиент читает из `0xC0110` ровно один DWORD с
+        // гейтом `>0x64` в индикатор комплекта (`0x539B9A`), поэтому values
+        // кадром `0xC0110` не отправляются — первый же player_id проходил
+        // гейт и перезаписывал индикатор. Легальные `0xC0110(0)` и
+        // `0xC0110(set_id)` выше не затрагиваются.
+        let _ = self.send_ci_qing_property_result(player_id, &result_values);
 
         let added = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
