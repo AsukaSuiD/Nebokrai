@@ -22,13 +22,12 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
-use std::error::Error;
 use std::ffi::CString;
 use std::fmt;
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -42,15 +41,13 @@ use nebokrai_realm::app::world_game_view::{
     WorldPlayerSelectRouteBlock, WorldPlayerSelectRouteError, WorldPlayerSelectRouteOutcome,
 };
 use nebokrai_realm::content::{
-    QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
-    normalize_script_path,
+    QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptResources, normalize_script_path,
 };
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
 use crate::dbaccess::worlddb::dbmisc::{
-    CDbMisc, DbMiscContext, DbMiscDeliveryContext, DbMiscDoneInReport, DbMiscDoneOutBlock,
-    DbMiscDoneOutReport, DbMiscGameServer, DbMiscLoadAuctionReport,
+    CDbMisc, DbMiscContext, DbMiscDeliveryContext, DbMiscDoneOutBlock,
 };
 use crate::dbaccess::worlddb::largess::{
     CostDatabaseSettings, CostDatabaseSettingsParts, LargessOwner, LoadLargessBlock,
@@ -111,19 +108,15 @@ use nebokrai_shared::resources::{
 };
 use crate::setup::tradelist::CTradeList;
 use nebokrai_shared::resources::MyStringTable;
-use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
+use crate::public::netsessionmanager::{CNetSessionManager};
 use crate::public::wordsfilter::CWordsFilter;
-use crate::public::readwrite::read_to;
 use crate::public::timer::{
-    AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock,
-    CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
-    TimerRunReport,
+    AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock, CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
 };
 use crate::setup::globesetup::{GlobeSetupJjcWorldConfig, GlobeSetupSnapshot};
 use crate::setup::godsbattleconf::{CGodsBattleConf, GodsBattleLoadError};
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::gmlist::GmListCollection;
-use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{load_drop_goods_list, load_monster_list, serialize_monster_list};
 use nebokrai_shared::resources::CPlayerList;
 use crate::setup::regionrouter::RegionRouter;
@@ -142,33 +135,21 @@ use crate::worldserver::appworld::country::country::{
 };
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryInfoDeliveryContext,
-    CountryRunBlock, CountryRunReport,
 };
 use crate::worldserver::appworld::country::countryparam::{
     CCountryParam,
 };
 use crate::worldserver::appworld::country::countrywarsys::{
-    CountryWarCallbackKind, CountryWarCallbacks, CountryWarDeclarationAuthority,
-    CountryWarDeclarationContext, CountryWarDeclarationPlayer, CountryWarFinishBlock,
-    CountryWarFinishReport, CountryWarPhase,
-    CountryWarPhaseBlock, CountryWarPhaseContext, CountryWarPhaseReport,
-    CountryWarStartBlock, CountryWarStartReport, CountryWarSys, CountryWarTopInfoBlock,
-    CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarTopInfoReport,
-    CountryWarVictoryContext, CountryWarVictoryRegion,
+    CountryWarCallbackKind, CountryWarCallbacks, CountryWarDeclarationAuthority, CountryWarDeclarationContext, CountryWarDeclarationPlayer, CountryWarPhase, CountryWarPhaseContext, CountryWarSys, CountryWarTopInfoContext, CountryWarTopInfoKind, CountryWarVictoryContext, CountryWarVictoryRegion,
 };
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex, load_goods_registry,
     serialize_goods_registry,
 };
-use crate::worldserver::appworld::goodswarmember::{
-    CGoodsWarMember, GoodsWarDeliveryContext,
-    GoodsWarMemberBlock,
-};
+use crate::worldserver::appworld::goodswarmember::{CGoodsWarMember, GoodsWarDeliveryContext};
 use crate::worldserver::appworld::jjcsystem::{
-    CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH,
-    JjcConfigurationLoadReport, JjcLocalTime, JjcLogEvent, JjcRank, JjcRunBlock, JjcRunConfig,
-    JjcRunContext, JjcRunReport, JjcSystemTime,
+    CJJcSystem, JJC_CONFIG_PATH, JJC_LEVEL_LIST_PATH, JJC_REGION_LIST_PATH, JjcConfigurationLoadReport, JjcLocalTime, JjcLogEvent, JjcRank, JjcRunBlock, JjcRunConfig, JjcRunContext, JjcSystemTime,
 };
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationWarCallbackContext,
@@ -183,11 +164,9 @@ use crate::worldserver::appworld::skills::skillfactory::{
     CSkillFactory, SkillFactoryCacheLoadReport, SkillFactoryCacheResource,
 };
 use crate::worldserver::appworld::message::othermessage::{
-    WorldOtherMessageDispatch, WorldOtherMessageOutcome, on_other_message,
+    WorldOtherMessageDispatch, on_other_message,
 };
-use crate::worldserver::appworld::message::jjcsysmessage::{
-    JjcSystemMessageOutcome, on_jjc_system_message,
-};
+use crate::worldserver::appworld::message::jjcsysmessage::{on_jjc_system_message};
 use crate::worldserver::appworld::message::countrymessage::{
     WorldCountryMessageDispatch, WorldCountryMessageOutcome,
     dispatch_country_absolve_request_message,
@@ -208,213 +187,72 @@ use crate::worldserver::appworld::message::countrymessage::{
     on_country_message,
 };
 use crate::worldserver::appworld::message::auction::{
-    WorldServerAuctionMessageDispatch, WorldServerAuctionMessageOutcome, on_msg_s2w_auction,
+    WorldServerAuctionMessageDispatch, on_msg_s2w_auction,
 };
-use crate::worldserver::appworld::message::gmamessage::{
-    WorldGmaMessageDispatch, WorldGmaMessageOutcome, on_gma_message,
-};
-use crate::worldserver::appworld::message::gmmessage::{
-    WorldGmMessageDispatch, WorldGmMessageOutcome, on_gm_message,
-};
-use nebokrai_realm::app::logmessage::{
-    WorldLogMessageDispatch, WorldLogMessageOutcome, on_log_message,
-};
+use crate::worldserver::appworld::message::gmamessage::{WorldGmaMessageDispatch, on_gma_message};
+use crate::worldserver::appworld::message::gmmessage::{WorldGmMessageDispatch, on_gm_message};
+use nebokrai_realm::app::logmessage::{WorldLogMessageDispatch, on_log_message};
 use crate::worldserver::appworld::message::onmsg_m2w_auction::{
-    WorldMiscAuctionMessageDispatch, WorldMiscAuctionMessageOutcome, on_msg_m2w_auction,
+    WorldMiscAuctionMessageDispatch, on_msg_m2w_auction,
 };
 use crate::worldserver::appworld::message::playermessage::{
-    WorldPlayerMessageDispatch, WorldPlayerMessageOutcome, on_player_message,
+    WorldPlayerMessageDispatch, on_player_message,
 };
 use crate::worldserver::appworld::message::organsysmessage::{
-    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
-    reload_attack_city,
-    OrganizingAdmissionPermitBlock,
-    OrganizingAdmissionPermitDispatch, OrganizingAttackCityEndDispatch,
-    OrganizingCityGateBlock, OrganizingCityGateDispatch, OrganizingCityTransferDispatch,
-    OrganizingCityWarApplicationBlock, OrganizingCityWarApplicationDispatch,
-    OrganizingChangeRegionRouterDispatch, OrganizingCityWarResultDispatch,
-    OrganizingConsumedLongDispatch,
-    OrganizingDeclareFactionWarBlock,
-    OrganizingDeclareFactionWarDispatch, OrganizingDeclareWarFactionListBlock,
-    OrganizingDeclareWarFactionListDispatch, OrganizingFactionBillboardBlock,
-    OrganizingFactionApplicationCancelBlock, OrganizingFactionApplicationCancelDispatch,
-    OrganizingFactionApplicationDispatch, OrganizingFactionApplicationDispatchBlock,
-    OrganizingFactionApplicationDecisionDispatch,
-    OrganizingFactionListBlock, OrganizingFactionListDispatch,
-    OrganizingFactionBillboardOutcome, OrganizingFactionContributorDispatch,
-    OrganizingFactionExperienceDispatch, OrganizingFactionMemberStateDispatch,
-    OrganizingFactionDubBlock, OrganizingFactionDubDispatch,
-    OrganizingFactionPurviewBlock, OrganizingFactionPurviewDispatch,
-    OrganizingFactionDemiseBlock, OrganizingFactionDemiseDispatch,
-    OrganizingFactionDisbandBlock, OrganizingFactionDisbandDispatch,
-    OrganizingFactionFireOutBlock, OrganizingFactionFireOutDispatch,
-    OrganizingFactionWarPlayerDiedDispatch,
-    OrganizingInitialDataDispatch,
-    OrganizingFactionExitBlock, OrganizingFactionExitDispatch,
-    OrganizingUnionDemiseDispatch,
-    OrganizingUnionDisbandBlock, OrganizingUnionDisbandDispatch,
-    OrganizingUnionExitDispatch,
-    OrganizingUnionFireOutDispatch,
-    OrganizingFactionTaxBlock, OrganizingFactionTaxDispatch, OrganizingFactionUpgradeBlock,
-    OrganizingFactionUpgradeDispatch, OrganizingFactionUploadIconDispatch,
-    OrganizingRegionParamDispatch, OrganizingRegionRouteDispatch,
-    OrganizingGoodsWarCommandDispatch, OrganizingGoodsWarContextBlock,
-    OrganizingGoodsWarFactionWinBlock, OrganizingGoodsWarFactionWinDispatch,
-    OrganizingPlayerQuestCommandDispatch,
-    OrganizingPlayerRunScriptDispatch,
-    OrganizingFactionParameterBlock, OrganizingFactionParameterDispatch,
-    OrganizingVillageWarApplicationBlock, OrganizingVillageWarApplicationDispatch,
-    OrganizingVillageWarResultDispatch,
-    OrganizingLeaveWordDispatch,
-    OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEnableDispatch,
-    OrganizingCreateFactionBlock, OrganizingCreateFactionDispatch,
-    OrganizingPronounceDispatch, OrganizingSessionResultDispatch,
-    OrganizingPlayerInviteFactionDispatch, OrganizingUnionApplicationDispatch,
-    QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
-    QueuedOrganizingSessionTerminal,
-    QueuedUnionApplicationTerminal, QueuedUnionInvitationTerminal,
-    UnionApplicationConfirmationDelivery,
-    WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects,
-    WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end,
-    dispatch_city_gate, dispatch_city_transfer, dispatch_city_war_application,
-    dispatch_change_region_router, dispatch_city_war_result,
-    dispatch_consumed_long, dispatch_create_faction, dispatch_declare_faction_war,
-    dispatch_faction_war_player_died,
-    dispatch_initial_organizing_data,
-    dispatch_declare_war_faction_list, dispatch_faction_application,
-    dispatch_faction_application_decision,
-    dispatch_faction_dub,
-    dispatch_faction_purview,
-    dispatch_faction_demise,
-    dispatch_faction_disband,
-    dispatch_faction_fire_out,
-    dispatch_faction_exit,
-    dispatch_union_demise,
-    dispatch_union_disband,
-    dispatch_union_exit,
-    dispatch_union_fire_out,
-    dispatch_faction_billboard, dispatch_faction_list,
-    dispatch_faction_application_cancel,
-    dispatch_faction_upgrade,
-    dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state,
-    dispatch_faction_tax, dispatch_faction_upload_icon,
-    dispatch_goods_war_command, dispatch_goods_war_faction_win,
-    dispatch_player_quest_command,
-    dispatch_player_invite_faction, dispatch_player_run_script,
-    dispatch_faction_parameter,
-    dispatch_leave_word, dispatch_leave_word_edit,
-    dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce,
-    dispatch_region_param_update, dispatch_region_route, dispatch_union_application,
-    finalize_faction_disband_dispatch,
-    dispatch_village_war_application, dispatch_village_war_result,
+    reload_attack_city, OrganizingSessionResultDispatch, QueuedOrganizingSessionTerminal, WorldUnionApplicationEffectCallbacks, WorldUnionApplicationEffects, WorldUnionApplicationRuntimeOwner, dispatch_admission_permit, dispatch_attack_city_end, dispatch_city_gate, dispatch_city_transfer, dispatch_city_war_application, dispatch_change_region_router, dispatch_city_war_result, dispatch_consumed_long, dispatch_create_faction, dispatch_declare_faction_war, dispatch_faction_war_player_died, dispatch_initial_organizing_data, dispatch_declare_war_faction_list, dispatch_faction_application, dispatch_faction_application_decision, dispatch_faction_dub, dispatch_faction_purview, dispatch_faction_demise, dispatch_faction_disband, dispatch_faction_fire_out, dispatch_faction_exit, dispatch_union_demise, dispatch_union_disband, dispatch_union_exit, dispatch_union_fire_out, dispatch_faction_billboard, dispatch_faction_list, dispatch_faction_application_cancel, dispatch_faction_upgrade, dispatch_faction_contributor, dispatch_faction_experience, dispatch_faction_member_state, dispatch_faction_tax, dispatch_faction_upload_icon, dispatch_goods_war_command, dispatch_goods_war_faction_win, dispatch_player_quest_command, dispatch_player_invite_faction, dispatch_player_run_script, dispatch_faction_parameter, dispatch_leave_word, dispatch_leave_word_edit, dispatch_leave_word_enable, dispatch_organizing_session_result, dispatch_pronounce, dispatch_region_param_update, dispatch_region_route, dispatch_union_application, finalize_faction_disband_dispatch, dispatch_village_war_application, dispatch_village_war_result,
 };
 use crate::worldserver::appworld::message::servermessage::{
-    WorldCompletedSaveResponseLaunchReport, WorldLoginClientReplacement,
-    WorldServerMessageDispatch, WorldServerMessageError, WorldServerMessageOutcome,
-    WorldInitialConfigurationRunCompletion, WorldInitialConfigurationRunReport,
-    on_login_client_reconnected, on_server_message,
+    WorldCompletedSaveResponseLaunchReport, WorldServerMessageDispatch, WorldServerMessageOutcome, WorldInitialConfigurationRunCompletion, WorldInitialConfigurationRunReport, on_login_client_reconnected, on_server_message,
 };
 use crate::worldserver::appworld::message::servermessage as servermessage;
-use crate::worldserver::appworld::message::teammessage::{
-    WorldTeamMessageOutcome, on_team_message,
-};
+use crate::worldserver::appworld::message::teammessage::{on_team_message};
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldFactionLogWrite, WorldWriteLogCommand, WorldWriteLogMessageDispatch,
-    WorldWriteLogMessageOutcome, on_write_log_message,
+    WorldFactionLogWrite, WorldWriteLogCommand, WorldWriteLogMessageDispatch, on_write_log_message,
 };
-use crate::worldserver::appworld::misc::{
-    CopyNumberResetReport, CopyNumberScheduleBlock,
-    CopyNumberTimerState,
-};
+use crate::worldserver::appworld::misc::{CopyNumberResetReport, CopyNumberTimerState};
 use crate::worldserver::appworld::incrementlog::incrementlog::{
     CIncrementLog,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome,
-    FactionDisbandContext, FactionExperienceBlock, FactionMemberInfoRequest,
-    FactionEnemyMutationBlock, FactionEnemyMutationContext, FactionEnemyWarLogArgument,
-    FactionInitialPropertyBlock, FactionOrganizingInfoContext, FactionUploadIconBlock,
+    goods_war_check_for_faction_id, CFaction, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext, FactionMemberInfoRequest, FactionEnemyMutationBlock, FactionEnemyWarLogArgument, FactionInitialPropertyBlock, FactionOrganizingInfoContext,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
-    AttackCityCallbackKind, AttackCityCallbacks, AttackCityCountdownBlock,
-    AttackCityCountdownContext, AttackCityCountdownReport, AttackCityCountdownRequest,
-    AttackCityEnemyRelationContext, AttackCityPhaseContext, AttackCityPhaseEffect,
-    AttackCityPhaseReport, AttackCityReloadBlock, CAttackCitySys,
+    AttackCityCallbackKind, AttackCityCallbacks, AttackCityCountdownContext, AttackCityCountdownRequest, AttackCityPhaseContext, AttackCityPhaseEffect, AttackCityReloadBlock, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::{
-    CFactionWarSys, FactionWarIniLoadCompletion, FactionWarRunReport, FactionWarStopBlock,
-    FactionWarStopContext,
+    CFactionWarSys, FactionWarIniLoadCompletion, FactionWarStopBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    AttackCityEndBlock, COrganizingCtrl, CityTransferEndpointBlock, CityTransferFinishBlock,
-    CityTransferFinishReport, CityTransferSessionBlock, CityTransferSessionReport,
-    CityTransferStartBlock, ConfederationCreationCallbackBlock,
-    ConfederationCreationCallbackReport, ConfederationCreationEndpointBlock,
-    ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
-    OrganizingContributorBlock, OrganizingDisbandOutcome,
-    OrganizingDisbandPlayer, OrganizingRunBlock, OrganizingRunReport, OrganizingSaveDataBlock,
-    OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock, OrganizingLeaveWordEnableBlock,
-    OrganizingFactionDoJoinBlock,
-    OrganizingUnionDemiseBlock, OrganizingUnionExitBlock, OrganizingUnionFireOutBlock,
-    OrganizingNameLookupBlock,
-    OrganizingPronounceBlock, OrganizingSaveDataReport, OrganizingUnionApplicationCallbackBlock,
-    OrganizingUnionApplicationCallbackReport, OrganizingUnionApplyForJoinDispatchBlock,
-    OrganizingUnionInvitationCallbackBlock, OrganizingUnionInvitationCallbackReport,
-    FactionUnionMembershipLookupBlock, FreeFactionLookup, FreePlayerLookup, PlayerInviteFactionBlock,
+    COrganizingCtrl, OrganizingDisbandOutcome, OrganizingDisbandPlayer, OrganizingSaveDataBlock, OrganizingNameLookupBlock, FreeFactionLookup, FreePlayerLookup,
 };
 use crate::worldserver::appworld::organizingsystem::organizingparam::{
-    COrganizingParam, OrganizingParamLoadError,
-    OrganizingParamReleaseReport, OrganizingTaxScheduleBlock,
-    OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
+    COrganizingParam, OrganizingParamLoadError, OrganizingParamReleaseReport, OrganizingTodayTaxRefreshReport, PreparedTodayTaxRefresh,
 };
-use crate::worldserver::appworld::organizingsystem::union::{
-    CUnion, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
-    UnionApplicationSessionReport, UnionFormatArgument,
-};
+use crate::worldserver::appworld::organizingsystem::union::{CUnion, UnionFormatArgument};
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
-    CVillageWarSys, VillageWarAnnouncement, VillageWarCallbackKind, VillageWarCallbacks,
-    VillageWarCountdownBlock, VillageWarCountdownContext, VillageWarCountdownReport,
-    VillageWarCountdownRequest,
-    VillageWarPhaseContext, VillageWarPhaseReport,
+    CVillageWarSys, VillageWarAnnouncement, VillageWarCallbackKind, VillageWarCallbacks, VillageWarCountdownContext, VillageWarCountdownRequest, VillageWarPhaseContext,
 };
 use crate::worldserver::appworld::player::{
-    CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate,
-    PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot,
-    PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerFactionInfoUpdateBlock,
-    PlayerFactionInfoUpdateReport,
-    PlayerLoadDataOutcome, PlayerLoadDataOwner,
-    PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport,
-    PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerOrganizingUpdateError,
-    PlayerOrganizingState, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
-    PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
+    CPlayer, PlayerCodecError, PlayerCountryChangeReport, PlayerExploitUpdate, PlayerDbProjectionBlock, PlayerEquipmentWireSnapshot, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport, PlayerLoadDataOutcome, PlayerLoadDataOwner, PlayerLeiTingClock, PlayerLeiTingUpdateBlock, PlayerLeiTingUpdateReport, PlayerMurderCounterReset, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
 };
 use crate::worldserver::appworld::region::CRegion;
 use crate::worldserver::appworld::script::variablelist::{
     CVariableList, VariableListSaveSource,
 };
-use crate::worldserver::appworld::session::csessionfactory::{
-    CSessionFactory, WorldSessionFactoryAiReport,
-};
+use crate::worldserver::appworld::session::csessionfactory::{CSessionFactory};
 use crate::worldserver::appworld::worldcityregion::CWorldCityRegion;
 use crate::worldserver::appworld::worldcountrywarregion::WorldCountryWarRegion;
-use crate::worldserver::appworld::worldregion::{
-    CWorldRegion, WorldRegionLoadedCounts, WorldRegionSetupSerializationBlock,
-};
+use crate::worldserver::appworld::worldregion::{CWorldRegion, WorldRegionLoadedCounts};
 use crate::worldserver::appworld::worldvillageregion::CWorldVillageRegion;
-use crate::worldserver::worldserver::honorranks::{
-    CHonorRanks, HonorRanksNewDayBlock, HonorRanksNewDayReport,
-};
+use crate::worldserver::worldserver::honorranks::{CHonorRanks};
 use crate::worldserver::worldserver::playerranks::{
-    CPlayerRanks, PlayerRanksGameServerUpdate, PlayerRanksInitializationConfig,
-    PlayerRanksReleaseReport, PlayerRanksScheduleBlock,
-    PlayerRanksSerializationBlock,
+    CPlayerRanks, PlayerRanksInitializationConfig, PlayerRanksReleaseReport,
 };
 use crate::worldserver::worldserver::savedb::{
     SaveDataLifecycleState, SaveDataLogSink, SaveDataMonitoringSnapshot,
 };
 use crate::worldserver::worldserver::worldserver::{
-    AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent,
-    WorldRefreshInfoHighWater, WorldRefreshInfoReport, WorldRefreshSaveState, refresh_info_text,
+    AddLogTextDisposition, WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoCurrent, WorldRefreshInfoHighWater, WorldRefreshSaveState, refresh_info_text,
 };
 use crate::worldserver::worldserver::loginreconnectworker::{
     WorldLoginReconnectWorker, WorldLoginReconnectWorkerCompletion,
@@ -441,62 +279,22 @@ use crate::worldserver::worldserver::writelogworker::{
 // `WorldGameInitContext` и исходная форма `WorldGameThreadRuntime`
 // сохраняют CGame-типизированные подписи до волны самого `CGame`.
 pub(crate) use nebokrai_realm::app::world_runtime::{
-    PlayerRanksStatRunBlock, PlayerRanksStatRunReport, WorldClientInitialization,
-    WorldClientInitializationError,
-    WorldGameDatabaseInitialization, WorldGameDatabaseOwner,
-    WorldGameInitAttackCityRelationBlock, WorldGameInitBlock, WorldGameInitBlockReason,
-    WorldGameInitBooleanOwner, WorldGameInitEvent, WorldGameInitOperatorNotice,
-    WorldGameInitReport, WorldGameInitResult, WorldGameInitVoidOwner,
-    WorldGameInitWorkerKind, WorldGameReleaseBlock, WorldGameReleaseContext,
-    WorldGameReleaseDatabaseOwner, WorldGameReleaseEvent, WorldGameReleaseLiveList,
-    WorldGameReleaseOptionalOwner, WorldGameReleaseReport, WorldGameReleaseResult,
-    WorldGameReleaseVoidOwner,
-    WorldNetworkInitializationError, WorldRegionOwner, WorldSaveCityRegionBlock,
-    WorldServerSetupLoadReport, WorldSetupLoadReport, WorldSetupOpenError,
-    WorldSetupSource, WorldStringTableEncodingBlock,
+    PlayerRanksStatRunBlock, PlayerRanksStatRunReport, WorldClientInitialization, WorldClientInitializationError, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitBlock, WorldGameInitBlockReason, WorldGameInitBooleanOwner, WorldGameInitEvent, WorldGameInitOperatorNotice, WorldGameInitReport, WorldGameInitResult, WorldGameInitVoidOwner, WorldGameInitWorkerKind, WorldGameReleaseBlock, WorldGameReleaseContext, WorldGameReleaseDatabaseOwner, WorldGameReleaseEvent, WorldGameReleaseLiveList, WorldGameReleaseOptionalOwner, WorldGameReleaseReport, WorldGameReleaseResult, WorldGameReleaseVoidOwner, WorldNetworkInitializationError, WorldRegionOwner, WorldSaveCityRegionBlock, WorldServerSetupLoadReport, WorldSetupLoadReport, WorldSetupOpenError, WorldSetupSource, WorldStringTableEncodingBlock,
 };
 
 pub(crate) use nebokrai_realm::app::worldserver::WorldGameServerLookupError;
 
-#[derive(Clone, Copy)]
-struct WorldNetworkConfig {
-    ban_ip_time_ms: u32,
-    maximum_client_send_buffer: i32,
-    maximum_message_length: u32,
-    maximum_byte_count: u32,
-    check_message_content: bool,
-    maximum_connections: i32,
-    maximum_io_sends: i32,
-    check_net: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldStringTableLoadReport {
-    pub(crate) package: Vec<u8>,
-    pub(crate) succeeded: bool,
-    pub(crate) log_payload: Vec<u8>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldStringTableUpdateCompletion {
-    DefaultLanguageFailed,
-    ConfiguredLanguageFailed,
-    EncodingBlocked(WorldStringTableEncodingBlock),
-    Empty,
-    Broadcast {
-        message_type: i32,
-        payload_length: usize,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-/// Полный результат reload-а; `requested_package` фиксирует игнорируемый
-/// исходной функцией аргумент вместо того, чтобы молча приписать ему смысл.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldStringTableUpdateReport {
-    pub(crate) requested_package: Vec<u8>,
-    pub(crate) completion: WorldStringTableUpdateCompletion,
-}
+// Hub-данные Init/MainLoop World (config/string-table отчёты, init-callbacks,
+// effect-контексты faction-war/attack-city, маршрутизированные сообщения с
+// union terminal-событиями и ProcessedWorldEvent, state-структуры и AI/
+// session-factory stage-отчёты, route-order загрузки игрока) перенесены в
+// Realm `app/world_hub_data` волной C5-A: игра входит у них generic-параметром
+// через объявленные швы WorldGameView/WorldPlayerFactionInfoUpdateView, а
+// старый пакет специализирует их своим CGame. Здесь реэкспорт для стадий
+// хода, selector-а, диспетчеров сообщений и прочих потребителей пакета.
+pub(crate) use nebokrai_realm::app::world_hub_data::{
+    ProcessedWorldEvent, RoutedWorldMessage, WorldCityTransferTerminalDispatch, WorldConfederationCreationTerminalDispatch, WorldGameInitAttackCityContext, WorldGameInitCallbacks, WorldGameInitEnemyMutationEffects, WorldLoadedPlayerRouteOrder, WorldMainLoopAiStageReport, WorldMainLoopClockState, WorldMainLoopFactionWarBlock, WorldMainLoopFactionWarEffects, WorldMainLoopInitializationState, WorldMainLoopLargessState, WorldMainLoopLoginReleaseState, WorldMainLoopProfileState, WorldMainLoopSessionFactoryStageReport, WorldMainLoopTailClockState, WorldMessageOwner, WorldMessageSource, WorldProcessMessageOutcome, WorldProcessMessageStageState, WorldStringTableLoadReport, WorldStringTableUpdateCompletion, WorldStringTableUpdateReport, WorldUnionApplicationRuntimeReport, WorldUnionApplicationTerminalDispatch, WorldUnionInvitationTerminalDispatch,
+};
 
 pub(crate) trait WorldGameInitContext {
     type Block;
@@ -559,234 +357,6 @@ pub(crate) trait WorldGameInitContext {
     fn report_worker_spawn_error(&mut self, kind: WorldGameInitWorkerKind, error: &io::Error);
 }
 
-pub(crate) struct WorldGameInitCallbacks<'a> {
-    pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
-    pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
-    pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
-    pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
-}
-
-struct WorldGameInitEnemyMutationEffects<'a> {
-    game: &'a CGame,
-    enemy_id: i32,
-    enemy_name: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopFactionWarBlock {
-    NullUnion { map_key: i32 },
-    MissingFaction { faction_id: i32 },
-    EnemyMutation {
-        faction_id: i32,
-        enemy_id: i32,
-        source: FactionEnemyMutationBlock,
-    },
-}
-
-struct WorldMainLoopFactionWarEffects<'a> {
-    game: &'a CGame,
-    organizing: &'a mut COrganizingCtrl,
-    players_to_update: Vec<i32>,
-}
-
-impl FactionWarStopContext for WorldMainLoopFactionWarEffects<'_> {
-    type Block = WorldMainLoopFactionWarBlock;
-
-    fn faction_exists(&self, faction_id: i32) -> bool {
-        self.organizing.faction_by_id(faction_id).is_some()
-    }
-
-    fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block> {
-        match self.organizing.is_free_faction(root_faction_id) {
-            FreeFactionLookup::NoUnion => Ok(vec![root_faction_id]),
-            FreeFactionLookup::BlockedNullConfederation { map_key } => {
-                Err(WorldMainLoopFactionWarBlock::NullUnion { map_key })
-            }
-            FreeFactionLookup::Union(union_id) => Ok(self
-                .organizing
-                .confederation_by_id(union_id)
-                .map(|union| union.member_ids_snapshot())
-                .unwrap_or_default()),
-        }
-    }
-
-    fn del_enemy_organizing(
-        &mut self,
-        faction_id: i32,
-        enemy_id: i32,
-    ) -> Result<(), Self::Block> {
-        let enemy_name = self
-            .organizing
-            .faction_by_id(enemy_id)
-            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
-            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction {
-                faction_id: enemy_id,
-            })?;
-        let faction = self
-            .organizing
-            .faction_by_id_mut(faction_id)
-            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
-        let mut effects = WorldGameInitEnemyMutationEffects {
-            game: self.game,
-            enemy_id,
-            enemy_name,
-        };
-        faction
-            .del_enemy_organizing(enemy_id, &mut effects)
-            .map(|_| ())
-            .map_err(|source| WorldMainLoopFactionWarBlock::EnemyMutation {
-                faction_id,
-                enemy_id,
-                source,
-            })
-    }
-
-    fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block> {
-        let faction = self
-            .organizing
-            .faction_by_id_mut(faction_id)
-            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
-        let _ = faction.update_enemy_faction(self.game, |_view, faction, player_id| {
-            let _ = self.game.update_player_faction_info_from_faction(faction, player_id);
-            self.players_to_update.push(player_id)
-        });
-        Ok(())
-    }
-
-    fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block> {
-        self.organizing
-            .faction_by_id(faction_id)
-            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
-            .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })
-    }
-
-    fn format_world_string(&mut self, string_id: &[u8], arguments: &[&[u8]]) -> Vec<u8> {
-        let arguments = arguments
-            .iter()
-            .map(|argument| UnionFormatArgument::Text(argument))
-            .collect::<Vec<_>>();
-        format_union_world_string(self.game.get_string_by_id(string_id), &arguments)
-    }
-
-    fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32) {
-        let _ = COrganizingCtrl::send_organizing_info_to_all(self.game, info, kind, color);
-    }
-
-    fn put_war_log(&mut self, info: &[u8]) {
-        put_string_to_file("war", info);
-    }
-}
-
-impl FactionEnemyMutationContext for WorldGameInitEnemyMutationEffects<'_> {
-    fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>> {
-        (organizing_id == self.enemy_id).then(|| self.enemy_name.clone())
-    }
-
-    fn format_world_string(
-        &mut self,
-        string_id: &'static [u8],
-        arguments: &[FactionEnemyWarLogArgument<'_>],
-    ) -> Vec<u8> {
-        format_faction_enemy_world_string(self.game.get_string_by_id(string_id), arguments)
-    }
-
-    fn put_war_log(&mut self, text: &[u8]) {
-        put_string_to_file("war", text);
-    }
-}
-
-struct WorldGameInitAttackCityContext<'a> {
-    game: &'a mut CGame,
-    organizing: &'a mut COrganizingCtrl,
-}
-
-impl AttackCityEnemyRelationContext for WorldGameInitAttackCityContext<'_> {
-    type Block = WorldGameInitAttackCityRelationBlock;
-
-    fn clear_all_city_faction_relations(&mut self) -> Result<(), Self::Block> {
-        self.organizing.clear_all_city_faction_relations();
-        Ok(())
-    }
-
-    fn city_owner_faction_id(
-        &mut self,
-        city_region_id: i32,
-    ) -> Result<Option<i32>, Self::Block> {
-        Ok(self.game.region_owned_faction_id(city_region_id))
-    }
-
-    fn expand_faction_organizings(
-        &mut self,
-        faction_id: i32,
-    ) -> Result<Vec<i32>, Self::Block> {
-        self.organizing
-            .expand_city_war_faction_organizings(faction_id)
-            .map_err(|FactionUnionMembershipLookupBlock { map_key }| {
-                WorldGameInitAttackCityRelationBlock::NullUnion { map_key }
-            })
-    }
-
-    fn add_city_war_enemy_organizing(
-        &mut self,
-        organizing_id: i32,
-        enemy_organizing_id: i32,
-    ) -> Result<(), Self::Block> {
-        let enemy_name = self
-            .organizing
-            .faction_by_id(enemy_organizing_id)
-            .map(|faction| legacy_c_string_prefix(faction.name()).to_vec())
-            .ok_or(WorldGameInitAttackCityRelationBlock::MissingOrganizing {
-                organizing_id: enemy_organizing_id,
-            })?;
-        let mut effects = WorldGameInitEnemyMutationEffects {
-            game: self.game,
-            enemy_id: enemy_organizing_id,
-            enemy_name,
-        };
-        let found = self
-            .organizing
-            .add_city_war_enemy_organizing(
-                organizing_id,
-                enemy_organizing_id,
-                &mut effects,
-            )
-            .map_err(|source| WorldGameInitAttackCityRelationBlock::EnemyMutation {
-                organizing_id,
-                enemy_organizing_id,
-                source,
-            })?;
-        if !found {
-            return Err(WorldGameInitAttackCityRelationBlock::MissingOrganizing {
-                organizing_id,
-            });
-        }
-        Ok(())
-    }
-
-    fn set_all_city_faction_enemy_changed(
-        &mut self,
-        changed: bool,
-    ) -> Result<(), Self::Block> {
-        self.organizing
-            .set_all_city_faction_enemy_changed(changed);
-        Ok(())
-    }
-
-    fn update_all_city_enemy_faction_relations(&mut self) -> Result<(), Self::Block> {
-        let mut players_to_refresh = Vec::new();
-        let _ = self
-            .organizing
-            .update_all_city_enemy_faction_relations(self.game, &mut |player_id| {
-                players_to_refresh.push(player_id);
-            });
-        for player_id in players_to_refresh {
-            let _ = self
-                .game
-                .update_player_faction_info(self.organizing, player_id);
-        }
-        Ok(())
-    }
-}
 
 // Alias бывшего двухпараметрического отчёта над generic-формой Realm
 // `app::world_runtime`; специализация `Game = CGame` снимается вместе с
@@ -856,28 +426,6 @@ pub(crate) use nebokrai_realm::app::worldserver::{
     WorldCdkeySnapshotError, WorldRegionChangePlayerTransition,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMessageSource {
-    GameServer,
-    LoginServer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMessageOwner {
-    Server,
-    Log,
-    Gma,
-    Player,
-    Other,
-    Gm,
-    Team,
-    OrganizingSystem,
-    WriteLog,
-    Country,
-    ServerAuction,
-    JjcSystem,
-    MiscAuction,
-}
 
 pub(crate) use nebokrai_realm::app::worldothermessage::{
     WorldGoodsLink, WorldGoodsLinkPayload, WorldHonorEliminatorRegistration,
@@ -886,588 +434,9 @@ pub(crate) use nebokrai_realm::app::worldothermessage::{
 
 pub(crate) use nebokrai_realm::app::world_message::WorldLocalMessageQueueBlock;
 
-pub(crate) struct RoutedWorldMessage {
-    pub(crate) source: WorldMessageSource,
-    pub(crate) message_type: i32,
-    pub(crate) owner: Option<WorldMessageOwner>,
-    pub(crate) legacy_run_result: i32,
-    pub(crate) message: CMessage,
-}
 
-impl fmt::Debug for RoutedWorldMessage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RoutedWorldMessage")
-            .field("source", &self.source)
-            .field("message_type", &self.message_type)
-            .field("owner", &self.owner)
-            .field("legacy_run_result", &self.legacy_run_result)
-            .field("wire_length", &self.message.as_wire_bytes().len())
-            .finish()
-    }
-}
 
-pub(crate) type WorldUnionApplicationStartBlock =
-    OrganizingUnionApplyForJoinDispatchBlock<UnionApplicationSessionBlock>;
-pub(crate) type WorldPlayerInviteFactionDispatch = OrganizingPlayerInviteFactionDispatch<
-    ConfederationCreationSessionReport,
-    UnionApplicationSessionReport,
-    UnionApplicationSessionReport,
->;
-pub(crate) type WorldPlayerInviteFactionStartBlock = PlayerInviteFactionBlock<
-    ConfederationCreationSessionBlock,
-    UnionApplicationSessionBlock,
-    UnionApplicationSessionBlock,
->;
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldUnionApplicationTerminalDispatch {
-    pub(crate) request: QueuedUnionApplicationTerminal,
-    pub(crate) outcome: Result<
-        OrganizingUnionApplicationCallbackReport,
-        OrganizingUnionApplicationCallbackBlock,
-    >,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldUnionInvitationTerminalDispatch {
-    pub(crate) request: QueuedUnionInvitationTerminal,
-    pub(crate) outcome: Result<
-        OrganizingUnionInvitationCallbackReport,
-        OrganizingUnionInvitationCallbackBlock,
-    >,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCityTransferTerminalDispatch {
-    pub(crate) request: QueuedCityTransferTerminal,
-    pub(crate) outcome: Result<CityTransferFinishReport, CityTransferFinishBlock>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldConfederationCreationTerminalDispatch {
-    pub(crate) request: QueuedConfederationCreationTerminal,
-    pub(crate) outcome: Result<
-        ConfederationCreationCallbackReport,
-        ConfederationCreationCallbackBlock,
-    >,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldUnionApplicationRuntimeReport {
-    pub(crate) terminals: Vec<WorldUnionApplicationTerminalDispatch>,
-    pub(crate) invitation_terminals: Vec<WorldUnionInvitationTerminalDispatch>,
-    pub(crate) confirmations: Vec<UnionApplicationConfirmationDelivery>,
-    pub(crate) endpoint_blocks: Vec<UnionApplicationEndpointBlock>,
-    pub(crate) city_terminals: Vec<WorldCityTransferTerminalDispatch>,
-    pub(crate) city_confirmations: Vec<CityTransferConfirmationDelivery>,
-    pub(crate) city_endpoint_blocks: Vec<CityTransferEndpointBlock>,
-    pub(crate) confederation_creation_terminals:
-        Vec<WorldConfederationCreationTerminalDispatch>,
-    pub(crate) confederation_creation_confirmations:
-        Vec<ConfederationCreationConfirmationDelivery>,
-    pub(crate) confederation_creation_endpoint_blocks:
-        Vec<ConfederationCreationEndpointBlock>,
-}
-
-#[derive(Debug)]
-pub(crate) enum ProcessedWorldEvent {
-    Message(RoutedWorldMessage),
-    ServerMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldServerMessageOutcome,
-    },
-    LogMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldLogMessageOutcome,
-    },
-    OtherMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldOtherMessageOutcome,
-    },
-    WriteLogMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldWriteLogMessageOutcome,
-    },
-    PlayerMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldPlayerMessageOutcome,
-    },
-    CountryMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldCountryMessageOutcome,
-    },
-    GmaMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldGmaMessageOutcome,
-    },
-    GmMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldGmMessageOutcome,
-    },
-    JjcMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: JjcSystemMessageOutcome,
-    },
-    MiscAuctionMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldMiscAuctionMessageOutcome,
-    },
-    ServerAuctionMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldServerAuctionMessageOutcome,
-    },
-    TeamMessage {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: WorldTeamMessageOutcome,
-    },
-    OrganizingSessionResult {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingSessionResultDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingConsumedLong {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingConsumedLongDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingCreateFaction {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingCreateFactionDispatch, OrganizingCreateFactionBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionWarPlayerDied {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingFactionWarPlayerDiedDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingInitialData {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingInitialDataDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingDeclareWarFactionList {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingDeclareWarFactionListDispatch,
-            OrganizingDeclareWarFactionListBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionList {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionListDispatch, OrganizingFactionListBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionApplicationCancel {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingFactionApplicationCancelDispatch,
-            OrganizingFactionApplicationCancelBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionApplication {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingFactionApplicationDispatch<UnionApplicationSessionReport>,
-            OrganizingFactionApplicationDispatchBlock<UnionApplicationSessionBlock>,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionApplicationDecision {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingFactionApplicationDecisionDispatch,
-            OrganizingFactionDoJoinBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionFireOut {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionFireOutDispatch, OrganizingFactionFireOutBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionExit {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionExitDispatch, OrganizingFactionExitBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingUnionExit {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingUnionExitDispatch, OrganizingUnionExitBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionDemise {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionDemiseDispatch, OrganizingFactionDemiseBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingUnionDemise {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingUnionDemiseDispatch, OrganizingUnionDemiseBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionDisband {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionDisbandDispatch, OrganizingFactionDisbandBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingUnionDisband {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingUnionDisbandDispatch, OrganizingUnionDisbandBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionDub {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionDubDispatch, OrganizingFactionDubBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionPurview {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionPurviewDispatch, OrganizingFactionPurviewBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingUnionFireOut {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingUnionFireOutDispatch, OrganizingUnionFireOutBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingDeclareFactionWar {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingDeclareFactionWarDispatch, OrganizingDeclareFactionWarBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionBillboard {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionBillboardOutcome, OrganizingFactionBillboardBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionUpgrade {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionUpgradeDispatch, OrganizingFactionUpgradeBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionUploadIcon {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionUploadIconDispatch, FactionUploadIconBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionContributor {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionContributorDispatch, OrganizingContributorBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionExperience {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionExperienceDispatch, FactionExperienceBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionMemberState {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingFactionMemberStateDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionTax {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionTaxDispatch, OrganizingFactionTaxBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingRegionParamUpdate {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingRegionParamDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingRegionRoute {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingRegionRouteDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingCityGate {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingCityGateDispatch, OrganizingCityGateBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingCityTransfer {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingCityTransferDispatch<CityTransferSessionReport>,
-            CityTransferStartBlock<CityTransferSessionBlock>,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingAdmissionPermit {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingAdmissionPermitDispatch, OrganizingAdmissionPermitBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingAttackCityEnd {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingAttackCityEndDispatch, AttackCityEndBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingVillageWarApplication {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingVillageWarApplicationDispatch,
-            OrganizingVillageWarApplicationBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingCityWarApplication {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingCityWarApplicationDispatch,
-            OrganizingCityWarApplicationBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingCityWarResult {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingCityWarResultDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingGoodsWarCommand {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingGoodsWarCommandDispatch,
-            GoodsWarMemberBlock<OrganizingGoodsWarContextBlock>,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingGoodsWarFactionWin {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingGoodsWarFactionWinDispatch,
-            OrganizingGoodsWarFactionWinBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingPlayerQuestCommand {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingPlayerQuestCommandDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingPlayerRunScript {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingPlayerRunScriptDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingFactionParameter {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingFactionParameterDispatch, OrganizingFactionParameterBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingChangeRegionRouter {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingChangeRegionRouterDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingVillageWarResult {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: OrganizingVillageWarResultDispatch,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingUnionApplication {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            OrganizingUnionApplicationDispatch<UnionApplicationSessionReport>,
-            WorldUnionApplicationStartBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingPlayerInviteFaction {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<
-            WorldPlayerInviteFactionDispatch,
-            WorldPlayerInviteFactionStartBlock,
-        >,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingLeaveWordEnable {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingLeaveWordEnableDispatch, OrganizingLeaveWordEnableBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingLeaveWord {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingLeaveWordDispatch, OrganizingLeaveWordBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingLeaveWordEdit {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingLeaveWordEditDispatch, OrganizingLeaveWordEditBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    OrganizingPronounce {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        outcome: Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
- /// default `OnOrgasysMessage`: неизвестный organizing opcode не имеет
- /// side effects, но уже накопленные terminal callbacks всё равно исполняются.
-    OrganizingNoOp {
-        source: WorldMessageSource,
-        legacy_run_result: i32,
-        request_type: i32,
-        runtime: WorldUnionApplicationRuntimeReport,
-    },
-    LoginClientReconnected(WorldLoginClientReplacement),
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldProcessMessageOutcome {
-    pub(crate) legacy_result: i32,
-    pub(crate) initial_server_events: i32,
-    pub(crate) initial_login_messages: Option<i32>,
-    pub(crate) server_slots_visited: i32,
-    pub(crate) login_slots_visited: i32,
-    pub(crate) events: Vec<ProcessedWorldEvent>,
-    pub(crate) game_server_message_time_ms: u32,
-    pub(crate) login_server_message_time_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldProcessMessageStageState {
-    pub(crate) accumulated_time_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopInitializationState {
-    pub(crate) mask: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopClockState {
-    pub(crate) current_tick_ms: u32,
-    pub(crate) last_refresh_tick_ms: u32,
-    pub(crate) stage_started_at_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopTailClockState {
-    pub(crate) current_tick_ms: u32,
-    pub(crate) pacing_deadline_ms: u32,
-    pub(crate) minute_started_at_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopLoginReleaseState {
-    pub(crate) last_checked_at_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopTailClockInitialization {
-    pub(crate) previous_mask: u32,
-    pub(crate) initialized_mask: u32,
-    pub(crate) initial_current_tick_ms: Option<u32>,
-    pub(crate) initial_pacing_deadline_ms: Option<u32>,
-    pub(crate) initial_minute_started_at_ms: Option<u32>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopLargessState {
-    pub(crate) pass_count: u32,
-    pub(crate) last_start_request_tick_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopProfileState {
-    pub(crate) last_published_at_ms: u32,
-    pub(crate) ai_calls: u32,
-    pub(crate) ai_time_ms: u32,
-    pub(crate) refresh_text_time_ms: u32,
-    pub(crate) net_session_time_ms: u32,
-    pub(crate) faction_war_time_ms: u32,
-    pub(crate) timer_time_ms: u32,
-    pub(crate) process_player_data_queue_time_ms: u32,
-    pub(crate) session_factory_time_ms: u32,
-    pub(crate) save_point_time_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopAiStageReport {
-    pub(crate) previous_stage_finished_at_ms: u32,
-    pub(crate) save_point_elapsed_ms: u32,
-    pub(crate) accumulated_save_point_time_ms: u32,
-    pub(crate) ai_calls: u32,
-    pub(crate) ai_started_at_ms: u32,
-    pub(crate) ai: WorldGameAiReport,
-    pub(crate) ai_finished_at_ms: u32,
-    pub(crate) ai_elapsed_ms: u32,
-    pub(crate) accumulated_ai_time_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopSessionFactoryStageReport {
-    pub(crate) ai: WorldSessionFactoryAiReport,
-    pub(crate) finished_at_ms: u32,
-    pub(crate) elapsed_ms: u32,
-    pub(crate) accumulated_time_ms: u32,
-    pub(crate) next_stage_started_at_ms: u32,
-}
 
 // Диагностические типы player-data маршрута и player-load FIFO перевезены в
 // Realm world_game_view вместе с ветвью select и queue-стадией MainLoop; здесь
@@ -1480,15 +449,6 @@ pub(crate) use nebokrai_realm::app::world_game_view::{
 // Отчёт queue-стадии MainLoop перенесён в Realm app вместе со stage-handler-ом;
 // здесь реэкспорт для сборки MainLoop report и block-ветки.
 pub(crate) use nebokrai_realm::app::playerdataqueue::WorldMainLoopPlayerDataQueueStageReport;
-
-/// Два подтверждённых порядка одного route: direct `GetPlayerData` публикует
-/// player до friend-loop, а `ProcessPlayerDataQueue` — после него.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoadedPlayerRouteOrder {
-    Direct,
-    LoadedQueue,
-}
-
 /// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
 ///
 /// DB-owner, player-list и setup snapshots остаются явно принадлежащими
@@ -1582,119 +542,16 @@ pub(crate) struct WorldPlayerLargessLoadReport {
     pub(crate) write_log_queue_length: Option<usize>,
 }
 
-#[derive(Debug)]
-pub(crate) struct PlayerRanksTimerRefreshReport {
-    pub(crate) stat: PlayerRanksStatRunReport,
-    pub(crate) publication: PlayerRanksGameServerUpdate,
-    pub(crate) next_time: TagTime,
-    pub(crate) next_event_id: Option<TimerId>,
-}
-
-#[derive(Debug)]
-pub(crate) enum PlayerRanksTimerRefreshBlock {
-    Stat(PlayerRanksStatRunBlock),
-    Serialization(PlayerRanksSerializationBlock),
-    Schedule(PlayerRanksScheduleBlock),
-}
-
-#[derive(Debug)]
-pub(crate) enum CountryWarTimerReport {
-    Phase {
-        callback: CountryWarCallbackKind,
-        war_id: i32,
-        report: CountryWarPhaseReport,
-    },
-    Start {
-        war_id: i32,
-        report: CountryWarStartReport,
-    },
-    End {
-        war_id: i32,
-        report: CountryWarFinishReport,
-    },
-    TopInfo {
-        callback: CountryWarCallbackKind,
-        report: CountryWarTopInfoReport,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum CountryWarTimerBlock {
-    Phase(CountryWarPhaseBlock<Infallible>),
-    Start(CountryWarStartBlock<Infallible>),
-    End(CountryWarFinishBlock<Infallible>),
-    TopInfo(CountryWarTopInfoBlock<Infallible>),
-}
-
-#[derive(Debug)]
-pub(crate) enum AttackCityTimerOutcome {
-    Phase(AttackCityPhaseReport),
-    Countdown(AttackCityCountdownReport),
-}
-
-#[derive(Debug)]
-pub(crate) struct AttackCityTimerReport {
-    pub(crate) callback: AttackCityCallbackKind,
-    pub(crate) war_number: i32,
-    pub(crate) outcome: AttackCityTimerOutcome,
-}
-
-#[derive(Debug)]
-pub(crate) enum VillageWarTimerOutcome {
-    Phase(VillageWarPhaseReport),
-    Countdown(VillageWarCountdownReport),
-}
-
-#[derive(Debug)]
-pub(crate) struct VillageWarTimerReport {
-    pub(crate) callback: VillageWarCallbackKind,
-    pub(crate) war_number: i32,
-    pub(crate) outcome: VillageWarTimerOutcome,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldTimerCallbackBlock {
-    CopyNumber(CopyNumberScheduleBlock),
-    PlayerRanks(PlayerRanksTimerRefreshBlock),
-    OrganizingTax(OrganizingTaxScheduleBlock),
-    AttackCity(AttackCityCountdownBlock<Infallible>),
-    VillageWar(VillageWarCountdownBlock<Infallible>),
-    CountryWar(CountryWarTimerBlock),
-    FourNationWar(FourNationWarCalendarBlock),
-    UnexpectedCallback {
-        source: TimerCallbackSource,
-        parameter: i32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FourNationWarTimerReport {
-    pub(crate) callback: FourNationWarCallbackKind,
-    pub(crate) index: i32,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldMainLoopTimerStageBlock {
-    pub(crate) timer: TimerRunReport,
-    pub(crate) source: WorldTimerCallbackBlock,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldMainLoopTimerStageReport {
-    pub(crate) timer: TimerRunReport,
-    pub(crate) copy_number_resets: Vec<CopyNumberResetReport>,
-    pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
-    pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
-    pub(crate) time_to_returns: Vec<TimeToReturnFireReport>,
-    pub(crate) attack_city_wars: Vec<AttackCityTimerReport>,
-    pub(crate) village_wars: Vec<VillageWarTimerReport>,
-    pub(crate) country_wars: Vec<CountryWarTimerReport>,
-    pub(crate) four_nation_wars: Vec<FourNationWarTimerReport>,
-    pub(crate) finished_at_ms: u32,
-    pub(crate) elapsed_ms: u32,
-    pub(crate) accumulated_time_ms: u32,
-    pub(crate) next_stage_started_at_ms: u32,
-}
+// Stage-отчёты timer-стадии MainLoop (player-ranks refresh, country/village/
+// attack/four-nation war timers и block-семья callback-диспетча) перенесены
+// в Realm `app/world_main_loop_data` волной C5-A вместе со связкой хода;
+// здесь реэкспорт для handler-а timer-стадии и сборки MainLoop report.
+pub(crate) use nebokrai_realm::app::world_main_loop_data::{
+    AttackCityTimerOutcome, AttackCityTimerReport, CountryWarTimerBlock, CountryWarTimerReport,
+    FourNationWarTimerReport, PlayerRanksTimerRefreshBlock, PlayerRanksTimerRefreshReport,
+    VillageWarTimerOutcome, VillageWarTimerReport, WorldMainLoopTimerStageBlock,
+    WorldMainLoopTimerStageReport, WorldTimerCallbackBlock,
+};
 
 struct WorldFourNationWarTimerEffects<'a, GetTick> {
     game: &'a CGame,
@@ -2064,7 +921,10 @@ impl<GetTick: FnMut() -> u32> FourNationWarCallbackContext
     }
 }
 
-struct WorldTimerHandler<'a, Callback> {
+/// Adapter-путь timer-стадии: DB-owner статистики входит generic-параметром
+/// `RsPlayer` (шов `RsPlayerOwner<CPlayer>`), как в перенесённой связке хода;
+/// глубокие точки `process_*` сохраняют прежнюю конкретную декларацию.
+struct WorldTimerHandler<'a, Callback, RsPlayer> {
     game: &'a CGame,
     attack_city: &'a mut CAttackCitySys,
     attack_city_callbacks: AttackCityCallbacks<Callback>,
@@ -2080,7 +940,7 @@ struct WorldTimerHandler<'a, Callback> {
     globe_setup: &'a GlobeSetupSnapshot,
     organizing_parameters: &'a mut COrganizingParam,
     player_ranks: &'a mut CPlayerRanks,
-    rs_player: &'a mut TiberiusRsPlayer,
+    rs_player: &'a mut RsPlayer,
     player_database: Option<&'a mut WorldTdsClient>,
     organizing: &'a COrganizingCtrl,
     copy_number_timer: &'a mut CopyNumberTimerState,
@@ -2100,13 +960,14 @@ struct WorldTimerHandler<'a, Callback> {
     pending_tax_registration: Option<PreparedTodayTaxRefresh>,
 }
 
-impl<Callback, GetTick, GetTimerLocalTime>
+impl<Callback, GetTick, GetTimerLocalTime, RsPlayer>
     AsyncTimerCallbackHandler<Callback, GetTick, GetTimerLocalTime>
-    for WorldTimerHandler<'_, Callback>
+    for WorldTimerHandler<'_, Callback, RsPlayer>
 where
     Callback: Copy + PartialEq,
     GetTick: FnMut() -> u32,
     GetTimerLocalTime: FnMut() -> TagTime,
+    RsPlayer: RsPlayerOwner<CPlayer>,
 {
     type Block = WorldTimerCallbackBlock;
 
@@ -2530,180 +1391,25 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopFactionWarStageReport {
-    pub(crate) faction_war: FactionWarRunReport,
-    pub(crate) finished_at_ms: u32,
-    pub(crate) elapsed_ms: u32,
-    pub(crate) accumulated_time_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopDbMiscStageReport {
-    pub(crate) output: DbMiscDoneOutReport,
-    pub(crate) input: DbMiscDoneInReport,
-    pub(crate) auction: DbMiscLoadAuctionReport,
-    pub(crate) next_stage_started_at_ms: u32,
-}
-
-/// Краткоживущий доступ `DoneOutList` к актуальным World registries.
-///
-/// TDS-контекст не хранит ссылку на `CGame`; этот адаптер создаётся только на
-/// время output batch после завершения всех предшествующих MainLoop-мутаций.
-struct WorldDbMiscDeliveryContext<'a> {
-    game: &'a CGame,
-    gold_coin_index: u32,
-    offline_drops: usize,
-}
-
-impl DbMiscDeliveryContext for WorldDbMiscDeliveryContext<'_> {
-    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer> {
-        self.game
-            .player_game_server(player_id as i32)
-            .map(|server| DbMiscGameServer {
-                connected: server.connected,
-                index: server.index,
-            })
-    }
-
-    fn online_player_id(&mut self, player_id: u32) -> Option<i32> {
-        self.game.online_player_by_id(player_id).map(CPlayer::get_id)
-    }
-
-    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32) {
-        let _ = self.game.send_msg_to_game_server(map_id as i32, message);
-    }
-
-    fn log_player_not_online_drop_goods(&mut self) {
-        self.offline_drops = self.offline_drops.saturating_add(1);
-    }
-
-    fn gold_coin_index(&mut self) -> u32 {
-        self.gold_coin_index
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopNetSessionStageReport {
-    pub(crate) sessions: NetSessionRunReport,
-    pub(crate) union_applications: WorldUnionApplicationRuntimeReport,
-    pub(crate) finished_at_ms: u32,
-    pub(crate) elapsed_ms: u32,
-    pub(crate) accumulated_time_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopMinuteStageReport {
-    pub(crate) initialization: WorldMainLoopTailClockInitialization,
-    pub(crate) current_tick_ms: u32,
-    pub(crate) minute_delta: i32,
-    pub(crate) organizing: OrganizingRunReport,
-    pub(crate) country: CountryRunReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopMinuteStageBlock {
-    Organizing(OrganizingRunBlock),
-    Country(CountryRunBlock),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopBaiTanJjcStageReport {
-    pub(crate) bai_tan: WorldDoneBaiTanListReport,
-    pub(crate) jjc: JjcRunReport,
-}
-
-pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginTimeoutTeamExit;
-
-pub(crate) use nebokrai_realm::app::worldserver::WorldRegionChangeTeamUpdate;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoginTimeoutFriendOutcome {
-    Offline {
-        friend_index: usize,
-    },
-    Notified {
-        friend_index: usize,
-        friend_player_id: u32,
-        target_game_server_index: Option<u32>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoginTimeoutEntryOutcome {
-    Waiting {
-        player_id: u32,
-        elapsed_ms: u32,
-    },
-    ExpiredMissingPlayer {
-        player_id: u32,
-        elapsed_ms: u32,
-    },
-    Released {
-        player_id: u32,
-        elapsed_ms: u32,
-        login_delivery: Result<i32, SendMessageError>,
-        team_id: i32,
-        team_session_id: i32,
-        team_exit: WorldLoginTimeoutTeamExit,
-        online_removal: WorldOnlinePlayerRemoveOutcome,
-        offline_inserted: bool,
-        friend_outcomes: Vec<WorldLoginTimeoutFriendOutcome>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldLoginTimeoutReport {
-    pub(crate) snapshot_tick_ms: u32,
-    pub(crate) entries: Vec<WorldLoginTimeoutEntryOutcome>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopPacingReport {
-    pub(crate) sampled_tick_ms: u32,
-    pub(crate) wait_duration_ms: Option<u32>,
-    pub(crate) next_deadline_ms: u32,
-    pub(crate) signed_lag_ms: i32,
-    pub(crate) warning_resync_tick_ms: Option<u32>,
-    pub(crate) release_gate_tick_ms: u32,
-    pub(crate) release_gate_elapsed_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopTailStageReport {
-    BlockedMissingReleaseInterval {
-        pacing: WorldMainLoopPacingReport,
-    },
-    Complete {
-        pacing: WorldMainLoopPacingReport,
-        release_interval_ms: u32,
-        login_timeout: Option<WorldLoginTimeoutReport>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldMainLoopSaveStageReport {
-    pub(crate) manual_request: Option<WorldManualSaveRequestReport>,
-    pub(crate) profile_started_at_ms: u32,
-    pub(crate) elapsed_ms: u32,
-    pub(crate) save_point_time_ms: u32,
-    pub(crate) disposition: WorldMainLoopSaveStageDisposition,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldMainLoopSaveStageDisposition {
-    IntervalNotElapsed,
-    SaveLockBusy {
-        adjusted_last_save_point_time_ms: u32,
-    },
-    Triggered(WorldRunSaveTriggerDisposition),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WorldMainLoopConfiguration {
-    pub(crate) refresh_external_counts: WorldRefreshExternalCounts,
-}
+// Данные хода MainLoop (stage-отчёты, конфигурация, JJC/LeiTing worker-
+// адаптеры и связка StateOwners/Owners/Callbacks/Block/Report) перенесены в
+// Realm `app/world_main_loop_data` волной C5-A. rs_player/largess/Game входят
+// теперь generic-параметрами: глубокие точки process_* держат прежнюю
+// конкретную декларацию до следующей порции, поэтому старый владелец
+// закрепляет TiberiusRsPlayer/TiberiusLargess/CGame при вызове хода (см.
+// main_loop ниже). Здесь реэкспорт для runtime-сборки и стадий пакета.
+pub(crate) use nebokrai_realm::app::world_main_loop_data::{
+    WorldDbMiscDeliveryContext, WorldLoginTimeoutEntryOutcome,
+    WorldLoginTimeoutFriendOutcome, WorldLoginTimeoutReport,
+    WorldMainLoopBaiTanJjcStageReport, WorldMainLoopBlock, WorldMainLoopCallbacks,
+    WorldMainLoopConfiguration, WorldMainLoopDbMiscStageReport,
+    WorldMainLoopFactionWarStageReport, WorldMainLoopMinuteStageBlock,
+    WorldMainLoopMinuteStageReport, WorldMainLoopNetSessionStageReport,
+    WorldMainLoopOwners, WorldMainLoopPacingReport, WorldMainLoopPingError,
+    WorldMainLoopPingStageReport, WorldMainLoopReport, WorldMainLoopResult,
+    WorldMainLoopSaveStageDisposition, WorldMainLoopSaveStageReport,
+    WorldMainLoopStateOwners, WorldMainLoopTailStageReport, WorldRefreshExternalCounts,
+};
 
 pub(crate) trait WorldJjcRuntimeContext: JjcRunContext {
     fn on_week_clear_spawn_failed(&mut self, error: io::Error);
@@ -2835,1494 +1541,36 @@ impl<Context: WorldLeiTingRuntimeContext> LeiTingContext
     }
 }
 
-pub(crate) struct WorldMainLoopStateOwners<'a> {
-    pub(crate) initialization: &'a mut WorldMainLoopInitializationState,
-    pub(crate) clocks: &'a mut WorldMainLoopClockState,
-    pub(crate) tail_clocks: &'a mut WorldMainLoopTailClockState,
-    pub(crate) login_release: &'a mut WorldMainLoopLoginReleaseState,
-    pub(crate) largess: &'a mut WorldMainLoopLargessState,
-    pub(crate) profile: &'a mut WorldMainLoopProfileState,
-    pub(crate) copy_number_timer: &'a mut CopyNumberTimerState,
-    pub(crate) process_message: &'a mut WorldProcessMessageStageState,
-    pub(crate) refresh_high_water: &'a mut WorldRefreshInfoHighWater,
-    pub(crate) collect_player_data: &'a mut WorldCollectPlayerDataRequestState,
-    pub(crate) save_trigger: &'a mut WorldRunSaveTriggerState,
-    pub(crate) save_lifecycle: &'a Arc<Mutex<SaveDataLifecycleState>>,
-    pub(crate) reload_flags: &'a WorldReloadProfileFlags,
-    pub(crate) player_ranks_request: &'a WorldPlayerRanksRequestState,
-    pub(crate) save_thread_handle: &'a mut WorldSaveThreadHandleState,
-}
+pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginTimeoutTeamExit;
 
-pub(crate) struct WorldMainLoopOwners<
-    'a,
-    TimerCallback,
-    LeiTingContextOwner,
-    DbMiscContextOwner,
-    JjcContext,
-> {
-    pub(crate) resources: &'a mut dyn WorldMainLoopResourceContext,
-    pub(crate) load_player_largess: &'a mut dyn FnMut(&mut CPlayer),
-    pub(crate) organizing: &'a mut COrganizingCtrl,
-    pub(crate) country: &'a mut CCountryHandler,
-    pub(crate) country_parameters: &'a mut CCountryParam,
-    pub(crate) time_to_return: &'a mut TimeToReturn,
-    pub(crate) time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
-    pub(crate) country_war: &'a mut CountryWarSys,
-    pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
-    pub(crate) four_nation_war: &'a mut CFourNationWarSys,
-    pub(crate) four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
-    pub(crate) honor_ranks: &'a mut CHonorRanks,
-    pub(crate) organizing_parameters: &'a mut COrganizingParam,
-    pub(crate) organizing_tax_callback: TimerCallback,
-    pub(crate) player_ranks: &'a mut CPlayerRanks,
-    pub(crate) rs_player: &'a mut TiberiusRsPlayer,
-    pub(crate) player_database: Option<&'a mut WorldTdsClient>,
-    pub(crate) general_variables: Option<&'a mut CVariableList>,
-    pub(crate) gods_battle: &'a mut CGodsBattleConf,
-    pub(crate) skills: &'a mut CSkillFactory,
-    pub(crate) rs_gods_battle: Option<&'a mut TiberiusRsGodsBattle>,
-    pub(crate) gods_battle_database: Option<&'a mut WorldTdsClient>,
-    pub(crate) auction_log: &'a mut CAuctionLog,
-    pub(crate) auction_log_database: Option<&'a mut WorldTdsClient>,
-    pub(crate) session_factory: &'a mut CSessionFactory,
-    pub(crate) increment_log: &'a mut CIncrementLog,
-    pub(crate) timer: &'a mut CTimer<TimerCallback>,
-    pub(crate) faction_war: &'a mut CFactionWarSys,
-    pub(crate) attack_city: &'a mut CAttackCitySys,
-    pub(crate) attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
-    pub(crate) village_war: &'a mut CVillageWarSys,
-    pub(crate) goods_war: &'a mut CGoodsWarMember,
-    pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
-    pub(crate) lei_ting: &'a mut CLeiTing,
-    pub(crate) lei_ting_reset_worker: &'a WorldLeiTingResetWorker,
-    pub(crate) tokio_runtime: tokio::runtime::Handle,
-    pub(crate) db_misc: &'a mut CDbMisc,
-    pub(crate) net_sessions: &'a CNetSessionManager,
-    pub(crate) union_application_runtime: &'a WorldUnionApplicationRuntimeOwner,
-    pub(crate) jjc: &'a mut CJJcSystem,
-    pub(crate) jjc_week_clear_worker: &'a WorldJjcWeekClearWorker,
-    pub(crate) lei_ting_context: &'a mut LeiTingContextOwner,
-    pub(crate) db_misc_context: &'a mut DbMiscContextOwner,
-    pub(crate) jjc_context: &'a mut JjcContext,
-    pub(crate) log: &'a mut WorldLogTextOwner,
-}
+pub(crate) use nebokrai_realm::app::worldserver::WorldRegionChangeTeamUpdate;
 
-pub(crate) struct WorldMainLoopCallbacks<'a> {
-    pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
-    pub(crate) get_save_point_time: &'a mut dyn FnMut() -> u32,
-    pub(crate) save_runtime: &'a mut dyn WorldSaveRuntimeContext,
-    pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
-    pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
-    pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
-    pub(crate) largess: &'a TiberiusLargess,
- /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
- /// typed записи в тот же FIFO непосредственно в своих точках вызова.
-    pub(crate) write_log_queue: WorldWriteLogQueue,
-    pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
-    pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
-    pub(crate) refresh_union_owned_city:
-        &'a mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
-    pub(crate) update_union_player: &'a mut dyn FnMut(i32),
-    pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
-    pub(crate) wait: &'a mut dyn FnMut(u32),
-    pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
-}
 
-pub(crate) enum WorldMainLoopBlock<LeiTingContextBlock> {
-    Largess(WorldMainLoopLargessGateReport),
-    Refresh(WorldMainLoopRefreshStageReport),
-    Reload(WorldReloadProfilesReport),
-    Maintenance(WorldMainLoopMaintenanceBlock),
-    MissingCountryLimit {
-        parameter: &'static str,
-    },
-    SaveAllOrganizations {
-        block: OrganizingSaveDataBlock,
-    },
-    ImmediateSave {
-        log: AddLogTextDisposition,
-        block: WorldGenerateDbDataBlock,
-    },
-    ProcessMessage(WorldProcessMessageStageReport),
-    PlayerDataQueue(WorldMainLoopPlayerDataQueueStageReport),
-    Timer(WorldMainLoopTimerStageBlock),
-    FactionWar(FactionWarStopBlock<WorldMainLoopFactionWarBlock>),
-    LeiTing(LeiTingBlock<LeiTingContextBlock, PlayerCodecError>),
-    DbMisc(DbMiscDoneOutBlock),
-    Ping(WorldMainLoopPingError),
-    Minute(WorldMainLoopMinuteStageBlock),
-    Jjc(JjcRunBlock),
-    Tail(WorldMainLoopPacingReport),
-}
-
-pub(crate) type WorldMainLoopResult<LeiTingContextBlock> =
-    Result<WorldMainLoopReport, Box<WorldMainLoopBlock<LeiTingContextBlock>>>;
-
-#[derive(Debug)]
-pub(crate) struct WorldMainLoopReport {
-    pub(crate) profile_initialization: Option<WorldMainLoopProfileInitialization>,
-    pub(crate) save_initialization: Option<WorldMainLoopSaveInitialization>,
-    pub(crate) refresh_initialization: Option<WorldMainLoopRefreshInitialization>,
-    pub(crate) current_tick_ms: u32,
-    pub(crate) largess: WorldMainLoopLargessGateReport,
-    pub(crate) refresh_profile_started_at_ms: u32,
-    pub(crate) refresh: WorldMainLoopRefreshStageReport,
-    pub(crate) reload: WorldReloadProfilesReport,
-    pub(crate) maintenance: WorldMainLoopMaintenanceReport,
-    pub(crate) collect_player_data: Option<WorldCollectPlayerDataBroadcast>,
-    pub(crate) save: WorldMainLoopSaveStageReport,
-    pub(crate) ai: WorldMainLoopAiStageReport,
-    pub(crate) process_message: WorldProcessMessageStageReport,
-    pub(crate) session_factory: WorldMainLoopSessionFactoryStageReport,
-    pub(crate) player_data_queue: WorldMainLoopPlayerDataQueueStageReport,
-    pub(crate) timer: WorldMainLoopTimerStageReport,
-    pub(crate) faction_war: WorldMainLoopFactionWarStageReport,
-    pub(crate) lei_ting: LeiTingRunReport,
-    pub(crate) db_misc: WorldMainLoopDbMiscStageReport,
-    pub(crate) net_sessions: WorldMainLoopNetSessionStageReport,
-    pub(crate) ping: WorldMainLoopPingStageReport,
-    pub(crate) minute: WorldMainLoopMinuteStageReport,
-    pub(crate) bai_tan_jjc: WorldMainLoopBaiTanJjcStageReport,
-    pub(crate) tail: WorldMainLoopTailStageReport,
-    pub(crate) legacy_result: i32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopPingStageReport {
-    Idle,
-    Waiting {
-        connected_game_servers: i32,
-        received_responses: u32,
-        elapsed_ms: u32,
-    },
-    Published {
-        connected_game_servers: i32,
-        received_responses: u32,
-        elapsed_ms: u32,
-        all_connected_responded: bool,
-        timed_out: bool,
-        online_players: u32,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopPingError {
-    ResponseCountOutsideLegacyRange { count: usize },
-    OnlinePlayerCountOutsideLegacyRange { count: usize },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopProfileInitialization {
-    pub(crate) previous_mask: u32,
-    pub(crate) initialized_mask: u32,
-    pub(crate) initial_report_tick_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopSaveInitialization {
-    pub(crate) previous_mask: u32,
-    pub(crate) initialized_mask: u32,
-    pub(crate) initial_save_tick_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopRefreshInitialization {
-    pub(crate) previous_mask: u32,
-    pub(crate) initialized_mask: u32,
-    pub(crate) copied_current_tick_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldRefreshExternalCounts {
-    pub(crate) team_sessions: i32,
-    pub(crate) largess_entries: u32,
-    pub(crate) reback_messages: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRefreshSnapshotBlock {
-    pub(crate) field: &'static str,
-    pub(crate) count: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopRefreshDisposition {
-    NotDue,
-    MissingNetworkOwner,
-    Refreshed(WorldRefreshInfoReport),
-}
-
-#[allow(
-    clippy::large_enum_variant,
-    reason = "полный отчёт возвращается по значению, чтобы не добавлять heap allocation в каждый MainLoop turn"
-)]
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopRefreshStageReport {
-    BlockedMissingFact {
-        elapsed_since_refresh_ms: u32,
-        assigned_last_refresh_tick_ms: u32,
-        block: WorldRefreshSnapshotBlock,
-    },
-    Complete {
-        elapsed_since_refresh_ms: u32,
-        refresh: WorldMainLoopRefreshDisposition,
-        finished_at_ms: u32,
-        elapsed_stage_ms: u32,
-        accumulated_refresh_time_ms: u32,
-        profile: Option<WorldMainLoopProfileReport>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldReloadProfileFlagsSnapshot {
-    pub(crate) low: u32,
-    pub(crate) high: u32,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct WorldReloadProfileFlags {
-    low: AtomicU32,
-    high: AtomicU32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct WorldRegionLoadSpec {
-    pub(crate) region_id: i32,
-    pub(crate) resource_id: u32,
-    pub(crate) exp_scale: f32,
-    pub(crate) region_type: i32,
-    pub(crate) no_pk: bool,
-    pub(crate) no_contribute: bool,
-    pub(crate) name: Vec<u8>,
-    pub(crate) game_server_index: u32,
-    pub(crate) country: u8,
-    pub(crate) notify: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldReloadOneScriptBlock {
-    pub(crate) requested_path: Vec<u8>,
-    pub(crate) normalized_map_key: Vec<u8>,
-}
-
-pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBlock>;
-
+// Refresh/reload-контракт хода (snapshot-gate RefreshInfo, atomic reload-flags
+// с таблицей профилей, resource snapshot стадии, maintenance player-ranks/
+// honor, снимки профилирования и profile-init helpers, process-message
+// stage-типы и count-gate snapshot-стадии) перенесены в Realm
+// `app/world_reload_profiles` волной C5-A; reload-диспетчер остаётся у
+// владельца хода и пользуется ими через здесь стоящий реэкспорт.
+pub(crate) use nebokrai_realm::app::world_reload_profiles::{
+    WORLD_RELOAD_ACTIONS, WorldAuctionBangMaintenanceDisposition, WorldHonorRanksMaintenanceBlock, WorldHonorRanksMaintenanceDisposition, WorldMainLoopLargessGateReport, WorldMainLoopMaintenanceBlock, WorldMainLoopMaintenanceReport, WorldMainLoopProfileReport, WorldMainLoopProfileSnapshot, WorldMainLoopRefreshDisposition, WorldMainLoopRefreshStageReport, WorldMainLoopResourceContext, WorldMainLoopResourceSnapshot, WorldPlayerRanksMaintenanceDisposition, WorldPlayerRanksRequestState, WorldProcessMessageError, WorldProcessMessageStageReport, WorldRefreshSnapshotBlock, WorldRegionLoadSpec, WorldReloadActionKind, WorldReloadConfLogBlock, WorldReloadConfLogDisposition, WorldReloadOneScriptBlock, WorldReloadOneScriptResult, WorldReloadProfile, WorldReloadProfileEvent, WorldReloadProfileFlags, WorldReloadProfilesReport, WorldReloadRegionSetupBlock, WorldScriptLoadContext, initialize_main_loop_profile_if_needed, initialize_main_loop_refresh_if_needed, initialize_main_loop_save_if_needed, initialize_main_loop_tail_clocks, legacy_refresh_count, start_main_loop_profile_stage, update_main_loop_current_tick,
+};
 pub(crate) use nebokrai_realm::app::worldserver::WorldReloadContext;
 
-struct WorldScriptLoadContext<'a, C: ?Sized>(&'a mut C);
 
-impl<C: WorldReloadContext + ?Sized> ScriptLoadContext for WorldScriptLoadContext<'_, C> {
-    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
-        self.0.read_resource(path)
-    }
 
-    fn indexed_files(&mut self, root: &[u8], extension: &[u8]) -> Option<Vec<Vec<u8>>> {
-        self.0
-            .default_client_resource()
-            .find_file_list(root, extension)
-    }
-
-    fn loose_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
-        self.0.script_files(pattern, extension)
-    }
-
-    fn missing_resource(&mut self, path: &[u8]) {
-        let mut message = b"Can't found ".to_vec();
-        message.extend_from_slice(legacy_c_string_prefix(path));
-        message.push(b'!');
-        self.0.notify_reload_operator(b"Message", &message);
-    }
-}
-
-/// Опубликованная неизменяемая проекция setup-владельцев одного runtime turn.
-///
-/// Она снимается после верхнего reload-gate и заново перед каждым FIFO
-/// сообщением. Поэтому reload из GM/server-владельца виден следующему сообщению
-/// того же turn, а живой `WorldReloadContext` не alias-ится с выданными ему же
-/// Rust-ссылками.
-#[derive(Clone)]
-pub(crate) struct WorldMainLoopResourceSnapshot {
-    pub(crate) registry: Arc<GoodsBasePropertiesRegistry>,
-    pub(crate) original_name_index: Arc<GoodsOriginalNameIndex>,
-    pub(crate) coefficients: PlayerPropertyCoefficients,
-    pub(crate) player_list: CPlayerList,
-    pub(crate) globe_setup: GlobeSetupSnapshot,
-    pub(crate) region_router: RegionRouter,
-    pub(crate) log_system: CLogSystem,
-    pub(crate) gold_coin_index: u32,
-}
-
-pub(crate) trait WorldMainLoopResourceContext: WorldReloadContext {
-    fn main_loop_resource_snapshot(&self) -> WorldMainLoopResourceSnapshot;
-}
-
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorldReloadProfile {
-    PlayerList,
-    GoodsList,
-    MonsterList,
-    TradeList,
-    SkillList,
-    NewSkillMonsterList,
-    GlobeSetup,
-    GameSetup,
-    StringTable,
-    LogSystem,
-    GmList,
-    ScriptFile,
-    RegionList,
-    RegionLevelSetup,
-    HitLevelSetup,
-    Broadcast,
-    AttackCity,
-    InvalidStrings,
-    GeneralVariableList,
-    FactionParameters,
-    VillageWar,
-    FourNationWar,
-    CityWar,
-    FactionWar,
-    Quest,
-    CountryParameters,
-    IncrementShop,
-    Contribute,
-    Prison,
-    TimeToReturn,
-    PreciousBox,
-    FairyExp,
-    ChangeBody,
-    CountryWar,
-    BattleFairyExp,
-    BattleFairyCombine,
-    Synthesis,
-    DaKongXiangQian,
-    EquipmentCompose,
-    GoodsDestroy,
-    HonorEliminate,
-    TaoZhuang,
-    CiQing,
-    Jjc,
-    AllThing,
-    GodsBattle,
-}
-
-impl WorldReloadProfile {
-    fn parse(value: &[u8]) -> Option<Self> {
-        const NAMES: &[(&[u8], WorldReloadProfile)] = &[
-            (b"PlayerList", WorldReloadProfile::PlayerList),
-            (b"GoodsList", WorldReloadProfile::GoodsList),
-            (b"MonsterList", WorldReloadProfile::MonsterList),
-            (b"TradeList", WorldReloadProfile::TradeList),
-            (b"SkillList", WorldReloadProfile::SkillList),
-            (
-                b"NewSkillMonsterList",
-                WorldReloadProfile::NewSkillMonsterList,
-            ),
-            (b"GlobeSetup", WorldReloadProfile::GlobeSetup),
-            (b"GameSetup", WorldReloadProfile::GameSetup),
-            (b"StringTable", WorldReloadProfile::StringTable),
-            (b"LogSystem", WorldReloadProfile::LogSystem),
-            (b"GMList", WorldReloadProfile::GmList),
-            (b"ScriptFile", WorldReloadProfile::ScriptFile),
-            (b"RegionList", WorldReloadProfile::RegionList),
-            (b"RegionLevelSetup", WorldReloadProfile::RegionLevelSetup),
-            (b"HitLevelSetup", WorldReloadProfile::HitLevelSetup),
-            (b"Broadcast", WorldReloadProfile::Broadcast),
-            (b"AttackCitySys", WorldReloadProfile::AttackCity),
-            (b"InvalidStr", WorldReloadProfile::InvalidStrings),
-            (
-                b"GeneralVariableList",
-                WorldReloadProfile::GeneralVariableList,
-            ),
-            (b"FactionPara", WorldReloadProfile::FactionParameters),
-            (b"VilWarPara", WorldReloadProfile::VillageWar),
-            (b"FourNationWar", WorldReloadProfile::FourNationWar),
-            (b"CityWarPara", WorldReloadProfile::CityWar),
-            (b"FactionWarPara", WorldReloadProfile::FactionWar),
-            (b"QuestData", WorldReloadProfile::Quest),
-            (b"CountryParam", WorldReloadProfile::CountryParameters),
-            (b"CountryPara", WorldReloadProfile::CountryParameters),
-            (b"IncrementShopList", WorldReloadProfile::IncrementShop),
-            (b"ContributeSetup", WorldReloadProfile::Contribute),
-            (b"PrisonConf", WorldReloadProfile::Prison),
-            (b"TimeToReturn", WorldReloadProfile::TimeToReturn),
-            (b"PreciousBoxConf", WorldReloadProfile::PreciousBox),
-            (b"FairyExpConf", WorldReloadProfile::FairyExp),
-            (b"ChangeBodyConf", WorldReloadProfile::ChangeBody),
-            (b"CountryWar", WorldReloadProfile::CountryWar),
-            (b"BattleFairyExpConfig", WorldReloadProfile::BattleFairyExp),
-            (
-                b"BattleFairyCombineConfig",
-                WorldReloadProfile::BattleFairyCombine,
-            ),
-            (b"SynthesisList", WorldReloadProfile::Synthesis),
-            (b"DaKongXiangQian", WorldReloadProfile::DaKongXiangQian),
-            (b"EquipmentCompose", WorldReloadProfile::EquipmentCompose),
-            (b"GoodsDestroyConf", WorldReloadProfile::GoodsDestroy),
-            (b"HonorElimilate", WorldReloadProfile::HonorEliminate),
-            (b"taozhuang", WorldReloadProfile::TaoZhuang),
-            (b"ciqing", WorldReloadProfile::CiQing),
-            (b"JJcConfig", WorldReloadProfile::Jjc),
-            (b"Allthing", WorldReloadProfile::AllThing),
-            (b"godsBattle", WorldReloadProfile::GodsBattle),
-        ];
-        let value = legacy_c_string_prefix(value);
-        NAMES
-            .iter()
-            .find(|(name, _)| value.eq_ignore_ascii_case(name))
-            .map(|(_, profile)| *profile)
-    }
-}
-
-impl WorldReloadProfileFlags {
-    pub(crate) const fn new(low: u32, high: u32) -> Self {
-        Self {
-            low: AtomicU32::new(low),
-            high: AtomicU32::new(high),
-        }
-    }
-
-    pub(crate) fn snapshot(&self) -> WorldReloadProfileFlagsSnapshot {
-        WorldReloadProfileFlagsSnapshot {
-            low: self.low.load(Ordering::Relaxed),
-            high: self.high.load(Ordering::Relaxed),
-        }
-    }
-
-    pub(crate) fn set_low_bits(&self, mask: u32) -> u32 {
-        let updated = self.low.load(Ordering::Relaxed) | mask;
-        self.low.store(updated, Ordering::Relaxed);
-        updated
-    }
-
-    pub(crate) fn set_high_bits(&self, mask: u32) -> u32 {
-        let updated = self.high.load(Ordering::Relaxed) | mask;
-        self.high.store(updated, Ordering::Relaxed);
-        updated
-    }
-
-    fn has_pending(&self) -> bool {
-        self.low.load(Ordering::Relaxed) != 0 || self.high.load(Ordering::Relaxed) != 0
-    }
-
-    fn contains(&self, half: WorldReloadFlagHalf, mask: u32) -> bool {
-        match half {
-            WorldReloadFlagHalf::Low => self.low.load(Ordering::Relaxed) & mask != 0,
-            WorldReloadFlagHalf::High => self.high.load(Ordering::Relaxed) & mask != 0,
-        }
-    }
-
-    fn consume(&self, action: WorldReloadAction) {
-        match action.half {
-            WorldReloadFlagHalf::Low => {
-                let remaining = self.low.load(Ordering::Relaxed) & !action.mask;
-                self.low.store(remaining, Ordering::Relaxed);
-                if action.zero_high_after_low {
-                    self.high.store(0, Ordering::Relaxed);
-                }
-            }
-            WorldReloadFlagHalf::High => {
-                let remaining = self.high.load(Ordering::Relaxed) & !action.mask;
-                self.high.store(remaining, Ordering::Relaxed);
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadFlagHalf {
-    Low,
-    High,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadConfLogBlock {
-    MissingNetworkServerOwner,
-    MissingWorldNumber,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadConfLogDisposition {
-    SuppressedEmptyProfile,
-    Published {
-        text: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldReloadProfileEvent {
-    pub(crate) half: WorldReloadFlagHalf,
-    pub(crate) mask: u32,
-    pub(crate) reload_profile: &'static [u8],
-    pub(crate) log_profile: &'static [u8],
-    pub(crate) flags_after_clear: WorldReloadProfileFlagsSnapshot,
-    pub(crate) reload_result: i32,
-    pub(crate) log: WorldReloadConfLogDisposition,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldReloadRegionSetupBlock {
-    pub(crate) region_id: i32,
-    pub(crate) source: WorldRegionSetupSerializationBlock,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldReloadProfilesReport {
-    Complete {
-        events: Vec<WorldReloadProfileEvent>,
-        remaining_flags: WorldReloadProfileFlagsSnapshot,
-    },
-    BlockedMissingFact {
-        completed_events: Vec<WorldReloadProfileEvent>,
-        half: WorldReloadFlagHalf,
-        mask: u32,
-        reload_profile: &'static [u8],
-        log_profile: &'static [u8],
-        flags_after_clear: WorldReloadProfileFlagsSnapshot,
-        reload_result: i32,
-        block: WorldReloadConfLogBlock,
-    },
-    BlockedRegionSetup {
-        completed_events: Vec<WorldReloadProfileEvent>,
-        half: WorldReloadFlagHalf,
-        mask: u32,
-        flags_after_clear: WorldReloadProfileFlagsSnapshot,
-        block: WorldReloadRegionSetupBlock,
-    },
-    BlockedReloadOwner {
-        completed_events: Vec<WorldReloadProfileEvent>,
-        half: WorldReloadFlagHalf,
-        mask: u32,
-        reload_profile: &'static [u8],
-        log_profile: &'static [u8],
-        flags_after_clear: WorldReloadProfileFlagsSnapshot,
-        block: WorldReloadBlock,
-    },
-}
-
-#[derive(Clone, Copy)]
-enum WorldReloadActionKind {
-    Reload,
-    ReloadAllRegions,
-}
-
-#[derive(Clone, Copy)]
-struct WorldReloadAction {
-    half: WorldReloadFlagHalf,
-    mask: u32,
-    zero_high_after_low: bool,
-    reload_profile: &'static [u8],
-    log_profile: &'static [u8],
-    first_option: bool,
-    second_option: bool,
-    kind: WorldReloadActionKind,
-}
-
-impl WorldReloadAction {
-    const fn reload_low(
-        mask: u32,
-        profile: &'static [u8],
-        first_option: bool,
-        zero_high_after_low: bool,
-    ) -> Self {
-        Self {
-            half: WorldReloadFlagHalf::Low,
-            mask,
-            zero_high_after_low,
-            reload_profile: profile,
-            log_profile: profile,
-            first_option,
-            second_option: true,
-            kind: WorldReloadActionKind::Reload,
-        }
-    }
-
-    const fn reload_high(mask: u32, profile: &'static [u8]) -> Self {
-        Self {
-            half: WorldReloadFlagHalf::High,
-            mask,
-            zero_high_after_low: false,
-            reload_profile: profile,
-            log_profile: profile,
-            first_option: true,
-            second_option: true,
-            kind: WorldReloadActionKind::Reload,
-        }
-    }
-
-    const fn reload_high_with_log(
-        mask: u32,
-        reload_profile: &'static [u8],
-        log_profile: &'static [u8],
-    ) -> Self {
-        Self {
-            half: WorldReloadFlagHalf::High,
-            mask,
-            zero_high_after_low: false,
-            reload_profile,
-            log_profile,
-            first_option: true,
-            second_option: true,
-            kind: WorldReloadActionKind::Reload,
-        }
-    }
-
-    const fn reload_all_regions(mask: u32) -> Self {
-        Self {
-            half: WorldReloadFlagHalf::Low,
-            mask,
-            zero_high_after_low: true,
-            reload_profile: b"AllRegion",
-            log_profile: b"AllRegion",
-            first_option: false,
-            second_option: false,
-            kind: WorldReloadActionKind::ReloadAllRegions,
-        }
-    }
-}
-
-const WORLD_RELOAD_ACTIONS: &[WorldReloadAction] = &[
-    WorldReloadAction::reload_low(0x4000_0000, b"StringTable", true, true),
-    WorldReloadAction::reload_low(0x0000_0001, b"LogSystem", true, true),
-    WorldReloadAction::reload_low(0x0000_0002, b"GMList", true, true),
-    WorldReloadAction::reload_low(0x0000_0004, b"Broadcast", false, true),
-    WorldReloadAction::reload_low(0x0000_0008, b"VilWarPara", false, true),
-    WorldReloadAction::reload_low(0x0000_0010, b"CityWarPara", false, true),
-    WorldReloadAction::reload_low(0x0000_0020, b"IncrementShopList", true, true),
-    WorldReloadAction::reload_low(0x0000_0040, b"GameSetup", true, true),
-    WorldReloadAction::reload_low(0x0000_0080, b"InvalidStr", true, true),
-    WorldReloadAction::reload_low(0x0000_0100, b"PlayerList", true, true),
-    WorldReloadAction::reload_low(0x0000_0200, b"GoodsList", true, true),
-    WorldReloadAction::reload_low(0x0000_0400, b"MonsterList", true, true),
-    WorldReloadAction::reload_low(0x0000_0800, b"TradeList", true, true),
-    WorldReloadAction::reload_low(0x0000_1000, b"SkillList", true, true),
-    WorldReloadAction::reload_low(0x0000_2000, b"GlobeSetup", true, true),
-    WorldReloadAction::reload_low(0x0000_4000, b"ScriptFile", true, true),
-    WorldReloadAction::reload_high(0x0000_0001, b"NewSkillMonsterList"),
-    WorldReloadAction::reload_low(0x0001_0000, b"GeneralVariableList", false, true),
-    WorldReloadAction::reload_low(0x0002_0000, b"RegionList", true, true),
-    WorldReloadAction::reload_low(0x0004_0000, b"RegionLevelSetup", true, true),
-    WorldReloadAction::reload_all_regions(0x0010_0000),
-    WorldReloadAction::reload_low(0x0020_0000, b"FactionPara", false, true),
-    WorldReloadAction::reload_low(0x0040_0000, b"FactionWarPara", false, true),
-    WorldReloadAction::reload_low(0x0080_0000, b"QuestData", false, true),
-    WorldReloadAction::reload_low(0x0100_0000, b"ContributeSetup", true, true),
-    WorldReloadAction::reload_low(0x0200_0000, b"PrisonConf", true, true),
-    WorldReloadAction::reload_low(0x0400_0000, b"TimeToReturn", false, true),
-    WorldReloadAction::reload_low(0x0800_0000, b"PreciousBoxConf", true, true),
-    WorldReloadAction::reload_low(0x2000_0000, b"FairyExpConf", true, true),
-    WorldReloadAction::reload_low(0x8000_0000, b"ChangeBodyConf", true, false),
-    WorldReloadAction::reload_low(0x1000_0000, b"CountryWar", false, true),
-    WorldReloadAction::reload_high(0x0000_0020, b"FourNationWar"),
-    WorldReloadAction::reload_high(0x0000_0400, b"BattleFairyExpConfig"),
-    WorldReloadAction::reload_high(0x0000_0800, b"BattleFairyCombineConfig"),
-    WorldReloadAction::reload_low(0x5000_0000, b"SynthesisList", true, false),
-    WorldReloadAction::reload_high(0x0000_0080, b"EquipmentCompose"),
-    WorldReloadAction::reload_high(0x0000_1000, b"HonorElimilate"),
-    WorldReloadAction::reload_high(0x0000_2000, b"ciqing"),
-    WorldReloadAction::reload_high_with_log(0x0001_0000, b"godsBattle", b"godsbattle"),
-    WorldReloadAction::reload_high(0x0000_8000, b"taozhuang"),
-    WorldReloadAction::reload_high(0x0000_4000, b"JJcConfig"),
-    WorldReloadAction::reload_low(0x0000_0100, b"Allthing", true, false),
-];
-
-#[derive(Debug, Default)]
-pub(crate) struct WorldPlayerRanksRequestState {
-    requested: AtomicBool,
-}
-
-impl WorldPlayerRanksRequestState {
-    pub(crate) fn request(&self) {
-        self.requested.store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn is_requested(&self) -> bool {
-        self.requested.load(Ordering::Relaxed)
-    }
-
-    fn take_if_requested(&self) -> bool {
-        if !self.requested.load(Ordering::Relaxed) {
-            return false;
-        }
-        self.requested.store(false, Ordering::Relaxed);
-        true
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
-    NotRequested,
-    Updated {
-        stat: PlayerRanksStatRunReport,
-        publication: PlayerRanksGameServerUpdate,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldHonorRanksMaintenanceDisposition {
-    Disabled,
-    AlreadyCurrent {
-        current_day: u32,
-        sort_day: u32,
-    },
-    Updated {
-        current_day: u32,
-        previous_sort_day: u32,
-        started_at_ms: u32,
-        finished_at_ms: u32,
-        elapsed_ms: u32,
-        start_log: AddLogTextDisposition,
-        complete_log: AddLogTextDisposition,
-        rollover: HonorRanksNewDayReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldHonorRanksMaintenanceBlock {
-    pub(crate) current_day: u32,
-    pub(crate) previous_sort_day: u32,
-    pub(crate) started_at_ms: u32,
-    pub(crate) start_log: AddLogTextDisposition,
-    pub(crate) source: HonorRanksNewDayBlock,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldAuctionBangMaintenanceDisposition {
-    AlreadyCurrent {
-        current_month_day: i32,
-        old_month_day: i32,
-    },
-    Updated {
-        current_month_day: i32,
-        previous_old_month_day: i32,
-        update_succeeded: bool,
-        outcome: AuctionBangUpdateOutcome,
-        start_log: AddLogTextDisposition,
-        result_log: AddLogTextDisposition,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldMainLoopMaintenanceBlock {
-    PlayerRanksStat(PlayerRanksStatRunBlock),
-    PlayerRanksSerialization(PlayerRanksSerializationBlock),
-    HonorRanks(WorldHonorRanksMaintenanceBlock),
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldMainLoopMaintenanceReport {
-    pub(crate) player_ranks: WorldPlayerRanksMaintenanceDisposition,
-    pub(crate) honor_ranks: WorldHonorRanksMaintenanceDisposition,
-    pub(crate) auction_bang: WorldAuctionBangMaintenanceDisposition,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldMainLoopLargessGateReport {
-    BlockedMissingFact {
-        field: &'static str,
-    },
-    Disabled {
-        load_interval_ms: u32,
-        pass_count: u32,
-    },
-    Waiting {
-        load_interval_ms: u32,
-        pass_count: u32,
-        elapsed_ms: u32,
-    },
-    StartWorkerRequested {
-        load_interval_ms: u32,
-        pass_count: u32,
-        elapsed_ms: u32,
-        requested_at_ms: u32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopProfileSnapshot {
-    pub(crate) ai_calls: u32,
-    pub(crate) ai_time_ms: u32,
-    pub(crate) refresh_text_time_ms: u32,
-    pub(crate) process_message_time_ms: u32,
-    pub(crate) login_server_message_time_ms: u32,
-    pub(crate) game_server_message_time_ms: u32,
-    pub(crate) net_session_time_ms: u32,
-    pub(crate) faction_war_time_ms: u32,
-    pub(crate) timer_time_ms: u32,
-    pub(crate) process_player_data_queue_time_ms: u32,
-    pub(crate) session_factory_time_ms: u32,
-    pub(crate) save_point_time_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMainLoopProfileReport {
-    pub(crate) elapsed_since_last_publish_ms: u32,
-    pub(crate) snapshot: WorldMainLoopProfileSnapshot,
-    pub(crate) log: AddLogTextDisposition,
-}
-
-pub(crate) fn initialize_main_loop_profile_if_needed<GetTick>(
-    initialization: &mut WorldMainLoopInitializationState,
-    profile: &mut WorldMainLoopProfileState,
-    mut get_tick: GetTick,
-) -> Option<WorldMainLoopProfileInitialization>
-where
-    GetTick: FnMut() -> u32,
-{
-    if initialization.mask & 1 != 0 {
-        return None;
-    }
-
-    let previous_mask = initialization.mask;
-    initialization.mask |= 1;
-    let initial_report_tick_ms = get_tick();
-    profile.last_published_at_ms = initial_report_tick_ms;
-    Some(WorldMainLoopProfileInitialization {
-        previous_mask,
-        initialized_mask: initialization.mask,
-        initial_report_tick_ms,
-    })
-}
-
-pub(crate) fn initialize_main_loop_save_if_needed<GetTick>(
-    initialization: &mut WorldMainLoopInitializationState,
-    save: &mut WorldRunSaveTriggerState,
-    mut get_tick: GetTick,
-) -> Option<WorldMainLoopSaveInitialization>
-where
-    GetTick: FnMut() -> u32,
-{
-    if initialization.mask & 2 != 0 {
-        return None;
-    }
-
-    let previous_mask = initialization.mask;
-    initialization.mask |= 2;
-    let initial_save_tick_ms = get_tick();
-    save.last_save_point_time_ms = initial_save_tick_ms;
-    Some(WorldMainLoopSaveInitialization {
-        previous_mask,
-        initialized_mask: initialization.mask,
-        initial_save_tick_ms,
-    })
-}
-
-pub(crate) fn initialize_main_loop_refresh_if_needed(
-    initialization: &mut WorldMainLoopInitializationState,
-    clocks: &mut WorldMainLoopClockState,
-) -> Option<WorldMainLoopRefreshInitialization> {
-    if initialization.mask & 4 != 0 {
-        return None;
-    }
-
-    let previous_mask = initialization.mask;
-    initialization.mask |= 4;
-    let copied_current_tick_ms = clocks.current_tick_ms;
-    clocks.last_refresh_tick_ms = copied_current_tick_ms;
-    Some(WorldMainLoopRefreshInitialization {
-        previous_mask,
-        initialized_mask: initialization.mask,
-        copied_current_tick_ms,
-    })
-}
-
-pub(crate) fn update_main_loop_current_tick<GetTick>(
-    clocks: &mut WorldMainLoopClockState,
-    mut get_tick: GetTick,
-) -> u32
-where
-    GetTick: FnMut() -> u32,
-{
-    let current_tick_ms = get_tick();
-    clocks.current_tick_ms = current_tick_ms;
-    current_tick_ms
-}
-
-pub(crate) fn start_main_loop_profile_stage<GetTick>(
-    clocks: &mut WorldMainLoopClockState,
-    mut get_tick: GetTick,
-) -> u32
-where
-    GetTick: FnMut() -> u32,
-{
-    let started_at_ms = get_tick();
-    clocks.stage_started_at_ms = started_at_ms;
-    started_at_ms
-}
-
-pub(crate) fn initialize_main_loop_tail_clocks<GetTick>(
-    initialization: &mut WorldMainLoopInitializationState,
-    clocks: &mut WorldMainLoopTailClockState,
-    mut get_tick: GetTick,
-) -> WorldMainLoopTailClockInitialization
-where
-    GetTick: FnMut() -> u32,
-{
-    let previous_mask = initialization.mask;
-    let initial_current_tick_ms = if initialization.mask & 0x10 == 0 {
-        initialization.mask |= 0x10;
-        let tick = get_tick();
-        clocks.current_tick_ms = tick;
-        Some(tick)
-    } else {
-        None
-    };
-    let initial_pacing_deadline_ms = if initialization.mask & 0x20 == 0 {
-        initialization.mask |= 0x20;
-        clocks.pacing_deadline_ms = clocks.current_tick_ms;
-        Some(clocks.pacing_deadline_ms)
-    } else {
-        None
-    };
-    let initial_minute_started_at_ms = if initialization.mask & 0x40 == 0 {
-        initialization.mask |= 0x40;
-        let tick = get_tick();
-        clocks.minute_started_at_ms = tick;
-        Some(tick)
-    } else {
-        None
-    };
-    WorldMainLoopTailClockInitialization {
-        previous_mask,
-        initialized_mask: initialization.mask,
-        initial_current_tick_ms,
-        initial_pacing_deadline_ms,
-        initial_minute_started_at_ms,
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldProcessMessageStageReport {
-    Blocked {
-        started_at_ms: u32,
-        error: WorldProcessMessageError,
-    },
-    Complete {
-        started_at_ms: u32,
-        outcome: WorldProcessMessageOutcome,
-        finished_at_ms: u32,
-        elapsed_ms: u32,
-        accumulated_time_ms: u32,
-        next_stage_started_at_ms: u32,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldProcessMessageError {
-    MissingNetworkServerOwner,
-    MissingCountryLimit(&'static str),
-    ServerMessage(WorldServerMessageError),
-}
-
-impl fmt::Display for WorldProcessMessageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingNetworkServerOwner => formatter
-                .write_str("World ProcessMessage не может прочитать обязательный server-owner"),
-            Self::MissingCountryLimit(parameter) => write!(
-                formatter,
-                "World ProcessMessage не получил country-параметр {parameter}"
-            ),
-            Self::ServerMessage(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for WorldProcessMessageError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::MissingNetworkServerOwner | Self::MissingCountryLimit(_) => None,
-            Self::ServerMessage(error) => Some(error),
-        }
-    }
-}
-
-fn current_country_save_limits(
-    parameters: &CCountryParam,
-) -> Result<CountryKingSaveLimits, WorldProcessMessageError> {
-    Ok(CountryKingSaveLimits {
-        control_point: parameters
-            .max_king_control_point()
-            .ok_or(WorldProcessMessageError::MissingCountryLimit(
-                "_max_king_control_point",
-            ))?,
-        material_point: parameters
-            .max_king_material_point()
-            .ok_or(WorldProcessMessageError::MissingCountryLimit(
-                "_max_king_material_point",
-            ))?,
-        war_point: parameters
-            .max_king_war_point()
-            .ok_or(WorldProcessMessageError::MissingCountryLimit(
-                "_max_king_war_point",
-            ))?,
-    })
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct WorldSetup {
-    world_number: Option<u32>,
-    name: Vec<u8>,
-    login_ip: Vec<u8>,
-    login_port: Option<u32>,
-    listen_port: Option<u32>,
-    sql_connection_type: Vec<u8>,
-    sql_server_ip: Vec<u8>,
-    sql_user_name: Vec<u8>,
-    sql_password: Vec<u8>,
-    database_name: Vec<u8>,
-    check_net: Option<bool>,
-    maximum_byte_count: Option<u32>,
-    maximum_message_length: Option<u32>,
-    ban_ip_time_ms: Option<u32>,
-    check_message_content: Option<bool>,
-    maximum_connections: Option<i32>,
-    maximum_io_sends: Option<i32>,
-    maximum_client_send_buffer: Option<i32>,
-    refresh_info_time_ms: u32,
-    save_info_time_ms: u32,
-    release_login_player_time_ms: Option<u32>,
-    use_log_system: bool,
-    log_system_provider: Vec<u8>,
-    log_system_server: Vec<u8>,
-    log_system_database: Vec<u8>,
-    log_system_user: Vec<u8>,
-    log_system_password: Vec<u8>,
-    cost_database_provider: Vec<u8>,
-    cost_database_ip: Vec<u8>,
-    cost_database_name: Vec<u8>,
-    cost_database_user: Vec<u8>,
-    cost_database_password: Vec<u8>,
-    load_largess_time_ms: Option<u32>,
-    login_cost_database_provider: Vec<u8>,
-    login_cost_database_ip: Vec<u8>,
-    login_cost_database_name: Vec<u8>,
-    login_cost_database_user: Vec<u8>,
-    login_cost_database_password: Vec<u8>,
-    player_load_thread_count: Option<u32>,
-    language_package: Vec<u8>,
-    use_old_save_largess_way: bool,
-}
-
-impl Default for WorldSetup {
-    fn default() -> Self {
-        Self {
-            world_number: None,
-            name: Vec::new(),
-            login_ip: Vec::new(),
-            login_port: None,
-            listen_port: None,
-            sql_connection_type: Vec::new(),
-            sql_server_ip: Vec::new(),
-            sql_user_name: Vec::new(),
-            sql_password: Vec::new(),
-            database_name: Vec::new(),
-            check_net: None,
-            maximum_byte_count: None,
-            maximum_message_length: None,
-            ban_ip_time_ms: None,
-            check_message_content: None,
-            maximum_connections: None,
-            maximum_io_sends: None,
-            maximum_client_send_buffer: None,
-            refresh_info_time_ms: 1_000,
-            save_info_time_ms: 60_000,
-            release_login_player_time_ms: None,
-            use_log_system: false,
-            log_system_provider: Vec::new(),
-            log_system_server: Vec::new(),
-            log_system_database: Vec::new(),
-            log_system_user: Vec::new(),
-            log_system_password: Vec::new(),
-            cost_database_provider: Vec::new(),
-            cost_database_ip: Vec::new(),
-            cost_database_name: Vec::new(),
-            cost_database_user: Vec::new(),
-            cost_database_password: Vec::new(),
-            load_largess_time_ms: None,
-            login_cost_database_provider: Vec::new(),
-            login_cost_database_ip: Vec::new(),
-            login_cost_database_name: Vec::new(),
-            login_cost_database_user: Vec::new(),
-            login_cost_database_password: Vec::new(),
-            player_load_thread_count: None,
-            language_package: Vec::new(),
-            use_old_save_largess_way: true,
-        }
-    }
-}
-
-impl WorldSetup {
-    #[allow(
-        clippy::field_reassign_with_default,
-        reason = "две стадии буквально сохраняют tagSetup::tagSetup и последующие записи CGame::CGame"
-    )]
-    fn for_game() -> Self {
-        let mut setup = Self::default();
-        setup.name = b"WorldServer".to_vec();
-        setup.login_ip = b"127.0.0.1".to_vec();
-        setup.login_port = Some(2_345);
-        setup.listen_port = Some(8_100);
-        setup
-    }
-
-    fn network_config_after_host(
-        &self,
-    ) -> Result<WorldNetworkConfig, WorldNetworkInitializationError> {
-        Ok(WorldNetworkConfig {
- // Порядок чтения повторяет локальные значения.
-            ban_ip_time_ms: self.ban_ip_time_ms.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("dwBanIPTime"),
-            )?,
-            maximum_client_send_buffer: self.maximum_client_send_buffer.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("lMaxClientSendBuf"),
-            )?,
-            maximum_message_length: self.maximum_message_length.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("dwMaxMsgLen"),
-            )?,
-            maximum_byte_count: self.maximum_byte_count.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("dwMaxByteNum"),
-            )?,
-            check_message_content: self.check_message_content.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("bCheckMsgCon"),
-            )?,
-            maximum_connections: self.maximum_connections.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("lMaxConnectNum"),
-            )?,
-            maximum_io_sends: self.maximum_io_sends.ok_or(
-                WorldNetworkInitializationError::MissingSetupField("lMaxIOSendNum"),
-            )?,
-            check_net: self
-                .check_net
-                .ok_or(WorldNetworkInitializationError::MissingSetupField(
-                    "bCheckNet",
-                ))?,
-        })
-    }
-
-    fn parse_plain(&mut self, bytes: &[u8]) -> (usize, Option<usize>) {
-        let mut tokens = SetupTokens::new(bytes);
-
-        macro_rules! read_value {
-            ($field:ident, $parser:expr) => {{
-                let Some(raw) = tokens.next_value() else {
-                    return tokens.outcome();
-                };
-                let Some(value) = $parser(raw) else {
- // Для лексически неверного числового или логического token
- // не определена мутация destination старым MSVC iostream.
- // Найденный setup содержит только корректные такие значения.
-                    return tokens.outcome();
-                };
-                self.$field = value;
-                tokens.parsed();
-            }};
-        }
-        macro_rules! read_number {
-            ($field:ident, $type:ty) => {
-                read_value!($field, |raw| parse_ascii::<$type>(raw).map(Some));
-            };
-        }
-        macro_rules! read_number_with_default {
-            ($field:ident, $type:ty) => {
-                read_value!($field, |raw| parse_ascii::<$type>(raw));
-            };
-        }
-        macro_rules! read_bool {
-            ($field:ident) => {
-                read_value!($field, parse_legacy_bool);
-            };
-        }
-        macro_rules! read_optional_bool {
-            ($field:ident) => {
-                read_value!($field, |raw| parse_legacy_bool(raw).map(Some));
-            };
-        }
-        macro_rules! read_bytes {
-            ($field:ident) => {
-                read_value!($field, |raw: &[u8]| Some(raw.to_vec()));
-            };
-        }
-
-        read_number!(world_number, u32);
-        read_bytes!(name);
-        read_bytes!(login_ip);
-        read_number!(login_port, u32);
-        read_number!(listen_port, u32);
-        read_bytes!(sql_connection_type);
-        read_bytes!(sql_server_ip);
-        read_bytes!(sql_user_name);
-        read_bytes!(sql_password);
-        read_bytes!(database_name);
-        read_optional_bool!(check_net);
-        read_number!(maximum_byte_count, u32);
-        read_number!(maximum_message_length, u32);
-        read_number!(ban_ip_time_ms, u32);
-        read_optional_bool!(check_message_content);
-        read_number!(maximum_connections, i32);
-        read_number!(maximum_io_sends, i32);
-        read_number!(maximum_client_send_buffer, i32);
-        read_number_with_default!(refresh_info_time_ms, u32);
-        read_number_with_default!(save_info_time_ms, u32);
-        read_number!(release_login_player_time_ms, u32);
-        read_bool!(use_log_system);
-        read_bytes!(log_system_provider);
-        read_bytes!(log_system_server);
-        read_bytes!(log_system_database);
-        read_bytes!(log_system_user);
-        read_bytes!(log_system_password);
-        read_bytes!(cost_database_provider);
-        read_bytes!(cost_database_ip);
-        read_bytes!(cost_database_name);
-        read_bytes!(cost_database_user);
-        read_bytes!(cost_database_password);
-        read_number!(load_largess_time_ms, u32);
-        read_bytes!(login_cost_database_provider);
-        read_bytes!(login_cost_database_ip);
-        read_bytes!(login_cost_database_name);
-        read_bytes!(login_cost_database_user);
-        read_bytes!(login_cost_database_password);
-        read_number!(player_load_thread_count, u32);
-        read_bytes!(language_package);
-        read_bool!(use_old_save_largess_way);
-
-        tokens.outcome()
-    }
-
-    fn parse_encoded(&mut self, bytes: &[u8]) -> (usize, Option<usize>) {
-        let mut tokens = SetupTokens::new(bytes);
-
-        macro_rules! read_value {
-            ($field:ident, $parser:expr) => {{
-                let Some(raw) = tokens.next_value() else {
-                    return tokens.outcome();
-                };
-                let Some(value) = $parser(raw) else {
- // Некорректный числовой или логический token не встречается
- // в найденном oracle; MSVC destination не угадываем.
-                    return tokens.outcome();
-                };
-                self.$field = value;
-                tokens.parsed();
-            }};
-        }
-        macro_rules! read_number {
-            ($field:ident, $type:ty) => {
-                read_value!($field, |raw| parse_ascii::<$type>(raw).map(Some));
-            };
-        }
-        macro_rules! read_number_with_default {
-            ($field:ident, $type:ty) => {
-                read_value!($field, |raw| parse_ascii::<$type>(raw));
-            };
-        }
-        macro_rules! read_bool {
-            ($field:ident) => {
-                read_value!($field, parse_legacy_bool);
-            };
-        }
-        macro_rules! read_optional_bool {
-            ($field:ident) => {
-                read_value!($field, |raw| parse_legacy_bool(raw).map(Some));
-            };
-        }
-        macro_rules! read_bytes {
-            ($field:ident) => {
-                read_value!($field, |raw: &[u8]| Some(raw.to_vec()));
-            };
-        }
-
-        read_number!(world_number, u32);
-        read_bytes!(name);
-        read_bytes!(login_ip);
-        read_number!(login_port, u32);
-        read_number!(listen_port, u32);
-        read_bytes!(sql_connection_type);
-        read_bytes!(sql_server_ip);
-        read_bytes!(sql_user_name);
-        read_bytes!(sql_password);
-        read_bytes!(database_name);
-        read_optional_bool!(check_net);
-        read_number!(maximum_byte_count, u32);
-        read_number!(maximum_message_length, u32);
-        read_number!(ban_ip_time_ms, u32);
-        read_optional_bool!(check_message_content);
-        read_number!(maximum_connections, i32);
-        read_number!(maximum_io_sends, i32);
-        read_number!(maximum_client_send_buffer, i32);
-        read_number_with_default!(refresh_info_time_ms, u32);
-        read_number_with_default!(save_info_time_ms, u32);
-        read_number!(release_login_player_time_ms, u32);
-        read_bool!(use_log_system);
-
- // Точный старый DAT-порядок: provider не назначается.
-        read_bytes!(log_system_server);
-        read_bytes!(log_system_database);
-        read_bytes!(log_system_user);
-        read_bytes!(log_system_password);
-        read_bytes!(cost_database_provider);
-        read_bytes!(cost_database_ip);
-        read_bytes!(cost_database_name);
-        read_bytes!(cost_database_user);
-        read_bytes!(cost_database_password);
-        read_bytes!(name);
-        read_number!(load_largess_time_ms, u32);
-        read_bytes!(login_cost_database_provider);
-        read_bytes!(login_cost_database_ip);
-        read_bytes!(login_cost_database_name);
-        read_bytes!(login_cost_database_user);
-        read_bytes!(login_cost_database_password);
-        read_number!(player_load_thread_count, u32);
-        read_bytes!(language_package);
-        read_bool!(use_old_save_largess_way);
-
-        tokens.outcome()
-    }
-}
-
-fn parse_ascii<T: std::str::FromStr>(raw: &[u8]) -> Option<T> {
-    std::str::from_utf8(raw).ok()?.parse().ok()
-}
-
-fn parse_legacy_bool(raw: &[u8]) -> Option<bool> {
-    match raw {
-        b"0" => Some(false),
-        b"1" => Some(true),
-        _ => None,
-    }
-}
-
-struct SetupTokens<'a> {
-    tokens: Vec<&'a [u8]>,
-    next: usize,
-    attempted_pairs: usize,
-    parsed_pairs: usize,
-}
-
-impl<'a> SetupTokens<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self {
-            tokens: bytes
-                .split(|byte| byte.is_ascii_whitespace())
-                .filter(|token| !token.is_empty())
-                .collect(),
-            next: 0,
-            attempted_pairs: 0,
-            parsed_pairs: 0,
-        }
-    }
-
-    fn next_value(&mut self) -> Option<&'a [u8]> {
-        self.attempted_pairs += 1;
-        let _label = self.tokens.get(self.next)?;
-        let value = self.tokens.get(self.next + 1).copied()?;
-        self.next += 2;
-        Some(value)
-    }
-
-    fn parsed(&mut self) {
-        self.parsed_pairs += 1;
-    }
-
-    const fn outcome(&self) -> (usize, Option<usize>) {
-        let stopped_at_pair = if self.parsed_pairs < self.attempted_pairs {
-            Some(self.attempted_pairs)
-        } else {
-            None
-        };
-        (self.parsed_pairs, stopped_at_pair)
-    }
-}
-
-struct WorldServerSetupTokens<'a> {
-    tokens: Vec<&'a [u8]>,
-    next: usize,
-    failed: bool,
-}
-
-impl<'a> WorldServerSetupTokens<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self {
-            tokens: bytes
-                .split(|byte| byte.is_ascii_whitespace())
-                .filter(|token| !token.is_empty())
-                .collect(),
-            next: 0,
-            failed: false,
-        }
-    }
-
-    fn seek_to(&mut self, expected: &[u8]) -> bool {
-        if self.failed {
-            return false;
-        }
-        let remaining = &self.tokens[self.next..];
-        let mut iterator = remaining.iter().copied();
-        let found = read_to(&mut iterator, expected);
-        let consumed = remaining.len() - iterator.len();
- // Общий ReadTo возвращал false на успешно прочитанном `<end>`, не
- // переводя сам formatted stream в fail-state.
-        let stopped_at_end =
-            !found && consumed != 0 && self.tokens[self.next + consumed - 1] == b"<end>";
-        self.next += consumed;
-        if !found && !stopped_at_end {
-            self.failed = true;
-        }
-        found
-    }
-
-    fn next_bytes(&mut self) -> Option<&'a [u8]> {
-        if self.failed {
-            return None;
-        }
-        let Some(token) = self.tokens.get(self.next).copied() else {
-            self.failed = true;
-            return None;
-        };
-        self.next += 1;
-        Some(token)
-    }
-
-    fn next_ascii<T: std::str::FromStr>(&mut self) -> Option<T> {
-        let raw = self.next_bytes()?;
-        let parsed = parse_ascii(raw);
-        if parsed.is_none() {
-            self.failed = true;
-        }
-        parsed
-    }
-
-    const fn failed(&self) -> bool {
-        self.failed
-    }
-}
-
-fn resolve_world_runtime_file(
-    runtime_directory: &Path,
-    requested_name: &str,
-) -> Result<PathBuf, io::Error> {
-    let requested_path = runtime_directory.join(requested_name);
-    match fs::metadata(&requested_path) {
-        Ok(metadata) if metadata.is_file() => return Ok(requested_path),
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-
-    for entry in fs::read_dir(runtime_directory)? {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if name.eq_ignore_ascii_case(requested_name) && entry.file_type()?.is_file() {
-            return Ok(entry.path());
-        }
-    }
-    Ok(requested_path)
-}
+// `tagSaveCountry`-снимок country-параметров (`current_country_save_limits`)
+// перенесён в Realm `app/world_reload_profiles` вместе со stage-типом его
+// ошибки (волна C5-A); здесь реэкспорт для process-message стадии.
+pub(crate) use nebokrai_realm::app::world_reload_profiles::current_country_save_limits;
+
+// Конфигурация `tagSetup` WorldServer и позиционный парсинг plain/encoded
+// setup перенесены в Realm `app/world_setup` волной C5-A; токен-обёртка чтения
+// serverSetup.ini и разрешение runtime-файла живут там же, здесь реэкспорт
+// для владельца игры и loader-стадий пакета.
+pub(crate) use nebokrai_realm::app::world_setup::{
+    WorldServerSetupTokens, WorldSetup, resolve_world_runtime_file,
+};
 
 pub(crate) use nebokrai_realm::app::worldserver::WorldPingGameServerInfo;
 
@@ -4350,143 +1598,23 @@ enum WorldRegionMaterialization {
     MissingSubtype,
 }
 
-pub(crate) struct WorldRegionAssignment {
-    region: Option<WorldRegionOwner>,
-    game_server_index: u32,
-    region_type: Option<i32>,
-}
-
-/// Действующая AI-проекция исходного `CGame::tagSysBroadcast`.
-///
-/// Поля идут по смыслу struct-layout `+0x04..+0x40`; `_login_type` AI не читает,
-/// а Rust-layout не выдаётся за старый 68-байтовый Windows ABI.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldSystemBroadcast {
-    import_level: i32,
-    region_id: i32,
-    min_time_seconds: u32,
-    max_time_seconds: u32,
-    odds: u32,
-    text_color: u32,
-    back_color: u32,
-    message: Vec<u8>,
-    interval_seconds: u32,
-    last_notify_time_seconds: u32,
-}
+// Записи таблиц состояния World (materialized-регион, системная рассылка и
+// её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты
+// и organizing player-контексты) перенесены в Realm `app/world_hub_entries`
+// волной C5-A; здесь реэкспорт для владельца таблиц и стадий хода.
+pub(crate) use nebokrai_realm::app::world_hub_entries::{
+    WorldAuctionSellerMoney, WorldDetachedFactionInfoContext,
+    WorldFactionPlayerOrganizingContext, WorldGameAiReport, WorldGameServerEntry,
+    WorldLoginPlayerEntry, WorldOriginGoodsBlock, WorldOriginGoodsReport,
+    WorldPlayerFactionInfoContext, WorldPlayerOrganizingContext, WorldRegionAssignment,
+    WorldSystemBroadcast, WorldSystemBroadcastDisposition, WorldSystemBroadcastTarget,
+    truncate_legacy_money, truncate_scaled_legacy_money,
+};
 
 const INITIAL_GOODS_LINK_PLACEHOLDERS: usize = 500;
 const LEGACY_GOODS_LINK_MAX_SIZE: usize = 0x0CCC_CCCC;
 static NEXT_GOODS_LINK_INDEX: AtomicU32 = AtomicU32::new(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldAuctionSellerMoney {
-    pub(crate) fee: i32,
-    pub(crate) seller_money_after_fee: i32,
-}
-
-/// Точно отбрасывает дробную часть произведения signed `long` на один `f32`.
-///
-/// EXE оставляет произведение в 80-битном x87 до `_ftol2`. Разложение IEEE-754
-/// в целую мантиссу и степень сохраняет этот результат без промежуточного
-/// округления Rust `f32`; только нештатный overflow/NaN получает определённое
-/// насыщение вместо неопределённого C++ float-to-long cast.
-fn truncate_scaled_legacy_money(amount: i32, factor: f32) -> i32 {
-    let bits = factor.to_bits();
-    let exponent = (bits >> 23) & 0xFF;
-    let fraction = bits & 0x007F_FFFF;
-    if exponent == 0xFF {
-        if fraction != 0 || amount == 0 {
-            return 0;
-        }
-        return if (amount < 0) ^ (bits >> 31 != 0) {
-            i32::MIN
-        } else {
-            i32::MAX
-        };
-    }
-
-    let (mantissa, binary_exponent) = if exponent == 0 {
-        (u128::from(fraction), -149)
-    } else {
-        (
-            u128::from((1 << 23) | fraction),
-            exponent as i32 - 127 - 23,
-        )
-    };
-    let magnitude = u128::from(amount.unsigned_abs()) * mantissa;
-    let magnitude = if binary_exponent >= 0 {
-        let shift = binary_exponent as u32;
-        if shift >= u128::BITS || magnitude > (u128::MAX >> shift) {
-            u128::MAX
-        } else {
-            magnitude << shift
-        }
-    } else {
-        magnitude
-            .checked_shr(binary_exponent.unsigned_abs())
-            .unwrap_or(0)
-    };
-    let negative = (amount < 0) ^ (bits >> 31 != 0);
-    if negative {
-        if magnitude >= 0x8000_0000 {
-            i32::MIN
-        } else {
-            -(magnitude as i32)
-        }
-    } else {
-        magnitude.min(i32::MAX as u128) as i32
-    }
-}
-
-fn truncate_legacy_money(value: f64) -> i32 {
-    if value.is_nan() {
-        0
-    } else if value >= f64::from(i32::MAX) {
-        i32::MAX
-    } else if value <= f64::from(i32::MIN) {
-        i32::MIN
-    } else {
-        value.trunc() as i32
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldSystemBroadcastTarget {
-    All {
-        delivery: Result<i32, SendMessageError>,
-    },
-    Region {
-        region_id: i32,
-        game_server_index: Option<u32>,
-        delivery: Option<Result<i32, SendMessageError>>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldSystemBroadcastDisposition {
-    Waiting {
-        elapsed_seconds: u32,
-        interval_seconds: u32,
-    },
-    OddsMissed {
-        roll: i32,
-        odds: u32,
-    },
-    Broadcast {
-        roll: i32,
-        target: WorldSystemBroadcastTarget,
-        assigned_last_notify_time_seconds: u32,
-        assigned_interval_seconds: u32,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameAiReport {
-    pub(crate) region_ids_run: Vec<i32>,
-    pub(crate) broadcast_tick_ms: u32,
-    pub(crate) broadcasts: Vec<WorldSystemBroadcastDisposition>,
-    pub(crate) legacy_result: i32,
-}
 
 pub(crate) use nebokrai_realm::app::gmmessage::{WorldNamedRegionLookup, WorldNamedRegionMatch, WorldRegionIdRouteScan, WorldRegionIdRoute};
 pub(crate) use nebokrai_realm::app::world_game_view::WorldRegionNameLookup;
@@ -4512,18 +1640,6 @@ pub(crate) enum WorldOwnedCityRefreshOutcome {
 
 pub(crate) use nebokrai_realm::app::worldserver::WorldRegionParamDecodeOutcome;
 
-/// Минимальная действующая часть исходного `CGame::tagGameServer`.
-///
-/// Его оригинал-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
-/// структурным Drop без отдельной инфраструктуры строки MSVC.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerEntry {
-    pub(crate) connected: bool,
-    pub(crate) index: u32,
-    pub(crate) ip: Vec<u8>,
-    pub(crate) port: Option<u32>,
-    pub(crate) received_player_data: Option<i32>,
-}
 
 pub(crate) use nebokrai_realm::app::worldserver::{
     WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
@@ -4544,11 +1660,6 @@ pub(crate) use nebokrai_realm::app::worldserver::{
     WorldErrorLogDelivery, send_err_log_to_login,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WorldLoginPlayerEntry {
-    player_id: u32,
-    login_time_ms: u32,
-}
 
 pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginAccountPlayer;
 
@@ -4586,16 +1697,6 @@ pub(crate) enum WorldCreationPlayerAppendOutcome {
     },
 }
 
-#[derive(Debug)]
-pub(crate) struct WorldOriginGoodsReport {
-    pub(crate) entries: Vec<PlayerOriginEquipmentOutcome>,
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldOriginGoodsBlock {
-    pub(crate) origin_index: usize,
-    pub(crate) source: PlayerOriginEquipmentBlock,
-}
 
 pub(crate) enum WorldMapPlayerAppendOutcome {
     Inserted {
@@ -4624,102 +1725,6 @@ impl fmt::Display for WorldCreationPlayerAppendLog {
     }
 }
 
-struct WorldPlayerOrganizingContext<'a> {
-    organizing: &'a COrganizingCtrl,
-    region_types: &'a BTreeMap<i32, Option<u16>>,
-}
-
-impl PlayerOrganizingUpdater for WorldPlayerOrganizingContext<'_> {
-    fn set_player_organizing(
-        &mut self,
-        player_id: i32,
-        organizing: &mut PlayerOrganizingState,
-    ) -> Result<(), PlayerOrganizingUpdateError> {
-        let mut updater = self.organizing.player_updater(self.region_types);
-        updater.set_player_organizing(player_id, organizing)
-    }
-}
-
-/// Transport-адаптер `CPlayer::UpdateFactionInfo`.
-///
-/// Маршрут фиксируется до временного извлечения player owner-а из map: исходный
-/// lookup выполнялся до вызова send, а повторный поиск через Rust map в этот
-/// момент уже не может увидеть заимствованного игрока.
-struct WorldPlayerFactionInfoContext<'a> {
-    organizing: WorldPlayerOrganizingContext<'a>,
-    game_server_id: i32,
-    sender: Option<ServerCommandHandle>,
-}
-
-struct WorldFactionPlayerOrganizingContext<'a> {
-    faction: &'a CFaction,
-    region_types: &'a BTreeMap<i32, Option<u16>>,
-}
-
-impl PlayerOrganizingUpdater for WorldFactionPlayerOrganizingContext<'_> {
-    fn set_player_organizing(
-        &mut self,
-        player_id: i32,
-        organizing: &mut PlayerOrganizingState,
-    ) -> Result<(), PlayerOrganizingUpdateError> {
-        self.faction
-            .set_player_organizing_projection(player_id, self.region_types, organizing)
-    }
-}
-
-struct WorldDetachedFactionInfoContext<'a> {
-    organizing: WorldFactionPlayerOrganizingContext<'a>,
-    game_server_id: i32,
-    sender: Option<ServerCommandHandle>,
-}
-
-impl PlayerOrganizingUpdater for WorldDetachedFactionInfoContext<'_> {
-    fn set_player_organizing(
-        &mut self,
-        player_id: i32,
-        organizing: &mut PlayerOrganizingState,
-    ) -> Result<(), PlayerOrganizingUpdateError> {
-        self.organizing
-            .set_player_organizing(player_id, organizing)
-    }
-}
-
-impl PlayerFactionInfoContext for WorldDetachedFactionInfoContext<'_> {
-    fn send_player_faction_info(
-        &mut self,
-        _player_id: i32,
-        message: &CMessage,
-    ) -> PlayerFactionInfoDelivery {
-        PlayerFactionInfoDelivery {
-            game_server_id: self.game_server_id,
-            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
-        }
-    }
-}
-
-impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
-    fn set_player_organizing(
-        &mut self,
-        player_id: i32,
-        organizing: &mut PlayerOrganizingState,
-    ) -> Result<(), PlayerOrganizingUpdateError> {
-        self.organizing
-            .set_player_organizing(player_id, organizing)
-    }
-}
-
-impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
-    fn send_player_faction_info(
-        &mut self,
-        _player_id: i32,
-        message: &CMessage,
-    ) -> PlayerFactionInfoDelivery {
-        PlayerFactionInfoDelivery {
-            game_server_id: self.game_server_id,
-            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
-        }
-    }
-}
 
 pub(crate) struct CGame {
     setup: WorldSetup,
@@ -11315,7 +8320,7 @@ impl CGame {
         clippy::too_many_arguments,
         reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
     )]
-    pub(crate) async fn run_main_loop_timer_stage<Callback, GetTick, GetTimerLocalTime>(
+    pub(crate) async fn run_main_loop_timer_stage<Callback, GetTick, GetTimerLocalTime, RsPlayer>(
         &self,
         timer: &mut CTimer<Callback>,
         time_to_return: &mut TimeToReturn,
@@ -11335,7 +8340,7 @@ impl CGame {
         copy_number_timer: &mut CopyNumberTimerState,
         organizing_parameters: &mut COrganizingParam,
         player_ranks: &mut CPlayerRanks,
-        rs_player: &mut TiberiusRsPlayer,
+        rs_player: &mut RsPlayer,
         player_database: Option<&mut WorldTdsClient>,
         organizing: &COrganizingCtrl,
         log: &mut WorldLogTextOwner,
@@ -11348,6 +8353,7 @@ impl CGame {
         Callback: Copy + PartialEq,
         GetTick: FnMut() -> u32 + ?Sized,
         GetTimerLocalTime: FnMut() -> TagTime + ?Sized,
+        RsPlayer: RsPlayerOwner<CPlayer>,
     {
         let mut handler = WorldTimerHandler {
             game: self,
@@ -12091,14 +9097,19 @@ impl CGame {
         &mut self,
         configuration: WorldMainLoopConfiguration,
         state: &mut WorldMainLoopStateOwners<'_>,
+ // Generic-связка Realm `app/world_main_loop_data` закрепляется конкретными
+ // DB/game владельцами на этой границе: глубокие точки process_message/
+ // process_world_message/route_loaded_player держат прежнюю декларацию
+ // до следующей порции.
         owners: &mut WorldMainLoopOwners<
             '_,
             TimerCallback,
             LeiTingContextOwner,
             DbMiscContextOwner,
             JjcContext,
+            TiberiusRsPlayer,
         >,
-        callbacks: &mut WorldMainLoopCallbacks<'_>,
+        callbacks: &mut WorldMainLoopCallbacks<'_, CGame, Arc<TiberiusLargess>>,
     ) -> WorldMainLoopResult<LeiTingContextOwner::Block>
     where
         TimerCallback: Copy + PartialEq,
@@ -13057,12 +10068,13 @@ impl CGame {
         GetLocalTime,
         GetAuctionMonthDay,
         PutLogInfo,
+        RsPlayer,
     >(
         &self,
         player_ranks_request: &WorldPlayerRanksRequestState,
         use_appellation_function: bool,
         player_ranks: &mut CPlayerRanks,
-        rs_player: &mut TiberiusRsPlayer,
+        rs_player: &mut RsPlayer,
         player_database: Option<&mut WorldTdsClient>,
         organizing: &COrganizingCtrl,
         honor_ranks_owner: &mut CHonorRanks,
@@ -13079,6 +10091,7 @@ impl CGame {
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         GetAuctionMonthDay: FnMut() -> i32,
         PutLogInfo: FnMut(&[u8]),
+        RsPlayer: RsPlayerOwner<CPlayer>,
     {
         let player_ranks = if player_ranks_request.take_if_requested() {
             let stat = self
@@ -20404,109 +17417,22 @@ pub(crate) use nebokrai_realm::app::worldserver::{
     WorldSaveThreadHandleState, WorldSaveThreadLaunchRequest, prepare_save_thread_launch,
 };
 
-#[derive(Debug)]
-pub(crate) struct WorldRunSaveLaunchReport {
-    pub(crate) snapshot: WorldGenerateDbDataReport,
-    pub(crate) launch: WorldSaveThreadLaunchRequest,
-    pub(crate) resulting_handle: WorldSaveThreadHandleState,
-}
 
-#[derive(Debug)]
-pub(crate) struct WorldSaveAllOrganizationsLaunchReport {
-    pub(crate) organizing: OrganizingSaveDataReport,
-    pub(crate) launch: WorldSaveThreadLaunchRequest,
-    pub(crate) resulting_handle: WorldSaveThreadHandleState,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct WorldCollectPlayerDataRequestState {
-    pub(crate) send_now: bool,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCollectPlayerDataBroadcast {
-    pub(crate) message_type: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRunSaveTriggerState {
-    pub(crate) send_save_message_now: bool,
-    pub(crate) save_all_organizations: bool,
-    pub(crate) save_now_data: bool,
-    pub(crate) last_save_point_time_ms: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldManualSaveRequestReport {
-    pub(crate) log: AddLogTextDisposition,
-    pub(crate) save_point_time_ms: u32,
-}
-
-pub(crate) enum WorldRunSavePreGateReport<'game> {
-    IntervalNotElapsed {
-        manual_request: Option<WorldManualSaveRequestReport>,
-        profile_started_at_ms: u32,
-        elapsed_ms: u32,
-        save_point_time_ms: u32,
-    },
-    SaveLockBusy {
-        manual_request: Option<WorldManualSaveRequestReport>,
-        profile_started_at_ms: u32,
-        elapsed_ms: u32,
-        save_point_time_ms: u32,
-        adjusted_last_save_point_time_ms: u32,
-    },
-    AfterLock {
-        manual_request: Option<WorldManualSaveRequestReport>,
-        profile_started_at_ms: u32,
-        elapsed_ms: u32,
-        save_point_time_ms: u32,
-        trigger: WorldRunSaveTriggerReport<'game>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldRunImmediateSaveReport {
-    pub(crate) log: AddLogTextDisposition,
-    pub(crate) save: WorldRunSaveLaunchReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldSaveNotifyDelivery {
-    pub(crate) game_server_index: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldSaveNotifyReport {
-    pub(crate) log: AddLogTextDisposition,
-    pub(crate) previous_db_responses: i32,
-    pub(crate) message_type: i32,
-    pub(crate) deliveries: Vec<WorldSaveNotifyDelivery>,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldRunSaveTriggerDisposition {
-    SaveAllOrganizations(WorldSaveAllOrganizationsLaunchReport),
-    PlayerData {
-        immediate: Option<WorldRunImmediateSaveReport>,
-        notify: Option<WorldSaveNotifyReport>,
-    },
-}
-
-pub(crate) enum WorldRunSaveTriggerReport<'game> {
-    BlockedSaveAllOrganizations {
-        guard: WorldRunSaveGuard<'game>,
-        block: OrganizingSaveDataBlock,
-    },
-    BlockedImmediateSave {
-        guard: WorldRunSaveGuard<'game>,
-        log: AddLogTextDisposition,
-        block: WorldGenerateDbDataBlock,
-    },
-    Complete(WorldRunSaveTriggerDisposition),
-}
+// Save-state и trigger-отчёты хода (collect player-data, ручной запрос,
+// pre-gate, launch/notify и терминальный trigger-итог) перенесены в Realm
+// `app/world_save_reports` волной C5-A. Guard остаётся generic на типе игры:
+// локальные alias-формы закрепляют `CGame` до её волны — та же переходная
+// форма, что у WorldGameThreadReport выше.
+pub(crate) use nebokrai_realm::app::world_save_reports::{
+    WorldCollectPlayerDataBroadcast, WorldCollectPlayerDataRequestState,
+    WorldManualSaveRequestReport, WorldRunImmediateSaveReport, WorldRunSaveLaunchReport,
+    WorldRunSaveTriggerDisposition, WorldRunSaveTriggerState,
+    WorldSaveAllOrganizationsLaunchReport, WorldSaveNotifyDelivery, WorldSaveNotifyReport,
+};
+pub(crate) type WorldRunSavePreGateReport<'game> =
+    nebokrai_realm::app::world_save_reports::WorldRunSavePreGateReport<'game, CGame>;
+pub(crate) type WorldRunSaveTriggerReport<'game> =
+    nebokrai_realm::app::world_save_reports::WorldRunSaveTriggerReport<'game, CGame>;
 
 /// Делегирует один системный `SaveThreadFunc` worker-у Realm
 /// `persistence/saveworker` с прежней сигнатурой старого call-site.
@@ -20935,12 +17861,6 @@ where
     }
 }
 
-fn legacy_refresh_count(
-    field: &'static str,
-    count: usize,
-) -> Result<u32, WorldRefreshSnapshotBlock> {
-    u32::try_from(count).map_err(|_| WorldRefreshSnapshotBlock { field, count })
-}
 
 // Первый локальный IPv4 процесса: форма перенесена в Realm `app::worldserver`
 // к техническим helpers process-owner-а; старый пакет получает её реэкспортом.

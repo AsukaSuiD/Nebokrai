@@ -41,12 +41,18 @@ pub mod servermessage; // диспетчер server-сообщений World.
 pub mod teammessage; // входящий team-диспетчер 0x600xx World.
 pub mod world_client; // исходящий клиент World->Login.
 pub mod world_game_view; // узкий game-view обработчиков мировых сообщений.
+pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры (волна C5-A).
+pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты и organizing player-контексты (волна C5-A).
 pub mod world_message; // wire-сообщение направлений Login/Game<->World.
 pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration и typed-доставка его событий
 pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, INI-замена, build error MainLoop DB-stage
+pub mod world_main_loop_data; // данные хода MainLoop World: stage-отчёты, конфигурация, JJC/LeiTing worker-адаптеры и связка StateOwners/Owners/Callbacks/Block/Report; rs_player/largess/Game входят generic-параметрами (волна C5-A).
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view; // узкие organizing-view мировых диспетчеров.
+pub mod world_reload_profiles; // refresh/reload-контракт хода World: snapshot-gate, atomic reload-flags с таблицей профилей, resource snapshot, maintenance ranks и profile-init helpers (волна C5-A).
 pub mod world_runtime; // драйвер потока игры World: CreateGame→Init→turn→Release→DeleteGame + init/release data-bundle; CGame входит assoc-типом и фабрикой, context-impl у process-owner-а
+pub mod world_save_reports; // save-state и trigger/notify отчёты сохранения хода World: collect player-data, pre-gate, launch и терминальный trigger-итог (волна C5-A).
+pub mod world_setup; // позиционная конфигурация tagSetup WorldServer: поля, plain/encoded парсинг и разрешение runtime-файла (волна C5-A).
 pub mod worldothermessage; // прочие сообщения World 0x5FDxx.
 pub mod world_server; // принимающий сервер Game-соединений World.
 pub mod world_server_client; // состояние принятого Game-соединения у World.

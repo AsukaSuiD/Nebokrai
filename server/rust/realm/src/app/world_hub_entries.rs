@@ -1,0 +1,287 @@
+//! Записи и транспортные контексты таблиц состояния WorldServer, перенесённые
+//! из `src/worldserver/worldserver/game.rs` волной C5-A (hub-data уровень):
+//! materialized-регион, системная рассылка `tagSysBroadcast` и её AI-отчёт,
+//! деньги аукциона с точным x87-усечением, записи `tagGameServer` и
+//! login-игрока, отчёты origin-снаряжения и organizing/доставка-контексты
+//! обновления faction-информации игрока. Источник контракта — та же точная
+//! пара, что у [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
+//! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
+//!
+//! Organizing-контексты реализуют realm-трейты [`PlayerOrganizingUpdater`] и
+//! [`PlayerFactionInfoContext`]; `CGame` сюда не тянется — маршрут доставки
+//! фиксируется полем сессии до извлечения player owner-а из map.
+
+use std::collections::BTreeMap;
+
+use nebokrai_shared::network::ServerCommandHandle;
+
+use crate::app::world_message::{CMessage, SendMessageError};
+use crate::app::world_runtime::WorldRegionOwner;
+use crate::characters::player::{
+    PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerOrganizingState,
+    PlayerOrganizingUpdateError, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
+    PlayerOriginEquipmentOutcome,
+};
+use crate::organizations::faction::CFaction;
+use crate::organizations::organizingctrl::COrganizingCtrl;
+
+pub struct WorldRegionAssignment {
+    pub region: Option<WorldRegionOwner>,
+    pub game_server_index: u32,
+    pub region_type: Option<i32>,
+}
+
+/// Действующая AI-проекция исходного `CGame::tagSysBroadcast`.
+///
+/// Поля идут по смыслу struct-layout `+0x04..+0x40`; `_login_type` AI не читает,
+/// а Rust-layout не выдаётся за старый 68-байтовый Windows ABI.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldSystemBroadcast {
+    pub import_level: i32,
+    pub region_id: i32,
+    pub min_time_seconds: u32,
+    pub max_time_seconds: u32,
+    pub odds: u32,
+    pub text_color: u32,
+    pub back_color: u32,
+    pub message: Vec<u8>,
+    pub interval_seconds: u32,
+    pub last_notify_time_seconds: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldAuctionSellerMoney {
+    pub fee: i32,
+    pub seller_money_after_fee: i32,
+}
+
+/// Точно отбрасывает дробную часть произведения signed `long` на один `f32`.
+///
+/// EXE оставляет произведение в 80-битном x87 до `_ftol2`. Разложение IEEE-754
+/// в целую мантиссу и степень сохраняет этот результат без промежуточного
+/// округления Rust `f32`; только нештатный overflow/NaN получает определённое
+/// насыщение вместо неопределённого C++ float-to-long cast.
+pub fn truncate_scaled_legacy_money(amount: i32, factor: f32) -> i32 {
+    let bits = factor.to_bits();
+    let exponent = (bits >> 23) & 0xFF;
+    let fraction = bits & 0x007F_FFFF;
+    if exponent == 0xFF {
+        if fraction != 0 || amount == 0 {
+            return 0;
+        }
+        return if (amount < 0) ^ (bits >> 31 != 0) {
+            i32::MIN
+        } else {
+            i32::MAX
+        };
+    }
+
+    let (mantissa, binary_exponent) = if exponent == 0 {
+        (u128::from(fraction), -149)
+    } else {
+        (
+            u128::from((1 << 23) | fraction),
+            exponent as i32 - 127 - 23,
+        )
+    };
+    let magnitude = u128::from(amount.unsigned_abs()) * mantissa;
+    let magnitude = if binary_exponent >= 0 {
+        let shift = binary_exponent as u32;
+        if shift >= u128::BITS || magnitude > (u128::MAX >> shift) {
+            u128::MAX
+        } else {
+            magnitude << shift
+        }
+    } else {
+        magnitude
+            .checked_shr(binary_exponent.unsigned_abs())
+            .unwrap_or(0)
+    };
+    let negative = (amount < 0) ^ (bits >> 31 != 0);
+    if negative {
+        if magnitude >= 0x8000_0000 {
+            i32::MIN
+        } else {
+            -(magnitude as i32)
+        }
+    } else {
+        magnitude.min(i32::MAX as u128) as i32
+    }
+}
+
+pub fn truncate_legacy_money(value: f64) -> i32 {
+    if value.is_nan() {
+        0
+    } else if value >= f64::from(i32::MAX) {
+        i32::MAX
+    } else if value <= f64::from(i32::MIN) {
+        i32::MIN
+    } else {
+        value.trunc() as i32
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldSystemBroadcastTarget {
+    All {
+        delivery: Result<i32, SendMessageError>,
+    },
+    Region {
+        region_id: i32,
+        game_server_index: Option<u32>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldSystemBroadcastDisposition {
+    Waiting {
+        elapsed_seconds: u32,
+        interval_seconds: u32,
+    },
+    OddsMissed {
+        roll: i32,
+        odds: u32,
+    },
+    Broadcast {
+        roll: i32,
+        target: WorldSystemBroadcastTarget,
+        assigned_last_notify_time_seconds: u32,
+        assigned_interval_seconds: u32,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldGameAiReport {
+    pub region_ids_run: Vec<i32>,
+    pub broadcast_tick_ms: u32,
+    pub broadcasts: Vec<WorldSystemBroadcastDisposition>,
+    pub legacy_result: i32,
+}
+
+/// Минимальная действующая часть исходного `CGame::tagGameServer`.
+///
+/// Его оригинал-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
+/// структурным Drop без отдельной инфраструктуры строки MSVC.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldGameServerEntry {
+    pub connected: bool,
+    pub index: u32,
+    pub ip: Vec<u8>,
+    pub port: Option<u32>,
+    pub received_player_data: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldLoginPlayerEntry {
+    pub player_id: u32,
+    pub login_time_ms: u32,
+}
+
+#[derive(Debug)]
+pub struct WorldOriginGoodsReport {
+    pub entries: Vec<PlayerOriginEquipmentOutcome>,
+}
+
+#[derive(Debug)]
+pub struct WorldOriginGoodsBlock {
+    pub origin_index: usize,
+    pub source: PlayerOriginEquipmentBlock,
+}
+
+pub struct WorldPlayerOrganizingContext<'a> {
+    pub organizing: &'a COrganizingCtrl,
+    pub region_types: &'a BTreeMap<i32, Option<u16>>,
+}
+
+impl PlayerOrganizingUpdater for WorldPlayerOrganizingContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        let mut updater = self.organizing.player_updater(self.region_types);
+        updater.set_player_organizing(player_id, organizing)
+    }
+}
+
+/// Transport-адаптер `CPlayer::UpdateFactionInfo`.
+///
+/// Маршрут фиксируется до временного извлечения player owner-а из map: исходный
+/// lookup выполнялся до вызова send, а повторный поиск через Rust map в этот
+/// момент уже не может увидеть заимствованного игрока.
+pub struct WorldPlayerFactionInfoContext<'a> {
+    pub organizing: WorldPlayerOrganizingContext<'a>,
+    pub game_server_id: i32,
+    pub sender: Option<ServerCommandHandle>,
+}
+
+pub struct WorldFactionPlayerOrganizingContext<'a> {
+    pub faction: &'a CFaction,
+    pub region_types: &'a BTreeMap<i32, Option<u16>>,
+}
+
+impl PlayerOrganizingUpdater for WorldFactionPlayerOrganizingContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.faction
+            .set_player_organizing_projection(player_id, self.region_types, organizing)
+    }
+}
+
+pub struct WorldDetachedFactionInfoContext<'a> {
+    pub organizing: WorldFactionPlayerOrganizingContext<'a>,
+    pub game_server_id: i32,
+    pub sender: Option<ServerCommandHandle>,
+}
+
+impl PlayerOrganizingUpdater for WorldDetachedFactionInfoContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.organizing
+            .set_player_organizing(player_id, organizing)
+    }
+}
+
+impl PlayerFactionInfoContext for WorldDetachedFactionInfoContext<'_> {
+    fn send_player_faction_info(
+        &mut self,
+        _player_id: i32,
+        message: &CMessage,
+    ) -> PlayerFactionInfoDelivery {
+        PlayerFactionInfoDelivery {
+            game_server_id: self.game_server_id,
+            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
+        }
+    }
+}
+
+impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.organizing
+            .set_player_organizing(player_id, organizing)
+    }
+}
+
+impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
+    fn send_player_faction_info(
+        &mut self,
+        _player_id: i32,
+        message: &CMessage,
+    ) -> PlayerFactionInfoDelivery {
+        PlayerFactionInfoDelivery {
+            game_server_id: self.game_server_id,
+            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
+        }
+    }
+}

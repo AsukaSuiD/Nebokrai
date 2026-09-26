@@ -23,8 +23,9 @@
 //! [`crate::app::worldserver`], frozen-вход `WorldSaveThreadJob` и lifecycle — в
 //! [`crate::persistence::savedb`]; здесь динамическая граница
 //! [`WorldSaveRuntimeContext`] между game-триггером и process save-owner-ом.
-//! Триггер-отчёты `WorldRunSave*` остаются в game.rs как наблюдаемость ветвей
-//! `CGame::Run`.
+//! Триггер-отчёты `WorldRunSave*` живут наблюдаемостью ветвей `CGame::Run`
+//! в [`crate::app::world_save_reports`] (волна C5-A); старый пакет закрепляет
+//! их generic-формы alias-ами на `CGame` до её волны.
 
 use nebokrai_shared::network::ClientSendQueue;
 

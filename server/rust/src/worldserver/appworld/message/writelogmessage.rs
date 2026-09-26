@@ -10,9 +10,7 @@ use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
-pub(crate) use nebokrai_realm::app::writelogmessage::{
-    WorldWriteLogMessageDispatch, WorldWriteLogMessageOutcome,
-};
+pub(crate) use nebokrai_realm::app::writelogmessage::WorldWriteLogMessageDispatch;
 pub(crate) use nebokrai_realm::persistence::writelog::{
     WorldFactionLogWrite, WorldWriteLogCommand,
 };

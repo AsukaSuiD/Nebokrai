@@ -4,5 +4,5 @@
 //! потребителем (`organizingctrl`); старый пакет их не переиздаёт.
 
 pub(crate) use nebokrai_shared::runtime::{
-    CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant, NetSessionRunReport,
+    CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant,
 };

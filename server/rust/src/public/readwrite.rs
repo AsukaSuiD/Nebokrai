@@ -5,8 +5,10 @@
 //! `false` при EOF, stream error или точном `<end>`. Iterator и borrowed bytes
 //! заменяют iostream/string, не интерпретируя кодировку и не проходя границу
 //! `<end>`. World formatted `Read` остаётся отдельной typed границей.
-
-pub(crate) use nebokrai_shared::resources::read_to_marker as read_to;
+//!
+//! Последним потребителем был positional-парсинг World setup; с его переездом
+//! в Realm `app/world_setup` (волна C5-A) старый пакет `read_to_marker`
+//! больше не переиздаёт — владелец формы в Shared остаётся единственным.
 
 // typed boundary: World `Read` сначала вызывал
 // `ReadTo(stream, marker)`, затем выполнял `stream >> unsigned long`, но
