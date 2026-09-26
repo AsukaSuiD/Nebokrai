@@ -1,16 +1,4 @@
-//! YuanBao-специализация однослотовой currency shadow GameServer.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
-//! `server/gameserver/appserver/container/cshadowyuanbao.cpp`. Собственные
-//! executable отличия от `CShadowWallet` ограничены catalog
-//! `YUANBAO` и source extend `5`; storage, partial-mutation order и listener
-//! callbacks переиспользуют общий typed adapter.
+//! YuanBao-специализация однослотовой currency shadow старого GameServer
+//! перенесена в Zone items. Здесь её реэкспорт для старого пакета.
 
-use super::cshadowwallet::{CShadowCurrencyContainer, ShadowCurrencyKind};
-use super::cyuanbao::YuanBaoCurrency;
-
-impl ShadowCurrencyKind for YuanBaoCurrency {
-    const SOURCE_CONTAINER_EXTEND_ID: i32 = 5;
-}
-
-pub(crate) type CShadowYuanBao = CShadowCurrencyContainer<YuanBaoCurrency>;
+pub(crate) use nebokrai_zone::items::cshadowyuanbao::*;
