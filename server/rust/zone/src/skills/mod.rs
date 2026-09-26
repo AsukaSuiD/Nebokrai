@@ -70,7 +70,10 @@ pub mod statefactory; // декодирование последовательн
 pub mod summoncreatureskill; // семья CSummonSkill (0x19A/0x19B/0x19C/0x1F9): Begin/AI/Summon буквально + hub-швы SummonSkill семьи; поворот внешний (кластер C Monster 0x19x).
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
 mod thunder; // CThunder (0x21F): семейные Check/AI громовых облаков, круг BF918 (fix №2) и hub-трейт `SummonCloudGame` (порция T1).
+mod thunder2phalanx; // живая область CLeimingPhalanx2: одна активная ячейка, expiry-attack, собственные Replace/AddTo/Decord (порция T2).
+mod thunderphalanx; // живая область CThunderPhalanx: 49-ячеечные окна, три часа, wire со счётчиком окон и calc с оружейным швом (порция T2).
 mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже при нулевой цене, точечная BF918, поворот U, свёртка старой области (порция T1).
+mod tianhuophalanx; // живая область CTianhuoPhalanx: скан клетки каждый проход, End→BF504, x87-calc (порция T2).
 mod visualeffect; // visual-ресурс зарегистрированного навыка.
 mod wangsheng; // прямое восстановление HP навыком CWangsheng, без создания WangshengState.
 mod weak; // правила области ослабления CWeakPhalanx и срока призыва CWeak.
@@ -142,6 +145,11 @@ pub use leiming2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY, Le
     execute_battle_fairy_leiming2};
 pub use tianhuo::{TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY, TianhuoSummon,
     execute_battle_fairy_tianhuo};
+pub use thunderphalanx::{CThunderPhalanx, ThunderPhalanxGame, ThunderPhalanxTick,
+    calculate_owned_thunder_attack};
+pub use thunder2phalanx::{CLeimingPhalanx2, Leiming2PhalanxTick,
+    calculate_owned_leiming2_attack};
+pub use tianhuophalanx::{CTianhuoPhalanx, TianhuoPhalanxTick, calculate_owned_tianhuo_attack};
 pub use masked_area::{MaskedArea, MaskedAreaPulse, MaskedElementPhalanx};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};

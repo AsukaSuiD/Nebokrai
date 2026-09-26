@@ -54,8 +54,10 @@
 //! переходный фасад прежнего `CGame` (реализация у делегата
 //! `appserver/skills/thunder.rs`); конструктор фаланги, её Initialize(RNG) и
 //! регистрация области с входным `0xBF502` выполняются прежним владельцем
-//! через callback `complete_summon` (`ThunderSummon`/`Leiming2Summon`), т.к.
-//! типы фаланг ещё у старого пакета; внутри callback машинный порядок
+//! через callback `complete_summon` (`ThunderSummon`/`Leiming2Summon`); сами
+//! типы фаланг — zone `skills/thunderphalanx`/`skills/thunder2phalanx`
+//! (порция T2), прежний владелец вызывает их конструкторы фасадом; внутри
+//! callback машинный порядок
 //! SetCenter → Initialize → допуск региона U → Add → `0xBF502` сохранён.
 //! Потребление швов статическое (generic), dyn-совместимость и
 //! `Send`-контракт не вводятся (прецедент ADR-0013). Часы `now` — шов
@@ -108,8 +110,9 @@ pub trait SummonCloudGame: BattleFairyGame {
     fn set_summon_cloud_user_direction(&mut self, player_id: i32, direction: i32);
 }
 
-/// Параметры призыва для делегата: конструктор `CThunderPhalanx` ещё у
-/// старого владельца, как и Initialize(RNG) и регистрация области.
+/// Параметры призыва для делегата: конструктор `CThunderPhalanx` вызывается
+/// фасадом прежнего владельца (тип — zone `skills/thunderphalanx`), как и
+/// Initialize(RNG) и регистрация области.
 pub struct ThunderSummon {
     pub source: (i32, ShapeIdentity),
     pub id: i32,

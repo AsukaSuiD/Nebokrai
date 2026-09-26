@@ -4,7 +4,8 @@
 //! appserver/skills/tianhuo.cpp. Тело перенесено буквально в
 //! `nebokrai_zone::skills::tianhuo` порцией T1; RVA-якоря, статусы и решение
 //! точечной доставки `0xBF918` — в шапке Zone-файла. Здесь — реэкспорт
-//! прежних констант и делегация с прежней сигнатурой; конструктор
+//! оставшейся прежней константы (константа damage-factor ушла в Zone вместе
+//! с фалангой порцией T2) и делегация с прежней сигнатурой; конструктор
 //! `CTianhuoPhalanx`, свёртка старой области и входное `0xBF502` остаются
 //! прежними фасадами через callback `TianhuoSummon`. Потребители
 //! (очередь Game, tianhuophalanx) не меняются.
@@ -18,7 +19,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
 };
 
-pub(crate) use nebokrai_zone::skills::{TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY};
+pub(crate) use nebokrai_zone::skills::TIANHUO_SKILL_ID;
 
 pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,

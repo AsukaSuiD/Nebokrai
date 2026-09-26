@@ -32,7 +32,7 @@
 //!   Отказ самого Summon не меняет завершающий End(1); область живёт
 //!   независимо от навыка. Gameplay ID области — 0x21A, legacy ID режима
 //!   применения эффекта — 0x13A; wire и lifetime области принадлежат
-//!   CTianhuoPhalanx (ещё у старого владельца).
+//!   CTianhuoPhalanx (zone `skills/tianhuophalanx`, порция T2).
 //!
 //! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`
 //! (точечный кадр `0xBF918` собирает и доставляет готовый энкодер порции №6b
@@ -40,8 +40,9 @@
 //! `set_summon_cloud_user_direction`; конструктор `CTianhuoPhalanx` и
 //! регистрация области выполняются прежним владельцем через callback
 //! `complete_summon` (`TianhuoSummon`). Часы `now` — шов делегата (прежний
-//! main-loop runtime). UNKNOWN списком: ctor-стек 9 аргументов
-//! CTianhuoPhalanx этой волной не открыт (перенос прежнего вызова буквально);
+//! main-loop runtime). UNKNOWN списком: маппинг аргументов ctor
+//! CTianhuoPhalanx — PARTIAL по доказательной базе порции T2
+//! (`skills/tianhuophalanx.rs`: ctor `0x1E5890`, 6 аргументов без id/часов);
 //! ветка AI с не-player U читает CPlayer после RTTI без проверки — прежняя
 //! реконструкция возвращает отказ вместо разыменования (сохраняется).
 

@@ -4,7 +4,9 @@
 //! appserver/skills/thunder.cpp. Тела Check/AI/Summon перенесены буквально в
 //! `nebokrai_zone::skills::thunder` порцией T1 (истинные RVA-якоря, статусы
 //! MATCH/UNKNOWN и fix №2 круговой доставки `0xBF918` — в шапке Zone-файла).
-//! Здесь — реэкспорт прежних констант и x87-адаптеров, фасадная реализация
+//! Здесь — реэкспорт оставшихся прежних имён (ID навыка и x87-адаптер для
+//! bloodloss*; `thunder_base_damage` и константа damage-factor ушли в Zone
+//! вместе с фалангой порцией T2), фасадная реализация
 //! hub-трейта `SummonCloudGame` над прежними методами `CGame` и делегация с
 //! прежней сигнатурой; конструктор `CThunderPhalanx`, его Initialize(RNG) до
 //! допуска региона и входное сообщение `0xBF502` остаются прежними фасадами
@@ -22,8 +24,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 use nebokrai_zone::skills::SummonCloudGame;
 
-pub(crate) use nebokrai_zone::skills::{THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY};
-pub(super) use nebokrai_zone::skills::thunder_base_damage;
+pub(crate) use nebokrai_zone::skills::THUNDER_SKILL_ID;
 pub(super) use nebokrai_zone::combat::truncate_original_i64_low;
 
 impl SummonCloudGame for CGame {

@@ -23,7 +23,8 @@
 //! Объявленные швы переноса (не расхождения): hub `thunder::SummonCloudGame`;
 //! конструктор `CLeimingPhalanx2`, допуск региона и входное сообщение
 //! `0xBF502` выполняются прежним владельцем через callback `complete_summon`
-//! (`Leiming2Summon`), т.к. тип фаланги ещё у старого пакета. UNKNOWN
+//! (`Leiming2Summon`); сам тип фаланги — zone `skills/thunder2phalanx`
+//! (порция T2), прежний владелец вызывает его конструктор фасадом. UNKNOWN
 //! списком: второй аргумент `SendToAround`; RVA тела Summon CLeiming2.
 
 use crate::combat::MasterInfo;
@@ -39,8 +40,9 @@ use super::thunder::{
 pub const LEIMING2_SKILL_ID: u32 = 0x21b;
 pub const LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
 
-/// Параметры призыва для делегата: конструктор `CLeimingPhalanx2` ещё у
-/// старого владельца, как и допуск региона с входным `0xBF502`.
+/// Параметры призыва для делегата: конструктор `CLeimingPhalanx2` вызывается
+/// фасадом прежнего владельца (тип — zone `skills/thunder2phalanx`), как и
+/// допуск региона с входным `0xBF502`.
 pub struct Leiming2Summon {
     pub source: (i32, ShapeIdentity),
     pub id: i32,

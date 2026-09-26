@@ -5,8 +5,10 @@
 //! `nebokrai_zone::skills::leiming2` порцией T1 (общие Check/AI с CThunder и
 //! собственный Summon с AddElementAtk-слагаемым; RVA-якоря, статусы и fix №2
 //! круговой доставки `0xBF918` — в шапках Zone `skills/thunder.rs` и
-//! `skills/leiming2.rs`). Здесь — реэкспорт прежних констант и делегация с
-//! прежней сигнатурой; конструктор `CLeimingPhalanx2`, допуск региона и
+//! `skills/leiming2.rs`). Здесь — реэкспорт оставшейся прежней константы
+//! (константа damage-factor ушла в Zone вместе с фалангой порцией T2) и
+//! делегация с прежней сигнатурой; конструктор `CLeimingPhalanx2`,
+//! допуск региона и
 //! входное сообщение `0xBF502` остаются прежними фасадами через callback
 //! `Leiming2Summon`. Потребители (очередь Game, thunder2phalanx) не меняются.
 
@@ -19,7 +21,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
 };
 
-pub(crate) use nebokrai_zone::skills::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
+pub(crate) use nebokrai_zone::skills::LEIMING2_SKILL_ID;
 
 pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,
