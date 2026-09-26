@@ -1,7 +1,6 @@
 //! Переносимая часть appserver/script/script.cpp: Check, Count и ComputeVar.
 //! GameServer/gameserver.exe + GameServer/GameServer.pdb; RVA 0x26780, 0x255e0, 0x26d20.
-//! EXE SHA-256 4f5c98e0fdf6147d8aecf55f7937aaf6e2cf5e4f5a2c44491a6359228762c80e.
-//! PDB SHA-256 b17bb9b7d69a9cc43e314c0e35c517830bb42caa89416e173380ab17d2d66016.
+//! Идентификаторы пары (SHA-256): `server/rust/src/manifest/_gameserver_export_manifest.toml`.
 //! Для GetArrayNum вычисляется только контекстно-свободная арифметика.
 
 use super::ini::decimal_i32;

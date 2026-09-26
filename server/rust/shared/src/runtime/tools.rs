@@ -5,7 +5,7 @@
 //! RVA `0x0001CEB0`, а также GameServer `GetLineDir` RVA `0x0001D080` —
 //! `AddLogText`/`AddErrorLogText`/`PutDebugString` GameServer — `IMPLEMENTED`;
 //! `GetLineDir` также `VERIFIED_DISASSEMBLY`. Остальной корпус ниже остаётся
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары:
+//! `UNKNOWN`. Точные пары:
 //! `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`,
 //! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb` и
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,

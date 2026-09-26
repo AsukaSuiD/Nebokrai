@@ -1,9 +1,6 @@
 //! Общие торговые списки `CTradeList` World/Game в Shared resources.
 //! Источник: точные `worldserver.exe + worldserver.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/tradelist.cpp`.
-//! Установленный экземпляр и его потребители остаются у владельца роли.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/tradelist.cpp`.
 //!
 //! Loader очищает map, читает `*` NPC и следующие `#` goods records. StringTable
 //! miss даёт пустое имя, unknown goods — нулевой ID; duplicate NPC заменяет

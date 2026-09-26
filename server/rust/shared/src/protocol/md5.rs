@@ -1,8 +1,7 @@
 //! `IMPLEMENTED` — владелец MD5 из общего `public/md5.cpp` и `public/md5.h`.
 //!
-//! Источник: LoginServer.exe/PDB
-//! (`1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//! `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`).
+//! Источник: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`
+//! (идентификаторы: `server/rust/src/manifest/_loginserver_export_manifest.toml`).
 //! Исходные пути PDB:
 //! `d:\complite_version\fengyun_russia\trunk\public\md5.cpp/.h`.
 //! Существенный `MessageDigest` имеет RVA `0x4263B0`: его контракт —

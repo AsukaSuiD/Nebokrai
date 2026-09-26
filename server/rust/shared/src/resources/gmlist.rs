@@ -1,15 +1,13 @@
 //! Общие операторы `CGMList` World/Game в Shared resources.
 //! Источник: точные `worldserver.exe + worldserver.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/gmlist.cpp`.
-//! Установленный экземпляр и его потребители остаются у владельца роли.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/gmlist.cpp`.
 //!
 //! Wire пишет два ordered map: signed count и `name\0 + i32 level`, затем god
 //! passport. Keys задают byte-лексикографический порядок и отдельно не идут.
 //! Level остаётся произвольным `i32`; исходный passport равен
 //! `@^$^#SDFSDslfld/$dsl2a`. Внутренний NUL или невозможный count блокирует
 //! append до изменения destination.
+//! Установленный экземпляр и его потребители остаются у владельца роли.
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -7,18 +7,16 @@
 //! `parser` не строит предварительное синтаксическое дерево и не касается
 //! переменных, диспетчера или игровых эффектов.
 //!
-//! Пара GameServer: `gameserver.exe` SHA-256
-//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E` и
-//! `GameServer.pdb` SHA-256
-//! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
+//! Пара GameServer: `gameserver.exe + GameServer.pdb` (SHA-256 —
+//! `server/rust/src/manifest/_gameserver_export_manifest.toml`);
 //! CodeView GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`. В `RunStep`
 //! (`0x00428d80`) `ReadCmd` предшествует `GetFunctionName`; машинный код последнего
 //! (`0x00425000`) завершает имя на `(`, пробеле, TAB, LF, CR или `;`.
 //! `ReadCmd` (`0x00424cb0`) пропускает TAB сразу после CR/LF внутри кавычек;
 //! другие ветви и полнота грамматики остаются `PARTIAL`/`UNKNOWN`.
 //! Исходный владелец PDB: `server/gameserver/appserver/script/script.cpp`.
-//! Вспомогательный разбор выражений перенесён из переходного Game `script.rs`;
-//! его соответствие полному языку оригинала этим переносом не устанавливается.
+//! Соответствие вспомогательного разбора выражений полному языку оригинала
+//! не установлено.
 
 use nom::Parser;
 use nom::bytes::complete::{tag, take, take_till, take_until, take_while1};

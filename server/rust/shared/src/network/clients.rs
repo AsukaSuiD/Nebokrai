@@ -5,21 +5,10 @@
 //! частичной отправки, возврата неполного хвоста, счётчиков трафика и
 //! десятисекундного connect к уже разрешённому IPv4 endpoint. Receive framing,
 //! legacy hostname resolution и callbacks конкретных `netlogin/netmisc/...`
-//! остаются локально отмеченными ниже.
+//! остаются за границей этого владельца.
 //!
-//! Точные варианты корпуса:
-//! - Login: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`, SHA-256
-//!   `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//!   `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`;
-//! - Misc: `MiscServer/miscserver.exe + MiscServer/miscserver.pdb`,
-//!   `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65` /
-//!   `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`;
-//! - Game: `GameServer/gameserver.exe + GameServer/GameServer.pdb`,
-//!   `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E` /
-//!   `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
-//! - World: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//!   `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1` /
-//!   `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Точные варианты корпуса — пары EXE/PDB Login, Misc, Game и World; их
+//! идентификаторы (SHA-256) зафиксированы в `server/rust/src/manifest/`.
 //!
 //! Исходные пути PDB:
 //! `d:\complite_version\fengyun_russia\trunk\nets\clients.{cpp,h}`,
@@ -73,9 +62,6 @@
 //! четырёх байт и передавал `frame[4..declared_len]` конкретному
 //! `CMessage::CreateMessage`. Конкретный тип сообщения различается по
 //! направлению, поэтому общий owner пока не придумывает полиморфную фабрику.
-//! STL deque/vector, Win32 events/threads, vtable, SEH, security-cookie и
-//! allocator cleanup удалены как compiler/library/platform noise; полный сырой
-//! экспорт остаётся в истории Git и воспроизводится из архивных EXE/PDB.
 
 //! Направление обслуживания соединения и конкретный тип сообщения
 //! остаются у владельца роли; Shared несёт transport от исходящей очереди к семантике

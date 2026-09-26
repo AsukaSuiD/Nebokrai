@@ -2,7 +2,7 @@
 //!
 //! World-варианты `load` RVA `0x000D47A0`, `check` RVA `0x000D4590` и
 //! `IsAllNumbers` RVA `0x000D4330` — `IMPLEMENTED`; GameServer-вариант ниже
-//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точная пара:
+//! остаётся `UNKNOWN`. Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
 //! `e:\svn\fengyun_russia_dev\public\char_code_filter.cpp:11,95,162`.
 //!

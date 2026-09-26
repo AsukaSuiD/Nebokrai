@@ -11,7 +11,7 @@
 //! - WorldServer: `Nworldserver.exe + WorldServer.pdb`, RVA `0x000A43A0`.
 //!
 //! Для всех вариантов исходные EXE/PDB и их SHA-256 совпадают с зафиксированными
-//! в `src/manifest`; пути PDB: `h:\fengyun\fy_russia\src\public`,
+//! в `server/rust/src/manifest/`; пути PDB: `h:\fengyun\fy_russia\src\public`,
 //! `d:\complite_version\fengyun_russia\trunk\public` и
 //! `e:\svn\fengyun_russia_dev\public`.
 //!
@@ -28,12 +28,6 @@
 //! Вместо пары `DWORD error + out-param` Rust возвращает `io::Result<u32>` и не
 //! скрывает ошибку открытия или чтения.
 //!
-//! Остальные 12 тысяч строк старого корпуса классифицированы как чужие
-//! template-инстанцирования, MFC/COM/CRT, allocator и compiler cleanup из
-//! линковки ServerUpdate, GameServer и WorldServer. Они не являются семантикой
-//! CRC-владельца и удалены; их настоящие владельцы остаются в собственных
-//! экспортированных `.rs`. Полный сырой экспорт доступен в истории Git.
-
 //! Экземпляров нет: helpers без состояния, доступные всем направлениям.
 
 use std::fs::File;

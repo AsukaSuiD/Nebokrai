@@ -5,49 +5,38 @@
 //! владельцу `crate::transport`; `GetSocketID` и совместимые значения endpoint
 //! реализованы здесь.
 //!
-//! Точные пары и основные RVA:
-//! - Auth: `authserver.exe + authserver.pdb`, SHA-256 EXE
-//!   `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15`, PDB
-//!   `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`:
+//! Точные пары и основные RVA. Идентификаторы SHA-256 всех перечисленных
+//! EXE/PDB зафиксированы в `server/rust/src/manifest/`:
+//! - Auth: `authserver.exe + authserver.pdb`:
 //!   `SetIP` `0x00001EA0`, init `0x00013030`, cleanup `0x000130C0`, ctor
 //!   `0x000130D0`, dtor `0x00013130`, `Create` `0x00013160`, `Bind`
 //!   `0x00013170`, `Close` `0x00013270`, `OnClose` `0x00013290`, `Recv`
 //!   `0x000132A0`, `Send` `0x00013320`, `RecvFrom` `0x00013330`, `Sendto`
 //!   `0x00013420`, `GetSocketID` `0x000134E0`, `WSACreate` `0x00013530`;
-//! - Billing: `billingserver.exe + billingserver.pdb`, SHA-256 EXE
-//!   `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19`, PDB
-//!   `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`:
+//! - Billing: `billingserver.exe + billingserver.pdb`:
 //!   соответственно `0x00001860`, `0x0000D600`, `0x0000D690`, `0x0000D6A0`,
 //!   `0x0000D6F0`, `0x0000D720`, `0x0000D730`, `0x0000D830`, `0x0000D850`,
 //!   `0x0000D860`, `0x0000D8E0`, `0x0000D8F0`, `0x0000D9E0`, `0x0000DAA0`,
 //!   `0x0000DAF0`;
-//! - Login: `loginserver.exe + LoginServer.pdb`, SHA-256 EXE
-//!   `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876`, PDB
-//!   `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`:
+//! - Login: `loginserver.exe + LoginServer.pdb`:
 //!   соответственно `0x00002AF0`, `0x0006C4F0`, `0x0006C580`, `0x0006C590`,
 //!   `0x0006C5E0`, `0x0006C610`, `0x0006C620`, `0x0006C720`, `0x0006C740`,
 //!   `0x0006C750`, `0x0006C7D0`, `0x0006C7E0`, `0x0006C8D0`, `0x0006C990`,
 //!   `0x0006C9F0`;
-//! - Misc: `miscserver.exe + miscserver.pdb`, SHA-256 EXE
-//!   `F4426942465E6E9D1397EEF7A977B87D0D8C5B12957832770F57656F998AED65`, PDB
-//!   `ED5F482DADB3E8B050B37F9911067479D297C5B6D33C1EA2CE99C9CD0FC11FA7`:
+//! - Misc: `miscserver.exe + miscserver.pdb`:
 //!   init `0x00012C20`, cleanup `0x00012CB0`, ctor `0x00012CC0`, dtor
 //!   `0x00012D10`, `Create` `0x00012D40`, `Bind` `0x00012D50`, `Close`
 //!   `0x00012E50`, `OnClose` `0x00012E70`, `Recv` `0x00012E80`, `Send`
 //!   `0x00012F00`, `RecvFrom` `0x00012F10`, `Sendto` `0x00013000`,
 //!   `GetSocketID` `0x000130C0`; неиспользованные `SetIP/WSACreate` не emitted;
-//! - Game: `gameserver.exe + GameServer.pdb`, SHA-256 EXE
-//!   `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, PDB
-//!   `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`:
+//! - Game: `gameserver.exe + GameServer.pdb`:
 //!   `SetIP` `0x00001DD0`, init `0x0001AAC0`, cleanup `0x0001AB50`, ctor
 //!   `0x0001AB60`, dtor `0x0001ABB0`, `Create` `0x0001ABE0`, `Bind`
 //!   `0x0001ABF0`, `Close` `0x0001ACF0`, `OnClose` `0x0001AD10`, `Recv`
 //!   `0x0001AD20`, `RecvFrom` `0x0001ADA0`, `Sendto` `0x0001AEA0`,
 //!   `GetSocketID` `0x0001AF60`, `WSACreate` `0x0001AFB0`, вынесенный linker
 //!   `Send` `0x001B7020`;
-//! - World: `Nworldserver.exe + WorldServer.pdb`, SHA-256 EXE
-//!   `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//!   `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`:
+//! - World: `Nworldserver.exe + WorldServer.pdb`:
 //!   `SetIP` `0x000011C0`, init `0x0002A060`, cleanup `0x0002A0F0`, ctor
 //!   `0x0002A100`, dtor `0x0002A150`, `Create` `0x0002A180`, `Bind`
 //!   `0x0002A190`, `Close` `0x0002A290`, `OnClose` `0x0002A2B0`, `Recv`

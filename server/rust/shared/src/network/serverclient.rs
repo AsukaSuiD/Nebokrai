@@ -7,23 +7,10 @@
 //! receive-rate. Разбор
 //! 12-байтового envelope до конкретного `CMessage` остаётся владельцам
 //! направлений: их типы сообщений и набор присваиваемых metadata различаются.
+//! Формат внешнего TCP-обрамления: docs/protocol/transport.md.
 //!
-//! Точные варианты корпуса:
-//! - Auth: `AuthServer/authserver.exe + AuthServer/authserver.pdb`, SHA-256
-//!   `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15` /
-//!   `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`;
-//! - Billing: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`,
-//!   `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19` /
-//!   `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`;
-//! - Login: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`,
-//!   `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//!   `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`;
-//! - Game: `GameServer/gameserver.exe + GameServer/GameServer.pdb`,
-//!   `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E` /
-//!   `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
-//! - World: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//!   `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1` /
-//!   `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Точные варианты корпуса — пары EXE/PDB Auth, Billing, Login, Game и World;
+//! их идентификаторы (SHA-256) зафиксированы в `server/rust/src/manifest/`.
 //!
 //! Исходные пути PDB:
 //! `h:\fengyun\fy_russia\src\nets\serverclient.{cpp,h}`,
@@ -85,10 +72,8 @@
 //! Конструктор также задавал `lost=false`, `quit=false`, `server_type=0`, пустую
 //! map-строку, `map_id=0`, `close=false` и нулевое число I/O. Defaults без
 //! доказанного потребителя здесь только зафиксированы, но не представлены
-//! пустыми Rust-полями; живые map/close/I/O-состояния сохранены. Пустой virtual
-//! `OnOneMessageSizeOver`, vtable, STL/CRT, SEH и тысячи ошибочно приписанных
-//! template-тел удалены как compiler/library noise. Полный сырой экспорт
-//! остаётся в истории Git и воспроизводится из архивных EXE/PDB.
+//! пустыми Rust-полями; живые map/close/I/O-состояния сохранены. Пустой
+//! virtual `OnOneMessageSizeOver` отдельного Rust-тела не получает.
 
 use std::io;
 use std::mem;

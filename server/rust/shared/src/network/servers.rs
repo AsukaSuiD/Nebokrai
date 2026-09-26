@@ -7,22 +7,8 @@
 //! `DoNetThreadFunc`. Конкретные virtual callbacks передаются узким trait и не
 //! смешивают общий server-owner с различающимися `CMessage`.
 //!
-//! Точные варианты корпуса:
-//! - Auth: `AuthServer/authserver.exe + AuthServer/authserver.pdb`, SHA-256
-//!   `AE0022429C135553092364F01838FA6EF8E631D558C96278123FF3ADE6AD3B15` /
-//!   `26F8936605024F56B0A2C3BBB1923BCACD3DF9E17221FCC20AB38070E28403D5`;
-//! - Billing: `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`,
-//!   `FA32E3C043CB49965686129696A4EB34B733ACA1D60CAF57D369F97D5E68FB19` /
-//!   `F900CD0330BEFF32AC071B107AB653FD403CD18746896B3C0187C5751ACA0B21`;
-//! - Login: `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`,
-//!   `1C84006DF612053B007D69E0243497A8DA85E10FB1D825D0B462F016747E7876` /
-//!   `FBBCEB3B18F72DECB57B2178063E946233703DD7C298738DE929E9A1C98A902C`;
-//! - Game: `GameServer/gameserver.exe + GameServer/GameServer.pdb`,
-//!   `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E` /
-//!   `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
-//! - World: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//!   `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1` /
-//!   `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Точные варианты корпуса — пары EXE/PDB Auth, Billing, Login, Game и World;
+//! их идентификаторы (SHA-256) зафиксированы в `server/rust/src/manifest/`.
 //!
 //! Исходные пути PDB: `h:\fengyun\fy_russia\src\nets\servers.{cpp,h}`,
 //! `d:\complite_version\fengyun_russia\trunk\nets\servers.{cpp,h}` и
@@ -117,8 +103,7 @@
 //! `0x186A0000`, max in-flight send `1`, max clients `100`, per-client send
 //! buffer `0xC800`; `m_bCheck`, `m_bCheckMsgCon` и allow-list checking изначально
 //! выключены. `m_dwMaxMsgLen` конструктор не назначал, поэтому до поздней записи
-//! service-owner он представлен `None`. STL/CRT/SEH, vtable, WinSock/IOCP
-//! allocation и thread-handle cleanup удалены как технический шум.
+//! service-owner он представлен `None`.
 //! Auth `InitNetServer_Auth` после успешного `Host` менял
 //! `m_lMaxBlockConnetNum` на `10` и `m_lSendInterTime` на config-значение.
 //! Rust сохраняет этот порядок: первый setter уже не может изменить backlog
