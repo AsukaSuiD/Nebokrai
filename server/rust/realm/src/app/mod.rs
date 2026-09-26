@@ -44,7 +44,7 @@ pub mod world_game; // тип CGame старого WorldServer: объявлен
 pub mod world_game_init; // Init/Release и net init/reconnect CGame: load_setup, ресурсные и DB-владельцы, workers.
 pub mod world_dispatch; // process_world_message: диспетчер мировых сообщений, drain union runtime, country/organizing effect-glue и DeleteRole/CreateRole мосты.
 pub mod world_hub_data; // hub-данные Init/MainLoop World: сетевая конфигурация, init-callbacks, события диспетча ProcessedWorldEvent с union terminal-семьёй, state-структуры и effect-контексты за view-швами игры.
-pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, записи game/login серверов, origin-отчёты и organizing player-контексты.
+pub mod world_hub_entries; // записи таблиц состояния World: materialized-регион, системная рассылка и её AI-отчёт, x87 money-truncate, origin-отчёты и organizing player-контексты; re-export записей game/login серверов из владельцев regions и characters.
 pub mod world_message; // wire-сообщение направлений Login/Game<->World.
 pub mod world_init_context; // Init-context World: process DB owners/settings, dbmisc configuration, typed-доставка его событий и runtime-контракт Init с region-load швом dyn RegionParameterLoadTarget (impl у process-owner-а)
 pub mod world_main_loop_contexts; // post-init контексты World: JJC/LeiTing platform-glue, runtime-швы с worker-мостами и process-impl, INI-замена, build error MainLoop DB-stage

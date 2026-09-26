@@ -18,6 +18,9 @@
 //! запуск save-thread и отчёт offline-миграции терминала ветви `0x3FC02`
 //! (`WorldGameServerLostReport`). Их fn-владельцы и trait
 //! `WorldSaveRuntimeContext` остаются у process-owner-а (`world_game*`).
+//! Запись ping-информации GameServer перенесена владельцу реестра
+//! обслуживающих Zone мира [`crate::regions::worldzones`] и re-export-ируется
+//! здесь.
 //!
 //! Там же свободный monitoring-owner `SendErrLog` (`send_err_log_to_login` +
 //! `WorldErrorLogDelivery`): исходная cdecl-функция принадлежит коду процесса
@@ -900,17 +903,8 @@ pub enum WorldRegionChangeTeamUpdate {
     Updated,
 }
 
-/// Семантическая замена старого 36-байтового `tagPingGameServerInfo`.
-///
-/// Ветка `0x5FA0A` подтверждает `std::string strIP` и два signed `long`:
-/// map ID из metadata сообщения и число игроков из payload. Rust-layout не
-/// выдаётся за Windows ABI; owned bytes и `Vec` заменяют только STL-владение.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorldPingGameServerInfo {
-    pub ip: Vec<u8>,
-    pub map_id: i32,
-    pub player_count: i32,
-}
+// Запись ping-информации GameServer перенесена владельцу `regions`; прежний путь сохранён re-export-ом.
+pub use crate::regions::worldzones::WorldPingGameServerInfo;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorldInitialRegionSnapshotKind {

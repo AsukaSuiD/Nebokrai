@@ -73,12 +73,9 @@ use crate::persistence::rsgenvar::GenVarLoadOutcome;
 use crate::persistence::rsplayer::{PlayerRanksStatBlock, PlayerRanksStatOutcome};
 use crate::persistence::rssetup::{LoadedSetupIds, WorldDatabaseSettings};
 use crate::regions::region::RegionSerializationBlock;
-use crate::regions::worldcityregion::CWorldCityRegion;
-use crate::regions::worldcountrywarregion::WorldCountryWarRegion;
 use crate::regions::worldregion::{
     CWorldRegion, WorldRegionOwnerRelationBlock, WorldRegionOwnerRelationReport,
 };
-use crate::regions::worldvillageregion::CWorldVillageRegion;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorldSetupSource {
@@ -465,12 +462,8 @@ impl Error for WorldSetupOpenError {
     }
 }
 
-pub enum WorldRegionOwner {
-    Base(Box<CWorldRegion>),
-    Village(Box<CWorldVillageRegion>),
-    City(Box<CWorldCityRegion>),
-    Country(Box<WorldCountryWarRegion>),
-}
+// Объявление владельца регионов мира перенесено владельцу `regions`; прежний путь сохранён re-export-ом, impl-блоки остаются ниже.
+pub use crate::regions::worldzones::WorldRegionOwner;
 
 impl WorldRegionOwner {
     pub fn base(&self) -> &CWorldRegion {

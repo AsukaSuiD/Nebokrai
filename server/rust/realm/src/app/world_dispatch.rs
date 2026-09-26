@@ -225,7 +225,7 @@ impl CountryVillageTaxContext for WorldCountryExileResultEffects<'_> {
         country_id: u8,
     ) -> Result<Vec<CountryVillageTaxRegion>, CountryVillageTaxContextBlock> {
         let mut regions = Vec::new();
-        for (&map_key, assignment) in &self.game.regions {
+        for (&map_key, assignment) in &self.game.region_registry.regions {
             let Some(region_type) = assignment.region_type else {
                 return Err(CountryVillageTaxContextBlock::UninitializedRegionType { map_key });
             };

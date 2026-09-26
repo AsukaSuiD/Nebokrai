@@ -11,3 +11,4 @@ pub mod worldcountrywarregion; // WorldCountryWarRegion: country-war регио�
 pub mod worldregion; // CWorldRegion: мировой регион.
 pub mod worldvillageregion; // CWorldVillageRegion: владелец деревенского региона.
 pub mod worldwarregion; // CWorldWarRegion: промежуточный war-регион мира.
+pub mod worldzones; // реестр обслуживающих Zone мира: назначения регионов, записи GameServer и ping-индекс.

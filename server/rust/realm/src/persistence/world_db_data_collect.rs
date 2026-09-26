@@ -601,6 +601,7 @@ impl CGame {
             let sender = guard.game.current_game_server_sender();
             let deliveries = guard
                 .game
+                .region_registry
                 .game_servers
                 .values()
                 .filter(|game_server| game_server.connected)
@@ -628,7 +629,7 @@ impl CGame {
     }
 
     pub fn geterate_region_db_data(&self) {
-        for assignment in self.regions.values() {
+        for assignment in self.region_registry.regions.values() {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
                 continue;
             };
@@ -637,7 +638,7 @@ impl CGame {
     }
 
     pub(crate) fn player_organizing_region_types(&self) -> BTreeMap<i32, Option<u16>> {
-        self.regions
+        self.region_registry.regions
             .iter()
             .filter_map(|(&region_id, assignment)| {
                 assignment.region.as_ref()?;

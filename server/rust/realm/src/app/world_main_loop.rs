@@ -141,7 +141,7 @@ impl CGame {
         Random: FnMut(i32) -> i32,
     {
         let mut region_ids_run = Vec::new();
-        for (&region_id, assignment) in &mut self.regions {
+        for (&region_id, assignment) in &mut self.region_registry.regions {
             let Some(region) = assignment.region.as_mut() else {
                 continue;
             };
@@ -1308,19 +1308,20 @@ impl CGame {
         &mut self,
         clocks: &WorldMainLoopClockState,
     ) -> Result<WorldMainLoopPingStageReport, WorldMainLoopPingError> {
-        if !self.ping_in_progress {
+        if !self.region_registry.ping_in_progress {
             return Ok(WorldMainLoopPingStageReport::Idle);
         }
 
-        let received_responses = u32::try_from(self.ping_game_servers.len()).map_err(|_| {
+        let received_responses = u32::try_from(self.region_registry.ping_game_servers.len())
+            .map_err(|_| {
             WorldMainLoopPingError::ResponseCountOutsideLegacyRange {
-                count: self.ping_game_servers.len(),
+                count: self.region_registry.ping_game_servers.len(),
             }
         })?;
         let connected_game_servers = self.connected_game_server_count();
         let elapsed_ms = clocks
             .current_tick_ms
-            .wrapping_sub(self.last_ping_game_server_time_ms);
+            .wrapping_sub(self.region_registry.last_ping_game_server_time_ms);
         let all_connected_responded = connected_game_servers as u32 <= received_responses;
         let timed_out = 5_000 < elapsed_ms;
         if !all_connected_responded && !timed_out {
@@ -1336,14 +1337,14 @@ impl CGame {
                 count: self.player_registry.online_players.len(),
             }
         })?;
-        self.ping_in_progress = false;
+        self.region_registry.ping_in_progress = false;
 
         let declared_responses = received_responses as i32;
         let mut snapshot = CMessage::new(0x0001_FE04);
         snapshot.base_mut().add_ulong(online_players);
         snapshot.base_mut().add_long(declared_responses);
         if 0 < declared_responses {
-            for response in &self.ping_game_servers {
+            for response in &self.region_registry.ping_game_servers {
                 add_legacy_c_string(snapshot.base_mut(), &response.ip);
                 snapshot.base_mut().add_long(response.map_id);
                 snapshot.base_mut().add_long(response.player_count);

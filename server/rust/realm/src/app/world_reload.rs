@@ -895,7 +895,7 @@ impl CGame {
             previous_npcs = total_npc_count;
             // содержит 549 записей и 549 уникальных ID; поэтому Rust Drop
             // заменённого Box не достигается в baseline и не подменяет утечку.
-            self.regions.insert(
+            self.region_registry.regions.insert(
                 region_id,
                 WorldRegionAssignment {
                     region: Some(owner),
@@ -914,7 +914,7 @@ impl CGame {
         context: &mut Context,
         region_id: i32,
     ) -> Result<bool, WorldReloadRegionSetupBlock> {
-        let Some(assignment) = self.regions.get_mut(&region_id) else {
+        let Some(assignment) = self.region_registry.regions.get_mut(&region_id) else {
             return Ok(false);
         };
         let Some(region) = assignment.region.as_mut() else {
@@ -940,7 +940,7 @@ impl CGame {
         context: &mut Context,
     ) -> Result<bool, WorldReloadRegionSetupBlock> {
         let sender = self.current_game_server_sender();
-        for assignment in self.regions.values_mut() {
+        for assignment in self.region_registry.regions.values_mut() {
             let Some(region) = assignment.region.as_mut() else {
                 continue;
             };
@@ -2787,7 +2787,7 @@ impl CGame {
         legacy_result: &mut i32,
     ) -> Result<(), WorldReloadRegionSnapshotBlock> {
         let sender = self.current_game_server_sender();
-        for assignment in self.regions.values_mut() {
+        for assignment in self.region_registry.regions.values_mut() {
             let Some(region) = assignment.region.as_mut() else {
                 continue;
             };

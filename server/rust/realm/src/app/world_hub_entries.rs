@@ -1,8 +1,8 @@
 //! Записи и транспортные контексты таблиц состояния WorldServer (hub-data
 //! уровень): materialized-регион, системная рассылка `tagSysBroadcast` и её
-//! AI-отчёт, деньги аукциона с точным x87-усечением, записи `tagGameServer`,
-//! отчёты origin-снаряжения и organizing/доставка-контексты обновления
-//! faction-информации игрока. Источник контракта — та же точная пара, что у
+//! AI-отчёт, деньги аукциона с точным x87-усечением, отчёты origin-снаряжения
+//! и organizing/доставка-контексты обновления faction-информации игрока.
+//! Источник контракта — та же точная пара, что у
 //! [`crate::app::world_runtime`] (`.exe/Nworldserver.exe` +
 //! `.exe/WorldServer.pdb`, SHA-256 `F3AC454D…`, RSDS совпадает).
 //!
@@ -11,15 +11,15 @@
 //! фиксируется полем сессии до извлечения player owner-а из map.
 //!
 //! Запись присутствия login-игрока перенесена владельцу
-//! [`crate::characters::worldplayers`] и re-export-ируется здесь для прежних
-//! consumers.
+//! [`crate::characters::worldplayers`], записи назначения регионов, GameServer
+//! и ping-индекса — владельцу [`crate::regions::worldzones`]; прежние пути
+//! сохраняются re-export-ами для прежних consumers и старого пакета.
 
 use std::collections::BTreeMap;
 
 use nebokrai_shared::network::ServerCommandHandle;
 
 use crate::app::world_message::{CMessage, SendMessageError};
-use crate::app::world_runtime::WorldRegionOwner;
 use crate::characters::player::{
     PlayerFactionInfoContext, PlayerFactionInfoDelivery, PlayerOrganizingState,
     PlayerOrganizingUpdateError, PlayerOrganizingUpdater, PlayerOriginEquipmentBlock,
@@ -28,11 +28,8 @@ use crate::characters::player::{
 use crate::organizations::faction::CFaction;
 use crate::organizations::organizingctrl::COrganizingCtrl;
 
-pub struct WorldRegionAssignment {
-    pub region: Option<WorldRegionOwner>,
-    pub game_server_index: u32,
-    pub region_type: Option<i32>,
-}
+// Записи реестра обслуживающих Zone мира перенесены владельцу `regions`; прежние пути сохранены re-export-ом.
+pub use crate::regions::worldzones::{WorldGameServerEntry, WorldRegionAssignment};
 
 /// Действующая AI-проекция исходного `CGame::tagSysBroadcast`.
 ///
@@ -160,19 +157,6 @@ pub struct WorldGameAiReport {
     pub broadcast_tick_ms: u32,
     pub broadcasts: Vec<WorldSystemBroadcastDisposition>,
     pub legacy_result: i32,
-}
-
-/// Минимальная действующая часть исходного `CGame::tagGameServer`.
-///
-/// Его оригинал-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
-/// структурным Drop без отдельной инфраструктуры строки MSVC.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorldGameServerEntry {
-    pub connected: bool,
-    pub index: u32,
-    pub ip: Vec<u8>,
-    pub port: Option<u32>,
-    pub received_player_data: Option<i32>,
 }
 
 pub use crate::characters::worldplayers::WorldLoginPlayerEntry;

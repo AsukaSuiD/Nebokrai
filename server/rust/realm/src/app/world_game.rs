@@ -13,19 +13,20 @@
 //! а не чистая оркестрация и не образец app-модуля**. Структура физически
 //! хранит первичные domain stores канонических владельцев: индекс
 //! `team_session_ids` — session/team projection, целевой владелец
-//! `sessions`; реестры `regions`/`game_servers` и ping-индекс — `regions`;
-//! `system_broadcasts`/`goods_links` — `social`; `leave_word_id` —
-//! `organizations`; `honor_eliminate_list` — активности/рейтинги;
-//! `bai_tan` — исторический анти-флуд член, владелец назначается при
-//! разборе. Процессные и сетевые поля (`setup`, net-края, workers, очереди
-//! write-log/load, time-маркеры) и composition handle-ы — накопитель
-//! сохранения (`persistence::savedata::WorldSaveDataAccumulator`), мировой
-//! реестр игроков и присутствие
+//! `sessions`; `system_broadcasts`/`goods_links` — `social`;
+//! `leave_word_id` — `organizations`; `honor_eliminate_list` —
+//! активности/рейтинги; `bai_tan` — исторический анти-флуд член, владелец
+//! назначается при разборе. Процессные и сетевые поля (`setup`, net-края,
+//! workers, очереди write-log/load, time-маркеры) и composition handle-ы —
+//! накопитель сохранения (`persistence::savedata::WorldSaveDataAccumulator`),
+//! мировой реестр игроков и присутствие
 //! (`characters::worldplayers::WorldPlayerRegistry` в `player_registry`;
 //! typed dup-операции и счётчик перенесены владельцу, остальные
 //! очередные/маповые мутации остаются оркестрацией app через его публичные
-//! поля) и мировые контентные каталоги (`content::WorldContentCatalogs` в
-//! `content_catalogs`, прежние pub accessors ниже делегируют ему) —
+//! поля), мировые контентные каталоги (`content::WorldContentCatalogs` в
+//! `content_catalogs`, прежние pub accessors ниже делегируют ему) и реестр
+//! обслуживающих игровых Zone и их ping-индекс
+//! (`regions::worldzones::WorldRegionRegistry` в `region_registry`) —
 //! остаются законной композиционной частью `app`. Дублирования состояния
 //! с domain-модулями нет: эти группы
 //! существуют только здесь и перейдут к владельцам предметной
@@ -106,6 +107,7 @@ use crate::persistence::writelogworker::WorldWriteLogWorker;
 use crate::regions::region::CRegion;
 use crate::regions::rsregion::{RegionDatabaseParameters, RegionParameterLoadTarget};
 use crate::regions::worldregion::CWorldRegion;
+use crate::regions::worldzones::WorldRegionRegistry;
 use crate::sessions::csessionfactory::CSessionFactory;
 use nebokrai_shared::network::ServerCommandHandle;
 use nebokrai_shared::resources::{CCiQingSetup, CContributeSetup, CDupliRegionSetup, CEmotion, CGodsBattleConf, CHitLevelSetup, CIncrementShopList, CPlayerList, CQuestSystem, CTaoZhuangSetup, CThingSetup, CTradeList, CWordsFilter, EquipmentComposeList, GlobeSetupSnapshot, PrisonConf};
@@ -1081,8 +1083,7 @@ pub struct CGame {
     pub(crate) player_load_workers: WorldPlayerLoadWorkerPool,
     pub(crate) net_client: Option<CMyNetClient>,
     pub(crate) net_server: Option<CMyNetServer>,
-    pub(crate) regions: BTreeMap<i32, WorldRegionAssignment>,
-    pub(crate) game_servers: BTreeMap<u32, WorldGameServerEntry>,
+    pub(crate) region_registry: WorldRegionRegistry,
     pub(crate) system_broadcasts: VecDeque<WorldSystemBroadcast>,
     pub(crate) goods_links: VecDeque<WorldGoodsLink>,
     pub(crate) write_log_queue: WorldWriteLogQueue,
@@ -1093,12 +1094,9 @@ pub struct CGame {
     pub(crate) leave_word_id: i32,
     pub(crate) db_responses: i32,
     pub(crate) db_data: WorldSaveDataAccumulator,
-    pub(crate) ping_game_servers: Vec<WorldPingGameServerInfo>,
     pub(crate) bai_tan: WorldBaiTanLists,
     pub(crate) honor_eliminate_list: BTreeMap<u32, VecDeque<u32>>,
     pub(crate) login_server_id: i32,
-    pub(crate) ping_in_progress: bool,
-    pub(crate) last_ping_game_server_time_ms: u32,
     pub(crate) game_server_message_time_ms: u32,
     pub(crate) login_server_message_time_ms: u32,
 }
@@ -2231,14 +2229,14 @@ impl crate::activities::jjcsystem::JjcGameView for CGame {
 
 impl RegionParameterLoadTarget for CGame {
     fn has_region_parameter_target(&self, region_id: i32) -> bool {
-        self.regions
+        self.region_registry.regions
             .get(&region_id)
             .is_some_and(|assignment| assignment.region.is_some())
     }
 
     fn apply_region_database_parameters(&mut self, parameters: RegionDatabaseParameters) -> bool {
         let Some(region) = self
-            .regions
+            .region_registry.regions
             .get_mut(&parameters.region_id)
             .and_then(|assignment| assignment.region.as_mut())
         else {
@@ -2357,8 +2355,7 @@ impl CGame {
             player_load_workers: WorldPlayerLoadWorkerPool::new(),
             net_client: None,
             net_server: None,
-            regions: BTreeMap::new(),
-            game_servers: BTreeMap::new(),
+            region_registry: WorldRegionRegistry::new(legacy_tick_ms()),
             system_broadcasts: VecDeque::new(),
             goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
                 .take(INITIAL_GOODS_LINK_PLACEHOLDERS)
@@ -2371,12 +2368,9 @@ impl CGame {
             leave_word_id: 0,
             db_responses: 0,
             db_data: WorldSaveDataAccumulator::new(),
-            ping_game_servers: Vec::new(),
             bai_tan: WorldBaiTanLists::new(),
             honor_eliminate_list: BTreeMap::new(),
             login_server_id: 0,
-            ping_in_progress: false,
-            last_ping_game_server_time_ms: legacy_tick_ms(),
             game_server_message_time_ms: 0,
             login_server_message_time_ms: 0,
         }
@@ -2832,21 +2826,21 @@ impl CGame {
     }
 
     pub fn connected_game_server_count(&self) -> i32 {
-        self.game_servers
+        self.region_registry.game_servers
             .values()
             .filter(|game_server| game_server.connected)
             .fold(0_i32, |count, _| count.wrapping_add(1))
     }
 
     pub fn connected_game_server_indices(&self) -> impl Iterator<Item = i32> + '_ {
-        self.game_servers
+        self.region_registry.game_servers
             .values()
             .filter(|game_server| game_server.connected)
             .map(|game_server| game_server.index as i32)
     }
 
     pub fn connected_game_server_count_ex(&self) -> i32 {
-        self.game_servers
+        self.region_registry.game_servers
             .values()
             .filter(|game_server| game_server.connected && game_server.index != 5)
             .fold(0_i32, |count, _| count.wrapping_add(1))
@@ -2861,7 +2855,7 @@ impl CGame {
         ip: &[u8],
         port: u32,
     ) -> Result<Option<&WorldGameServerEntry>, WorldGameServerLookupError> {
-        for game_server in self.game_servers.values() {
+        for game_server in self.region_registry.game_servers.values() {
             if game_server.ip != ip {
                 continue;
             }
@@ -2890,7 +2884,7 @@ impl CGame {
             return Ok(None);
         };
         let game_server = self
-            .game_servers
+            .region_registry.game_servers
             .get_mut(&index)
             .expect("адресный поиск вернул живой ключ того же реестра");
         let previous_connected = game_server.connected;
@@ -2911,7 +2905,7 @@ impl CGame {
         &mut self,
         game_server_index: u32,
     ) -> Option<WorldGameServerDisconnectionState> {
-        let game_server = self.game_servers.get_mut(&game_server_index)?;
+        let game_server = self.region_registry.game_servers.get_mut(&game_server_index)?;
         let previous_connected = game_server.connected;
         game_server.connected = false;
         Some(WorldGameServerDisconnectionState {
@@ -2923,14 +2917,16 @@ impl CGame {
     }
 
     pub fn game_server(&self, index: u32) -> Option<&WorldGameServerEntry> {
-        self.game_servers.get(&index)
+        self.region_registry.game_servers.get(&index)
     }
 
     pub fn reset_received_player_data(
         &mut self,
         game_server_index: i32,
     ) -> WorldReceivedPlayerDataUpdate {
-        let Some(game_server) = self.game_servers.get_mut(&(game_server_index as u32)) else {
+        let Some(game_server) =
+            self.region_registry.game_servers.get_mut(&(game_server_index as u32))
+        else {
             return WorldReceivedPlayerDataUpdate::GameServerNotFound;
         };
         let previous = game_server.received_player_data.replace(0);
@@ -2944,7 +2940,9 @@ impl CGame {
         &mut self,
         game_server_index: i32,
     ) -> WorldReceivedPlayerDataUpdate {
-        let Some(game_server) = self.game_servers.get_mut(&(game_server_index as u32)) else {
+        let Some(game_server) =
+            self.region_registry.game_servers.get_mut(&(game_server_index as u32))
+        else {
             return WorldReceivedPlayerDataUpdate::GameServerNotFound;
         };
         let Some(previous) = game_server.received_player_data else {
@@ -2962,7 +2960,9 @@ impl CGame {
         &self,
         game_server_index: i32,
     ) -> WorldReceivedPlayerDataRead {
-        let Some(game_server) = self.game_servers.get(&(game_server_index as u32)) else {
+        let Some(game_server) =
+            self.region_registry.game_servers.get(&(game_server_index as u32))
+        else {
             return WorldReceivedPlayerDataRead::GameServerNotFound { legacy_value: 0 };
         };
         game_server.received_player_data.map_or(
@@ -3651,7 +3651,7 @@ impl CGame {
     {
         let mut skipped_null_region_owners = 0;
         let affected_region_ids = self
-            .regions
+            .region_registry.regions
             .values()
             .filter(|assignment| assignment.game_server_index == game_server_index)
             .filter_map(|assignment| match assignment.region.as_ref() {
@@ -4164,7 +4164,7 @@ impl CGame {
     }
 
     pub fn region(&self, region_id: i32) -> Option<&WorldRegionAssignment> {
-        self.regions.get(&region_id)
+        self.region_registry.regions.get(&region_id)
     }
 
     pub fn refresh_owned_city_org(
@@ -4192,7 +4192,7 @@ impl CGame {
         union_id: i32,
         country_id: Option<u8>,
     ) -> WorldOwnedCityRefreshOutcome {
-        let Some(assignment) = self.regions.get(&region_id) else {
+        let Some(assignment) = self.region_registry.regions.get(&region_id) else {
             return WorldOwnedCityRefreshOutcome::RegionNotFound;
         };
         let Some(region) = assignment.region.as_ref() else {
@@ -4223,7 +4223,7 @@ impl CGame {
     }
 
     pub fn creation_region_base(&self, region_id: i32) -> Option<&CRegion> {
-        self.regions
+        self.region_registry.regions
             .get(&region_id)?
             .region
             .as_ref()
@@ -4238,7 +4238,7 @@ impl CGame {
         today_total_tax: u32,
         total_tax: u32,
     ) -> WorldRegionParamUpdateOutcome {
-        let Some(assignment) = self.regions.get_mut(&region_id) else {
+        let Some(assignment) = self.region_registry.regions.get_mut(&region_id) else {
             return WorldRegionParamUpdateOutcome::RegionNotFound;
         };
         let Some(region) = assignment.region.as_mut() else {
@@ -4258,7 +4258,7 @@ impl CGame {
         source: &[u8],
         cursor: &mut usize,
     ) -> WorldRegionParamDecodeOutcome {
-        let Some(assignment) = self.regions.get_mut(&region_id) else {
+        let Some(assignment) = self.region_registry.regions.get_mut(&region_id) else {
             return WorldRegionParamDecodeOutcome::RegionNotFound;
         };
         let Some(region) = assignment.region.as_mut() else {
@@ -4281,7 +4281,7 @@ impl CGame {
     where
         Visit: FnMut(WorldInitialRegionSnapshot),
     {
-        for (&map_key, assignment) in &self.regions {
+        for (&map_key, assignment) in &self.region_registry.regions {
             let region = assignment.region.as_ref().ok_or(
                 WorldInitialRegionSnapshotBlock {
                     map_key,
@@ -4341,7 +4341,7 @@ impl CGame {
     pub fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup {
         let name = legacy_c_string_prefix(name);
         let mut skipped_null_owners = 0;
-        for assignment in self.regions.values() {
+        for assignment in self.region_registry.regions.values() {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
                 // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
                 // внутренний UB повреждённого состояния, а не wire-контракт.
@@ -4372,7 +4372,7 @@ impl CGame {
         let mut skipped_null_owners = 0;
         let mut matching_region_keys = 0;
         let mut routes = Vec::new();
-        for (&map_key, assignment) in &self.regions {
+        for (&map_key, assignment) in &self.region_registry.regions {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
                 skipped_null_owners += 1;
                 continue;
@@ -4449,17 +4449,17 @@ impl CGame {
     }
 
     pub fn begin_game_server_ping(&mut self) -> (usize, u32) {
-        self.ping_in_progress = true;
-        let cleared_responses = self.ping_game_servers.len();
-        self.ping_game_servers.clear();
+        self.region_registry.ping_in_progress = true;
+        let cleared_responses = self.region_registry.ping_game_servers.len();
+        self.region_registry.ping_game_servers.clear();
         let started_at_ms = legacy_tick_ms();
-        self.last_ping_game_server_time_ms = started_at_ms;
+        self.region_registry.last_ping_game_server_time_ms = started_at_ms;
         (cleared_responses, started_at_ms)
     }
 
     pub fn record_game_server_ping(&mut self, response: WorldPingGameServerInfo) -> usize {
-        self.ping_game_servers.push(response);
-        self.ping_game_servers.len()
+        self.region_registry.ping_game_servers.push(response);
+        self.region_registry.ping_game_servers.len()
     }
 
     pub fn add_item_to_bai_tan_request_list(&mut self, ip: u32, player_id: i32) -> bool {

@@ -224,7 +224,7 @@ impl CGame {
                 blocked_at_record = Some(record_index as usize + 1);
                 break;
             };
-            self.game_servers.insert(
+            self.region_registry.game_servers.insert(
                 index,
                 WorldGameServerEntry {
                     connected: false,
@@ -242,7 +242,7 @@ impl CGame {
         Ok(WorldServerSetupLoadReport {
             declared_records,
             applied_records,
-            unique_game_servers: self.game_servers.len(),
+            unique_game_servers: self.region_registry.game_servers.len(),
             stream_complete: !tokens.failed(),
             blocked_at_record,
             read_end_notice: blocked_at_record.is_none(),
@@ -1064,11 +1064,11 @@ impl CGame {
             Ok(report) => events.push(WorldGameInitEvent::OrganizingControllerInitialized(report)),
             Err(source) => stop!(WorldGameInitBlockReason::OrganizingController(source)),
         }
-        let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        let region_ids = self.region_registry.regions.keys().copied().collect::<Vec<_>>();
         let mut players_to_refresh = Vec::new();
         for region_id in region_ids {
             let Some(mut region_owner) = self
-                .regions
+                .region_registry.regions
                 .get_mut(&region_id)
                 .and_then(|assignment| assignment.region.take())
             else {
@@ -1084,7 +1084,7 @@ impl CGame {
                     &mut |player_id| players_to_refresh.push(player_id),
                 )
             };
-            self.regions
+            self.region_registry.regions
                 .get_mut(&region_id)
                 .expect("region-map key не удаляется во время owner relation")
                 .region = Some(region_owner);
@@ -1445,11 +1445,11 @@ impl CGame {
             return Ok(Vec::new());
         }
 
-        let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        let region_ids = self.region_registry.regions.keys().copied().collect::<Vec<_>>();
         let mut saved = Vec::new();
         for region_id in region_ids {
             let assignment = self
-                .regions
+                .region_registry.regions
                 .get_mut(&region_id)
                 .expect("region ID взят из текущего map");
             let Some(region_type) = assignment.region_type else {
@@ -1557,10 +1557,10 @@ impl CGame {
             WorldGameReleaseVoidOwner::ReleaseGoodsLinks,
         ));
 
-        let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        let region_ids = self.region_registry.regions.keys().copied().collect::<Vec<_>>();
         for region_id in region_ids {
             let Some(region) = self
-                .regions
+                .region_registry.regions
                 .get_mut(&region_id)
                 .and_then(|assignment| assignment.region.take())
             else {
@@ -1573,7 +1573,7 @@ impl CGame {
         // узлы самой map. После этого места normal Release больше не читает
         // region registry, поэтому clear устраняет только внутреннее удержание
         // пустых Rust map-node до немедленного `DeleteGame`.
-        self.regions.clear();
+        self.region_registry.regions.clear();
 
         let scripts_released = self.content_catalogs.script_resources.clear();
         for (owner, released) in [
