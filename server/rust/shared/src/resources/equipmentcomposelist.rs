@@ -1,28 +1,24 @@
-//! Две static таблицы преобразования экипировки исторического Miracle.
-//!
-//! `LoadList/AddToByteArray` подтверждены точной парой
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, а
-//! `DecordFromByteArray/GetFirstCompose/GetSecondCompose` — точной парой
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner PDB:
+//! Две static таблицы преобразования экипировки исторического Miracle:
+//! `LoadList/AddToByteArray` подтверждены парой WorldServer EXE/PDB,
+//! `DecordFromByteArray/GetFirstCompose/GetSecondCompose` — парой GameServer
+//! (в `server/rust/src/manifest/`). Исходный owner PDB:
 //! `e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp`.
 //!
-//! Wire состоит из двух последовательных ordered map: для каждой сначала
-//! signed count, затем пары `u32 source + u32 target`. Loader и Game decoder
-//! использовали `map::insert`, поэтому duplicate source сохраняет первое
-//! значение. Game decoder сначала очищает обе таблицы и сохраняет полностью
-//! прочитанный prefix; исходная функция всегда возвращала `false` даже после
-//! успешной записи, но reconnect caller игнорировал результат, поэтому Rust
-//! возвращает содержательный report. Отрицательный wire-count не создаётся
-//! парным World owner-ом; вместо legacy unbounded-read он трактуется как пустая
-//! секция, как и в достигнутых соседних snapshot decoder-ах.
-//! `BTreeMap` заменяет MSVC tree без изменения unsigned key-order.
-//! `LoadList` очищает обе таблицы до попытки чтения, ищет два точных маркера
-//! `#`, пропускает следующий label и читает signed count с парами signed
-//! `long`, сохраняя их 32-битный шаблон как unsigned key/value. Возврат — `0`
-//! только при ошибке открытия и `1` после любого открытого stream, даже если
-//! секции неполны; это legacy-различие между доступностью ресурса и полнотой
-//! данных сохранено.
+//! Wire: две последовательные ordered map — signed count, затем пары
+//! `u32 source + u32 target`. `map::insert` сохраняет первое значение при
+//! duplicate source; `BTreeMap` заменяет MSVC tree без изменения unsigned
+//! key-order. Исходная decoder-функция всегда возвращала `false`, но caller
+//! игнорировал результат, поэтому Rust возвращает содержательный report.
+//! Отрицательный wire-count трактуется как пустая секция, как в соседних
+//! decoder-ах, вместо legacy unbounded-read.
+//!
+//! `LoadList` очищает обе таблицы до чтения, ищет два маркера `#`, пропускает
+//! label и читает signed count с парами signed `long`, сохраняя 32-битный
+//! шаблон как unsigned key/value. Возврат `0` — только при ошибке открытия и
+//! `1` — после любого открытого stream; legacy-различие между доступностью
+//! ресурса и полнотой данных сохранено.
 //! Установленный экземпляр и его потребители остаются у владельца роли.
+//! Доказательства: docs/reconstruction/shared-technical.md#таблицы-преобразования-экипировки-equipmentcomposelist
 
 use std::collections::BTreeMap;
 use std::error::Error;

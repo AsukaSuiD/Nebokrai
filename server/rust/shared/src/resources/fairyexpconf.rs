@@ -1,5 +1,5 @@
 //! Опыт fairy `CFairyExpConf` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`. Game-пара использует наследованный
 //! decoder `CBattleFairyExpConfig`; исходные owners `setup/fairyexpconf.*` и
 //! `setup/cbattlefairyexpconfig.*`.

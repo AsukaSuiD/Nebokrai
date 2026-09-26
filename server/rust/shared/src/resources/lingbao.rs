@@ -1,28 +1,23 @@
-//! LingBao `CLingBaoSetup` из WorldServer и GameServer.
-//!
-//! Loader/serializer подтверждены парой
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, decoder
-//! `DecodeFromArrayLingBao` —
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner PDB:
+//! LingBao `CLingBaoSetup` из WorldServer и GameServer: loader/serializer
+//! подтверждены парой WorldServer EXE/PDB, decoder `DecodeFromArrayLingBao`
+//! — парой GameServer (в `server/rust/src/manifest/`). Исходный owner PDB:
 //! `e:\svn\fengyun_russia_dev\server\setup\lingbao.cpp/.h`.
 //!
-//! Wire пишет signed multimap count, key C-string, ticket и три vector-секции
-//! с records по 8, 5 и 3 `u32`. Равные byte-keys сохраняют insertion order:
-//! _Insert оригинальной map (gameserver VA 0x5ca150, worldserver VA 0x47da80)
-//! при равном ключе уходит вправо и вставляет новый node без выхода по
-//! совпадению — один node на запись даже для одинаковых имён; gameplay поиск
-//! (gameserver VA 0x5c9370) поэтому сканирует map парой (ключ, ticket).
+//! Wire: signed multimap count, key C-string, ticket и три vector-секции с
+//! records по 8, 5 и 3 `u32`. Равные byte-keys сохраняют insertion order:
+//! исходный `_Insert` при равном ключе уходит вправо и вставляет новый node
+//! без выхода по совпадению, поэтому gameplay поиск сканирует map парой
+//! (ключ, ticket).
 //!
 //! Loader очищает map, игнорирует labels позиционного token stream и при
-//! missing resource оставляет state пустым. Повреждённый хвост останавливается
-//! после последней полной записи.
-//! Game decoder также сначала очищает multimap и публикует только полные
-//! records; равные names остаются в insertion order. Динамическая byte-string
-//! заменяет старый 256-byte stack buffer без воспроизведения overflow.
-//! Отрицательный signed count оригинальный decoder (VA 0x5ca240, выход по JE)
-//! принял бы за огромный unsigned loop с чтением за пределами буфера; Rust
-//! трактует его как пустой вход (`max(0)`).
+//! missing resource оставляет state пустым; повреждённый хвост останавливается
+//! после последней полной записи. Game decoder тоже сначала очищает multimap
+//! и публикует только полные records; динамическая byte-string заменяет старый
+//! 256-byte stack buffer без воспроизведения overflow. Отрицательный signed
+//! count, который оригинал принял бы за огромный unsigned loop, Rust трактует
+//! как пустой вход (`max(0)`), не перенося unbounded-read.
 //! Установленный экземпляр и его потребители остаются у владельца роли.
+//! Доказательства: docs/reconstruction/shared-technical.md#lingbao-clingbaosetup
 
 use std::collections::BTreeMap;
 use std::error::Error;

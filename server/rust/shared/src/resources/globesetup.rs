@@ -1,53 +1,22 @@
-//! Общий глобальный setup `CGlobeSetup`, подтверждённый WorldServer и
-//! GameServer EXE/PDB.
+//! Общий глобальный setup `CGlobeSetup`, подтверждённый парами WorldServer и
+//! GameServer (идентификаторы в `server/rust/src/manifest/`).
 //!
-//! Основной wire — raw 0x1114-байтный `tagSetup`, затем полный
-//! `CRegionRouter`. Парный Game decoder копирует тот же snapshot, затем очищает
-//! и восстанавливает router; фиксированный byte-array сохраняет ABI-формат,
-//! static storage и padding обнулены.
+//! Основной wire — raw `0x1114`-байтный `tagSetup`, затем полный
+//! `CRegionRouter`; парный Game decoder копирует snapshot, очищает и
+//! восстанавливает router. Фиксированный byte-array сохраняет ABI-формат,
+//! static storage и padding обнулены. Typed loaders/accessors накладываются
+//! только на подтверждённые offsets; raw snapshot остаётся единым wire
+//! owner-ом без дублирующей config-модели.
 //!
-//! Typed loaders/accessors накладываются только на подтверждённые offsets:
-//! create-role limit остаётся signed `i16`, country names/identities и special
-//! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
-//! BattleFairy и CiQing feature gates, а также ordinary-fairy setup
-//! `+0x85C..+0x8B8` читаются из подтверждённых byte offsets. Exact
-//! `CPlayer::MountEquip` VA `0x443CB6/0x443E5C/0x444002/0x44426B`
-//! подтверждают ordinary player-scale коэффициенты `+0x8AC..+0x8B8`, а
-//! absolute reads `0xEF4694..0xEF46A0` — battle-fairy `+0x8D4..+0x8E0`.
-//! Public-talk projection читает оба fixed goods-name, stack-count/money и
-//! chat intervals, включая team `+0x850`, прямо из тех же setup-полей. Абсолютные
-//! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
-//! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
-//! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
-//! auto-inc progression `+0x734/+0x75C/+0x81C..+0x828` обслуживает reached
-//! `CPlayerAI::Run` и полный `CheckLevel` tail;
-//! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
-//! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
-//! monster death/EXP читает protection, quota/corrective, continuous-kill и
-//! pet progression массивы непосредственно из подтверждённых ABI offsets;
-//! ordinary monster base defense читает raw minimum/maximum monster hit из
-//! `+0x07C/+0x080`, не создавая отдельную config-модель;
-//! pet lifecycle/tracing/follow используют raw `m_dwPetWildTime +0x728`,
-//! `m_dwMaxPetTracingDistance +0x72C` и `m_fTranslateDistance +0x73C`;
-//! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
-//! `bAllowClientRunScript +0x50C` и соседний `bAllowClientChangePos +0x50D`
-//! загружаются позиционной проекцией GameServer и напрямую разрешают
-//! `othermessage 0x8FB01/channel 9` и `shapemessage 0x8F902`. Поле `bRotation +0xC48`,
-//! подтверждённое PDB непосредственно перед `bGoodsAi +0xC4C`, задаёт
-//! серверный байт поворота для квестового шага `0x8F903`.
-//! Восемь базовых recovery-полей `+0xC50..+0xC6C`, подтверждённые PDB
-//! `CGlobeSetup::tagSetup`, входят в player property projection и заново
-//! инициализируют `CPlayer::UpdateProperty` перед equipment/state addon-ами.
-//! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
-//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Соседний RP-блок
-//! `+0x3F0..+0x41F` также обслуживает reached
-//! `CPlayer::IncreaseRp`: два level-cap, fixed attack gain и шесть пар
-//! damage-factor/gain читаются из единого snapshot-а. Nation contender damage
-//! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
-//! `lDiedStateTime +0x56C` из того же snapshot. Смена региона обновляет
-//! `STATE_AUTO_PROTECT` с точной длительностью `dwAutoProtectTime +0x804`.
-//! Временные peace-состояния CPlayer::OnEnterRegion читают lResumeTimer
-//! из +0x354: VA 0xEF4114 при base 0xEF3DC0, calls 0x0045A2CD/0x0045A37D.
+//! Подтверждённые области — create-role limit (signed `i16`), country
+//! names/identities, auction/JJC/DbMisc поля, BattleFairy/CiQing gates,
+//! ordinary-fairy setup, public-talk проекция, PK/auto-inc progression,
+//! goods/pet/monster параметры, клиентские разрешения `+0x50C/+0x50D`,
+//! поворот `+0xC48`, recovery-поля, RP-блок, contender/death и peace-таймеры
+//! регионов. Их потребители и устанавливающие адреса собраны в machine
+//! evidence. Установленный экземпляр и его потребители остаются у владельца
+//! роли.
+//! Доказательства: docs/reconstruction/shared-technical.md#глобальный-setup-cglobesetup
 
 use crate::resources::regionrouter::{
     RegionRouter, RegionRouterDecodeError, RegionRouterSerializeError,

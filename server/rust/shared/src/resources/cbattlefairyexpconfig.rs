@@ -1,5 +1,5 @@
 //! Опыт fairy/battle fairy `CBattleFairyExpConfig` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/setup/cbattlefairyexpconfig.h/.cpp`.
 //!

@@ -1,5 +1,5 @@
 //! Списки монстров новых навыков `CNewSkillMonserConf` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner
 //! `setup/newskillmonsterlist.h/.cpp`.
 //!

@@ -1,5 +1,5 @@
 //! Порог honor за убийство `HonorElimilateConfig` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный владелец
 //! `setup/honorelimilateconfig.cpp`.
 //!

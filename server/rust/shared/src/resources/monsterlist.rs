@@ -1,6 +1,7 @@
 //! Общий формат обмена `CMonsterList` в Shared resources.
-//! Источник: сериализатор World — `worldserver.exe/.pdb`, декодер Game —
-//! `gameserver.exe/.pdb`; исходник `server/setup/monsterlist.h/.cpp`.
+//! Источник: сериализатор World — `Nworldserver.exe`/`WorldServer.pdb`,
+//! декодер Game — `gameserver.exe`/`GameServer.pdb`; исходник
+//! `server/setup/monsterlist.h/.cpp`.
 //! Установленный экземпляр и его потребители остаются у владельца роли.
 //!
 //! Формат обмена пишет упорядоченную карту монстров: 160-байтный скалярный

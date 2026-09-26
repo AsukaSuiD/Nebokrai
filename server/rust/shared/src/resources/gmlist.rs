@@ -1,5 +1,5 @@
 //! Общие операторы `CGMList` World/Game в Shared resources.
-//! Источник: точные `worldserver.exe + worldserver.pdb` и
+//! Источник: точные `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/gmlist.cpp`.
 //!
 //! Wire пишет два ordered map: signed count и `name\0 + i32 level`, затем god

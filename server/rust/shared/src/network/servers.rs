@@ -1,113 +1,37 @@
-//! Общий владелец входящих TCP-соединений `CServer`, восстановленный из
-//! `nets/servers.cpp` и `nets/servers.h`.
+//! Общий владелец входящих TCP-соединений `CServer` (`nets/servers.cpp/.h`,
+//! пары EXE/PDB Auth/Billing/Login/Game/World в `server/rust/src/manifest/`).
+//! Реализованы очередь socket-команд, listener, admission, реестры socket/map
+//! identity, IPv4-блокировка, таймер первого сообщения, счётчики и полный
+//! command snapshot `DoNetThreadFunc`; конкретные callbacks передаются узким
+//! trait и не смешивают owner с различающимися `CMessage`.
 //!
-//! Статус владельца: `IMPLEMENTED` для очереди socket-команд, listener,
-//! admission, реестров socket/map identity, временной блокировки IPv4,
-//! таймера первого сообщения, общих счётчиков и полного command snapshot
-//! `DoNetThreadFunc`. Конкретные virtual callbacks передаются узким trait и не
-//! смешивают общий server-owner с различающимися `CMessage`.
+//! Конкурентна только очередь команд; реестры изменяет один net-thread, и
+//! `BTreeMap` сохраняет порядок исходного `std::map`. Порядок прохода
+//! сохранён: атомарный снимок очереди → последовательное применение → не
+//! более одного нового send на client → timeout-QUIT следующим снимком →
+//! close после close flag. Receive-ошибка component возвращается отдельным
+//! элементом и не прерывает snapshot; доказанное `ForbidAndQuit` выполняется
+//! до следующей команды. Один send-action на соединение сохраняет порядок
+//! байтов. Timing pending Windows send против Linux readiness отмечен
+//! `BLOCKED_MISSING_FACT` и не выдаётся за полное совпадение.
 //!
-//! Точные варианты корпуса — пары EXE/PDB Auth, Billing, Login, Game и World;
-//! их идентификаторы (SHA-256) зафиксированы в `server/rust/src/manifest/`.
+//! Сохранённые странности: `GetSocketIDByMapStr` по отсутствующему ключу
+//! возвращал `1`; `AddAClient` увеличивал счётчик до проверки дубликата и не
+//! компенсировал его; `DelOneClient` уменьшал счётчик до `OnClose`, а
+//! переполнение `SENDALL` — после разрушения client. Admission и allow-list
+//! (`inet_ntoa` + port, запись с port `0` совпадает только по IP, wrapping
+//! `timeGetTime`) воспроизведены буквально. Конструкторские defaults: accept
+//! 100 ms, net 1 ms, backlog `INT_MAX`, таймаут первого сообщения 8000 ms,
+//! max clients 100, send buffer `0xC800`; `m_dwMaxMsgLen` до записи
+//! service-owner — `None`. Auth `InitNetServer_Auth` после успешного `Host`
+//! менял лимит блокировок на `10` и таймаут на config-значение.
 //!
-//! Исходные пути PDB: `h:\fengyun\fy_russia\src\nets\servers.{cpp,h}`,
-//! `d:\complite_version\fengyun_russia\trunk\nets\servers.{cpp,h}` и
-//! `e:\svn\fengyun_russia_dev\nets\servers.{cpp,h}`.
-//!
-//! Существенные RVA по порядку Auth / Billing / Login / Game / World:
-//! - `Host`: `0x00012680` / `0x0000C690` / `0x0006A780` / `0x00018D80` /
-//!   `0x00028160`;
-//! - `OnAccept`: `0x00010A10` / `0x0000AA00` / `0x00068DB0` / `0x000176F0` /
-//!   `0x00026740`;
-//! - `AddAClient`: `0x00011050` / `0x0000B060` / `0x00069330` /
-//!   `0x00017900` / `0x00026DA0`;
-//! - `DelOneClient`: `0x000105C0` / `0x0000A3D0` / `0x00068490` /
-//!   `0x000172C0` / `0x00026020`;
-//! - `DoNetThreadFunc`: `0x00011C80` / `0x0000BC90` / `0x00069AE0` /
-//!   `0x000180C0` / `0x00027740`.
-//! - `LoadAllowedClient`: Auth `0x000110D0`, Billing `0x0000B0E0`; оба
-//!   emitted-варианта совпадают.
-//!
-//! Все варианты передавали изменения одному net-thread через
-//! `CSocketCommands`; только очередь была concurrent, а `std::map`-реестры
-//! изменялись одним владельцем. `ServerCommandHandle` и
-//! `CSocketCommands<ServerSocketCommand>` сохраняют эту границу, а
-//! `BTreeMap` — детерминированный порядок исходного `std::map`. Owned `Vec` и
-//! `Arc<TcpStream>` заменяют ручные копии, указатели и `operator_delete`.
-//!
-//! `DoNetThreadFunc` во всех пяти вариантах атомарно снимал текущую очередь,
-//! последовательно применял команды, запускал не более одной новой send-
-//! операции на client за проход, публиковал timeout-QUIT для следующего
-//! snapshot и только затем закрывал socket с выставленным close flag. Rust
-//! сохраняет этот порядок в `process_command_snapshot`. Ошибка component
-//! receive не прерывает оставшийся snapshot: она возвращается отдельным
-//! элементом результата, как старый virtual `OnReceive` возвращал управление
-//! общему циклу.
-//! Component может отдельно вернуть доказанное действие `ForbidAndQuit` для
-//! receive-ошибки. Общий owner выполняет его сразу после component diagnostic
-//! и до следующей команды snapshot; opcode и причина ошибки при этом остаются
-//! неизвестны общему слою.
-//!
-//! `DoWorkerThreadFunc` после receive completion копировал `0x2000`-блок в
-//! owned команду и немедленно перевыставлял один read; после send completion
-//! публиковал `SENDEND`, даже если системный completion был частичным. Один
-//! `ServerIoAction::Receive` сохраняет последовательный outstanding read, а
-//! owned send-action дописывает batch целиком. Частичный Linux write не равен
-//! IOCP completion. На соединении исполняется один send-action, чтобы сохранить
-//! порядок байтов. `socket2::SockRef::shutdown` заменяет `closesocket` на
-//! стадии close flag, не забирая владение socket у read-задачи.
-//! Если новый send и close встречаются в одном snapshot, действие выполняет
-//! полную запись до shutdown; ранее начатая запись завершается до новой.
-//! Точная timing-семантика pending Windows send против Linux readiness локально
-//! отмечена `BLOCKED_MISSING_FACT` и не выдаётся за полное совпадение.
-//!
-//! Набор producer-вариантов различался: Auth не emitted `SendAll`, Login
-//! добавлял quit/set по строковой map identity, Game — quit/get по числовой,
-//! Billing и World использовали set числовой identity. Общий owner хранит
-//! доказанное объединение команд, но компонент может вызывать только свой
-//! подтверждённый набор.
-//!
-//! `Host` во всех пяти вариантах создавал/bind-ил TCP socket, создавал IOCP и
-//! три вида Windows threads, затем вызывал `listen` с default backlog
-//! `INT_MAX`. Rust `host` выполняет доказанные bind/listen через Tokio;
-//! отдельные IOCP/thread handle не получают пустых аналогов. Runtime запускает
-//! возвращённые I/O actions и хранит их task lifecycle у конкретного сервиса.
-//!
-//! Admission сначала сравнивал signed client count с default `100`, затем
-//! принимал IPv4 socket. Опциональный allow-list сравнивал canonical
-//! `inet_ntoa` и port; запись с port `0` совпадала только по IP. Опциональный
-//! forbid-map использовал wrapping `timeGetTime`. Принятое соединение получало
-//! process-local socket ID, собственный `CServerClient` и команду `ADD`.
-//! `LoadAllowedClient` очищал список до попытки открытия, отбрасывал первый
-//! label, читал numeric bool, а затем через общий `ReadTo("#")` повторял пары
-//! `IP-string/u16`. Успешно открытый файл всегда давал success, даже без
-//! маркеров; ошибка открытия оставляла прежний enable-флаг с пустым списком.
-//! Байтовый parser на стандартном разделении по ASCII whitespace сохраняет
-//! подтверждённую грамматику оригинального `allowed_ls.ini` без требования
-//! UTF-8; malformed numeric формы локализованы отдельно.
-//!
-//! Унаследованные от `CMySocket` dotted IPv4 и x86 DWORD сохраняются как
-//! owned bytes/u32. Завершающий C NUL заменён длиной `Vec`; hostname resolution
-//! остаётся конкретному service-owner, потому что его порядок различается.
-//!
-//! Сохранены странности порядка. `GetSocketIDByMapStr` возвращал `1`, а не `0`,
-//! если ключ отсутствовал. `AddAClient` увеличивал счётчик до проверки
-//! дубликата, разрушал старый client и только затем вставлял новый, не
-//! компенсируя счётчик. Обычный `DelOneClient` уменьшал счётчик до `OnClose` и
-//! удаления из map, а переполнение `SENDALL` сначала стирало client, вызывало
-//! `OnClose`, разрушало его и лишь потом уменьшало счётчик. Эти порядки не
-//! объединены в один удобный Rust-путь.
-//!
-//! Конструктор задавал: accept sleep `100 ms`, net sleep `1 ms`, backlog
-//! `INT_MAX`, send interval нового соединения `8000 ms`, receive-rate limit
-//! `0x186A0000`, max in-flight send `1`, max clients `100`, per-client send
-//! buffer `0xC800`; `m_bCheck`, `m_bCheckMsgCon` и allow-list checking изначально
-//! выключены. `m_dwMaxMsgLen` конструктор не назначал, поэтому до поздней записи
-//! service-owner он представлен `None`.
-//! Auth `InitNetServer_Auth` после успешного `Host` менял
-//! `m_lMaxBlockConnetNum` на `10` и `m_lSendInterTime` на config-значение.
-//! Rust сохраняет этот порядок: первый setter уже не может изменить backlog
-//! существующего listener, второй меняет таймаут первого сообщения.
+//! Producer-наборы сборок различались (у Auth нет `SendAll`, Login — строковая
+//! map identity, Game — числовая); owner хранит доказанное объединение, а
+//! компонент вызывает только свой подтверждённый набор. Игровое состояние и
+//! момент публикации остаются у владеющей роли; hostname resolution — у
+//! конкретного service-owner, его порядок различается.
+//! Доказательства: docs/reconstruction/shared-technical.md#владелец-входящих-tcp-соединений-cserver
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;

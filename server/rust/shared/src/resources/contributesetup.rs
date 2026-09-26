@@ -1,5 +1,5 @@
 //! Общее country contribution `CContributeSetup` World/Game в Shared resources.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner
 //! `setup/contributesetup.cpp`.
 //!

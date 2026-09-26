@@ -1,79 +1,29 @@
-//! Состояние принятого TCP-соединения `CServerClient`, восстановленное из
-//! `nets/serverclient.cpp` и `.h`.
+//! Состояние принятого TCP-соединения `CServerClient`
+//! (`nets/serverclient.cpp/.h`, пары EXE/PDB пяти служб в
+//! `server/rust/src/manifest/`). Формат внешнего TCP-обрамления:
+//! docs/protocol/transport.md. Реализованы connection metadata, накопители
+//! receive/send, серверный send-limit, полная transport-запись batch, число
+//! незавершённых send, двухступенчатый close flag и per-client receive-rate.
+//! Разбор 12-байтового envelope до конкретного `CMessage` остаётся владельцам
+//! направлений: их типы сообщений и набор metadata различаются.
 //!
-//! Статус владельца: `IMPLEMENTED` для connection metadata, накопления
-//! receive/send bytes, серверного send-limit, полной transport-записи batch,
-//! числа незавершённых send-операций, двухступенчатого close flag и per-client
-//! receive-rate. Разбор
-//! 12-байтового envelope до конкретного `CMessage` остаётся владельцам
-//! направлений: их типы сообщений и набор присваиваемых metadata различаются.
-//! Формат внешнего TCP-обрамления: docs/protocol/transport.md.
+//! Сохранённые странности: `AddSendData` последовательно объединял команды и
+//! возвращал `false` выше исходного лимита `0xC800`, но при установленном
+//! `m_bCloseFlag` ничего не добавлял и всё равно возвращал `true`. `Send`
+//! игнорировал свои pointer/length, копировал весь накопитель в одну
+//! overlapped-операцию и считал запрошенный, а не подтверждённый размер;
+//! частичный IOCP completion только логировался, остаток не слался повторно.
+//! Это факт об IOCP, а не о частичном Linux `write`, поэтому Rust дописывает
+//! batch до конца; нулевой write непустого batch соответствует исходному
+//! disconnect-пути. Close flag отдельно от одноразового shutdown сохраняет
+//! границу `QUIT -> closesocket -> worker DELETE -> OnClose/Drop`.
 //!
-//! Точные варианты корпуса — пары EXE/PDB Auth, Billing, Login, Game и World;
-//! их идентификаторы (SHA-256) зафиксированы в `server/rust/src/manifest/`.
-//!
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\nets\serverclient.{cpp,h}`,
-//! `d:\complite_version\fengyun_russia\trunk\nets\serverclient.{cpp,h}` и
-//! `e:\svn\fengyun_russia_dev\nets\serverclient.{cpp,h}`.
-//!
-//! Существенные RVA по порядку Auth / Billing / Login / Game / World:
-//! - `ReadFromCompletionPort`: `0x000142C0` / `0x0000DBC0` / `0x0006CFC0` /
-//!   `0x0001B080` / `0x0002A620`;
-//! - `Send`: `0x00014320` / `0x0000DC20` / `0x0006D020` / `0x0001B0E0` /
-//!   `0x0002A680`;
-//! - `AddReceiveData`: `0x00014490` / `0x0000DD90` / `0x0006D190` /
-//!   `0x0001B250` / `0x0002A7F0`;
-//! - `AddSendData`: `0x00014540` / `0x0000DE40` / `0x0006D240` /
-//!   `0x0001B300` / `0x0002A8A0`;
-//! - `AddPackageSize`: `0x000146D0` / `0x0000DFD0` / `0x0006D3D0` /
-//!   `0x0001B480` / `0x0002AA20`;
-//! - конструктор: `0x000147E0` / `0x0000E0F0` / `0x0006D4E0` /
-//!   `0x0001B850` / `0x0002ADF0`;
-//! - `OnReceive`: `0x000148A0` / `0x0000E1B0` / `0x0006D5A0` /
-//!   `0x0001B580` / `0x0002AB20`.
-//!
-//! `AddSendData` последовательно объединял команды в один buffer. Он возвращал
-//! `false`, если новый суммарный размер превышал
-//! `CServer::m_lPermitMaxClientSendBufSize` (исходный default `0xC800`), но при
-//! уже установленном `m_bCloseFlag` ничего не добавлял и всё равно возвращал
-//! `true`. Эта странность сохранена. Рост capacity вдвое, временные копии и
-//! аварийный `exit(0)` после невозможного для старого кода `operator_new == 0`
-//! не являются сетевой семантикой; `Vec<u8>` сохраняет только bytes и порядок.
-//!
-//! `Send` не использовал свои pointer/length arguments: он копировал весь
-//! накопленный buffer в отдельную overlapped-операцию, очищал накопитель сразу
-//! после принятия `WSASend`, увеличивал `m_lIOOperatorNum` и считал запрошенный,
-//! а не подтверждённый размер. Точный аудит `CServer::DoWorkerThreadFunc` (RVA
-//! Auth `0x0000DE60`, Billing `0x00007D00`, Login `0x000669D0`, Game
-//! `0x00015290`, World `0x000244B0`) показал: если completion передавал меньше
-//! bytes, код только логировал отличие, освобождал весь buffer и публиковал
-//! `SENDEND`; остаток не отправлялся повторно. Это факт об IOCP completion,
-//! а не о частичном Linux `write`. Rust дописывает batch до завершения операции:
-//! readiness и один syscall не означают принятие транспортом всей заявки.
-//!
-//! WinSock IOCP, `PER_IO_OPERATION_DATA`, ручные allocation/free и отдельная
-//! `SENDEND`-команда заменены владеющим `ServerSendBatch` и явным завершением
-//! операции. Close flag отдельно от одноразового начала shutdown сохраняет
-//! старую границу `QUIT -> closesocket -> worker DELETE -> OnClose/Drop`.
-//! Ожидание writable может повторяться при ложной readiness; после частичной
-//! записи передаётся только оставшийся хвост. Нулевой write для
-//! непустого batch соответствует исходному disconnect-пути, а не partial send.
-//!
-//! Receive-path накапливал TCP-фрагменты, начиная с capacity `0x100000`;
-//! IOCP-приём использовал блок `0x2000`. `OnReceive` разбирал envelope
-//! `[total_len, crc(total_len), crc(message), message]`, проверял IEEE CRC,
-//! создавал компонентный `CMessage`, затем ставил socket ID, map ID, peer IPv4,
-//! а Auth/Billing/Login также копировали байтовую map/CD-key строку. Только
-//! после этого сообщение передавалось `CServer::m_RecvMessages`. Общая фабрика
-//! здесь не вводится: соответствующие `message.rs` обязаны принять
-//! `ServerClientMessageContext` при собственной реализации.
-//!
-//! Конструктор также задавал `lost=false`, `quit=false`, `server_type=0`, пустую
-//! map-строку, `map_id=0`, `close=false` и нулевое число I/O. Defaults без
-//! доказанного потребителя здесь только зафиксированы, но не представлены
-//! пустыми Rust-полями; живые map/close/I/O-состояния сохранены. Пустой
-//! virtual `OnOneMessageSizeOver` отдельного Rust-тела не получает.
+//! Receive-path начинал с capacity `0x100000`, блок IOCP-приёма — `0x2000`;
+//! `OnReceive` проверял envelope `[total_len, crc(total_len), crc(message),
+//! message]` и назначал metadata по подтверждённому порядку полей через
+//! `ServerClientMessageContext`. Конструкторские defaults без доказанного
+//! потребителя зафиксированы, но не представлены пустыми Rust-полями.
+//! Доказательства: docs/reconstruction/shared-technical.md#состояние-принятого-соединения-cserverclient
 
 use std::io;
 use std::mem;

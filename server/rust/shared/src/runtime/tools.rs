@@ -1,49 +1,25 @@
 //! Общие технические функции исходного `public/tools.cpp`.
 //!
-//! Статус `IniDecoder` LoginServer RVA `0x00020A90`, WorldServer RVA
-//! `0x00053C50`, `PutStringToFile` BillingServer RVA `0x0000FC60` и GameServer
-//! RVA `0x0001CEB0`, а также GameServer `GetLineDir` RVA `0x0001D080` —
-//! `AddLogText`/`AddErrorLogText`/`PutDebugString` GameServer — `IMPLEMENTED`;
-//! `GetLineDir` также `VERIFIED_DISASSEMBLY`. Остальной корпус ниже остаётся
-//! `UNKNOWN`. Точные пары:
-//! `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`,
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb` и
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\public\tools.cpp:198`,
-//! `d:\complite_version\fengyun_russia\trunk\public\tools.cpp:769` и
-//! `e:\svn\fengyun_russia_dev\public\tools.cpp:198/769`.
+//! `IMPLEMENTED`: `IniDecoder` (Login/World), `PutStringToFile` (Billing/
+//! Game), GameServer logging owners (`AddLogText`/`AddErrorLogText`/
+//! `PutDebugString`); `GetLineDir` Game дополнительно `VERIFIED_DISASSEMBLY`.
+//! Остальной корпус файла остаётся `UNKNOWN`. Пары EXE/PDB — в
+//! `server/rust/src/manifest/`.
 //!
-//! Оба бинарника содержат одинаковое побайтовое преобразование: для каждого
-//! входного байта вычисляется `~(byte - 0x0C)` с 8-битным wrapping. Старые
-//! raw pointers и отдельный заранее обнулённый output-buffer заменены owned
-//! `Vec<u8>` той же длины; NUL-терминатор принадлежал caller и не добавляется
-//! самой функцией.
+//! `IniDecoder` выполняет побайтовое `~(byte - 0x0C)` с 8-битным wrapping;
+//! NUL-терминатор принадлежал caller и не добавляется. `PutStringToFile`
+//! создаёт `log`, дописывает `<name>_YYYY-MM-DD.txt` с локальной меткой
+//! `\nN(MM-DD HH:MM:SS):`; файловые ошибки по-прежнему тихие, а process-wide
+//! счётчик записей сохраняет monotonic increment без data race. `GetLineDir`
+//! сначала wrapping-разности Windows `long`, округляет X до `float`, оставляет
+//! Y точным целым и делит плоскость углами из точного EXE; для достигнутых
+//! целочисленных координат — те же восемь направлений и `0` совпавших точек.
+//! GameServer logging owners сохраняют дневной log, timestamp/CRLF и отдельный
+//! process debug-файл; Win32 GUI log-window не влиял на игровой результат.
 //!
-//! Совпадающие Billing/Game `PutStringToFile` создают `log`, открывают
-//! `<name>_YYYY-MM-DD.txt` в append-режиме и дописывают локальную метку
-//! `\nN(MM-DD HH:MM:SS):` и переданные bytes. `chrono::Local`, `create_dir`
-//! и `OpenOptions::append` заменяют `GetLocalTime`, `CreateDirectoryA` и
-//! `fopen("a+")`; все файловые ошибки по-прежнему остаются тихими. Старый
-//! process-static `num` был общим счётчиком logging-функций; атомарный счётчик
-//! сохраняет его monotonic increment без воспроизведения C++ data race.
-//!
-//! GameServer `GetLineDir` сначала выполняет wrapping-разности Windows `long`,
-//! округляет X-разность до `float`, оставляет Y-разность точным целым в x87 и
-//! делит плоскость углами из exact EXE `0.39259999990463257` и
-//! `1.1779999732971191`. `f64::tan` заменяет x87 `fptan`; для достигнутых
-//! целочисленных region-координат сохраняются те же восемь направлений и
-//! исходный результат `0` для совпавших точек.
-//!
-//! Общие GameServer logging owners сохраняют дневной log, timestamp/CRLF,
-//! отдельный process debug-файл и C-string prefix. `OnceLock`, безопасное
-//! форматирование и append заменяют process globals, CRT varargs и Win32 GUI;
-//! log-window не влиял на игровой результат. Остальные файловые и временные
-//! владельцы этого крупного общего файла ещё не реализованы.
-
-//! Счётчик записей и имя debug-файла — process-wide helpers, общий для
-//! всех ролей; журнальный каталог выбирает владелец процесса.
+//! Счётчик записей и имя debug-файла — process-wide helpers, общие для всех
+//! ролей; журнальный каталог выбирает владелец процесса.
+//! Доказательства: docs/reconstruction/shared-technical.md#технические-функции-publictoolscpp
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

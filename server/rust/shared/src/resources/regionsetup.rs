@@ -1,5 +1,5 @@
 //! Ограничения регионов `CRegionSetup` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/regionsetup.cpp`.
 //!
 //! Двоичный формат содержит знаковый счётчик и упорядоченные 12-байтные записи:

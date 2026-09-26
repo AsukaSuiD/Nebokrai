@@ -1,5 +1,5 @@
 //! Общие торговые списки `CTradeList` World/Game в Shared resources.
-//! Источник: точные `worldserver.exe + worldserver.pdb` и
+//! Источник: точные `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/tradelist.cpp`.
 //!
 //! Loader очищает map, читает `*` NPC и следующие `#` goods records. StringTable

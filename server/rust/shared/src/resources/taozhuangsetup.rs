@@ -1,38 +1,28 @@
-//! Конфигурация комплектов TaoZhuang исторического Miracle.
-//!
-//! World `CTaoZhuangSetup::ReadFile/AddByteToArray` подтверждены точной парой
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, Game
-//! `DeCodeFromByte` — парой `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
-//! Исходный owner PDB:
+//! Конфигурация комплектов TaoZhuang исторического Miracle: World
+//! `ReadFile/AddByteToArray` и Game `DeCodeFromByte` подтверждены точными
+//! парами EXE/PDB (в `server/rust/src/manifest/`); исходный owner PDB:
 //! `e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp/.h`. Gameplay-query
 //! сохраняет first matching set в unsigned ID-order, exact-count completion и
 //! ordered threshold-prefix; применение результата остаётся у `CPlayer`.
 //!
-//! Wire сначала содержит ordered skill set, затем ordered item map. Item:
-//! четыре `u32`, три C-string, фактический equipment-name count и ordered
-//! имена, фактический add-item count и nested ordered property/skill maps.
-//! Поля `item_count/equipment_count/add_property_count/add_skill_count`
-//! передаются как сохранённые declared `u32`, а не пересчитываются; это
-//! отличается от следующих за ними фактических container count-ов и сохранено
-//! явно. `BTreeSet/BTreeMap` заменяют STL и сохраняют unsigned/byte order,
-//! owned bytes — string lifetime. Внутренний NUL и невозможные signed counts
-//! блокируют весь append до изменения destination.
+//! Wire: ordered skill set, затем ordered item map; поля
+//! `item_count/equipment_count/add_property_count/add_skill_count` передаются
+//! как сохранённые declared `u32`, а не пересчитываются — это отличается от
+//! фактических container count-ов и сохранено явно. `BTreeSet/BTreeMap`
+//! заменяют STL с сохранением unsigned/byte order. Внутренний NUL и
+//! невозможные signed counts блокируют весь append до изменения destination.
 //!
-//! Text-loader читает `data/taozhuang.ini` как whitespace stream. Открытый
-//! ресурс сначала очищает оба owner-а; missing resource оставляет прежнее
-//! state и пишет оригинал GBK-log. Вложенные set/map используют `insert`: дубли
-//! skill, equipment name, property, added skill и add-item прерывают загрузку
-//! с отдельным log, сохраняя уже построенное partial state. Дубли item ID не
-//! проверяются и оставляют первую запись — это доказанная особенность
-//! не исправляемая как внутренний дефект. Rust
-//! отклоняет count больше размера source, не перенося конфигурационный DoS/OOM.
-//! Game decoder очищает оба owner-а до count, но duplicate records молча
-//! оставляет первыми через `insert`. Полный ранее декодированный item-prefix
-//! сохраняется на safe short-buffer границе; незавершённый local item не
-//! публикуется. Динамические byte strings заменяют старый 1028-byte stack
-//! buffer и не воспроизводят его overflow.
-
+//! Text-loader читает `data/taozhuang.ini` как whitespace stream: открытый
+//! ресурс сначала очищает оба owner-а, missing resource оставляет прежнее
+//! state и пишет оригинал GBK-log. Дубли во вложенных set/map прерывают
+//! загрузку с отдельным log и partial state; дубли item ID не проверяются и
+//! оставляют первую запись — доказанная особенность, не исправляемая как
+//! внутренний дефект. Rust отклоняет count больше размера source (без
+//! переноса DoS/OOM), а Game decoder публикует полный item-prefix на safe
+//! short-buffer границе; динамические strings заменяют 1028-byte stack buffer.
+//!
 //! Установленный экземпляр и его потребители остаются у владельца роли.
+//! Доказательства: docs/reconstruction/shared-technical.md#комплекты-taozhuang-ctaozhuangsetup
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;

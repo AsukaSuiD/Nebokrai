@@ -1,5 +1,5 @@
 //! Синтез `CSynthesis` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/synthesis.cpp`.
 //!
 //! Wire сначала передаёт ordered broadcast map, затем recipes и их formula

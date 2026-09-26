@@ -1,5 +1,5 @@
 //! Общий increment shop `CIncrementShopList` World/Game в Shared resources.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner
 //! `setup/incrementshoplist.cpp`.
 //!

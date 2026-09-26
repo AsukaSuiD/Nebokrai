@@ -1,5 +1,5 @@
 //! Ограничения смены тела `CChangeBodyConf` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/changebody.h/.cpp`.
 //!
 //! Owner очищает vector до открытия XML, принимает direct `Goods` children

@@ -1,94 +1,25 @@
-//! Общие наблюдаемые факты исходного `CMySocket`, восстановленные из
-//! `nets/mysocket.cpp` и `.h` без создания пустого аналога WinSock-класса.
+//! Общие наблюдаемые факты исходного `CMySocket` (`nets/mysocket.cpp/.h`,
+//! пары EXE/PDB шести служб в `server/rust/src/manifest/`). Пустой аналог
+//! WinSock-класса не создаётся: платформенный I/O передан `crate::transport`,
+//! `GetSocketID` и совместимые значения endpoint реализованы здесь.
 //!
-//! Статус владельца: `IMPLEMENTED`. Платформенный I/O передан техническому
-//! владельцу `crate::transport`; `GetSocketID` и совместимые значения endpoint
-//! реализованы здесь.
+//! Конструкторские defaults: protocol/type `1`, IPv4 `127.0.0.1`, port `5000`.
+//! `WSACreate` создавал overlapped `AF_INET` socket и сразу вызывал `Bind`
+//! (все найденные `CServer::Host` передают type `1`); `Bind` трактовал
+//! nullable IP как `0.0.0.0`, сужал port до `u16` и разбирал строку legacy
+//! `inet_addr` с отказом `INADDR_NONE`. Return-контракты `Recv`/`RecvFrom`/
+//! `Sendto` (отдельный `WSAEWOULDBLOCK`, `0` при любой ошибке `RecvFrom`,
+//! повтор `Sendto` при `WSAEWOULDBLOCK`) обязан сохранить непосредственный
+//! UDP/TCP owner, если соответствующий путь окажется живым.
 //!
-//! Точные пары и основные RVA. Идентификаторы SHA-256 всех перечисленных
-//! EXE/PDB зафиксированы в `server/rust/src/manifest/`:
-//! - Auth: `authserver.exe + authserver.pdb`:
-//!   `SetIP` `0x00001EA0`, init `0x00013030`, cleanup `0x000130C0`, ctor
-//!   `0x000130D0`, dtor `0x00013130`, `Create` `0x00013160`, `Bind`
-//!   `0x00013170`, `Close` `0x00013270`, `OnClose` `0x00013290`, `Recv`
-//!   `0x000132A0`, `Send` `0x00013320`, `RecvFrom` `0x00013330`, `Sendto`
-//!   `0x00013420`, `GetSocketID` `0x000134E0`, `WSACreate` `0x00013530`;
-//! - Billing: `billingserver.exe + billingserver.pdb`:
-//!   соответственно `0x00001860`, `0x0000D600`, `0x0000D690`, `0x0000D6A0`,
-//!   `0x0000D6F0`, `0x0000D720`, `0x0000D730`, `0x0000D830`, `0x0000D850`,
-//!   `0x0000D860`, `0x0000D8E0`, `0x0000D8F0`, `0x0000D9E0`, `0x0000DAA0`,
-//!   `0x0000DAF0`;
-//! - Login: `loginserver.exe + LoginServer.pdb`:
-//!   соответственно `0x00002AF0`, `0x0006C4F0`, `0x0006C580`, `0x0006C590`,
-//!   `0x0006C5E0`, `0x0006C610`, `0x0006C620`, `0x0006C720`, `0x0006C740`,
-//!   `0x0006C750`, `0x0006C7D0`, `0x0006C7E0`, `0x0006C8D0`, `0x0006C990`,
-//!   `0x0006C9F0`;
-//! - Misc: `miscserver.exe + miscserver.pdb`:
-//!   init `0x00012C20`, cleanup `0x00012CB0`, ctor `0x00012CC0`, dtor
-//!   `0x00012D10`, `Create` `0x00012D40`, `Bind` `0x00012D50`, `Close`
-//!   `0x00012E50`, `OnClose` `0x00012E70`, `Recv` `0x00012E80`, `Send`
-//!   `0x00012F00`, `RecvFrom` `0x00012F10`, `Sendto` `0x00013000`,
-//!   `GetSocketID` `0x000130C0`; неиспользованные `SetIP/WSACreate` не emitted;
-//! - Game: `gameserver.exe + GameServer.pdb`:
-//!   `SetIP` `0x00001DD0`, init `0x0001AAC0`, cleanup `0x0001AB50`, ctor
-//!   `0x0001AB60`, dtor `0x0001ABB0`, `Create` `0x0001ABE0`, `Bind`
-//!   `0x0001ABF0`, `Close` `0x0001ACF0`, `OnClose` `0x0001AD10`, `Recv`
-//!   `0x0001AD20`, `RecvFrom` `0x0001ADA0`, `Sendto` `0x0001AEA0`,
-//!   `GetSocketID` `0x0001AF60`, `WSACreate` `0x0001AFB0`, вынесенный linker
-//!   `Send` `0x001B7020`;
-//! - World: `Nworldserver.exe + WorldServer.pdb`:
-//!   `SetIP` `0x000011C0`, init `0x0002A060`, cleanup `0x0002A0F0`, ctor
-//!   `0x0002A100`, dtor `0x0002A150`, `Create` `0x0002A180`, `Bind`
-//!   `0x0002A190`, `Close` `0x0002A290`, `OnClose` `0x0002A2B0`, `Recv`
-//!   `0x0002A2C0`, `RecvFrom` `0x0002A340`, `Sendto` `0x0002A440`,
-//!   `GetSocketID` `0x0002A500`, `WSACreate` `0x0002A550`, вынесенный linker
-//!   `Send` `0x000DBD10`.
+//! `GetSocketID` увеличивал process-global signed counter и возвращал новое
+//! значение (`VERIFIED_DISASSEMBLY` по Misc). В едином процессе каждый бывший
+//! сервис держит свой `SocketIdAllocator`: один общий static изменил бы ID от
+//! чужой активности. `AtomicU32` сохраняет 32-битное машинное wrapping.
 //!
-//! Исходные пути PDB:
-//! `h:\fengyun\fy_russia\src\nets\mysocket.{cpp,h}`,
-//! `d:\complite_version\fengyun_russia\trunk\nets\mysocket.{cpp,h}` и
-//! `e:\svn\fengyun_russia_dev\nets\mysocket.{cpp,h}`.
-//!
-//! Общий конструктор задавал protocol/type `1`, IPv4 `127.0.0.1`, port `5000`,
-//! invalid socket, нулевой последний UDP-port и пустой последний UDP-IP.
-//! `SetIP` выполнял неконтролируемый C-string copy; Rust-владелец конфигурации
-//! не должен восстанавливать переполнение, но обязан сохранить байтовую
-//! кодировку и доказанные ограничения фактического поля.
-//!
-//! `WSACreate` создавал overlapped `AF_INET` socket с переданным type и сразу
-//! вызывал `Bind`; все найденные `CServer::Host` передают type `1` (`TCP`).
-//! `Bind` трактовал nullable IP как `0.0.0.0`, порт сужал до `u16`, строку
-//! разбирал через legacy `inet_addr` и отвергал результат `INADDR_NONE`.
-//! Технический `crate::transport::bind_tcp_ipv4` сохраняет отдельные create и
-//! bind, не включает `SO_REUSEADDR` и возвращает ещё не слушающий `TcpSocket`:
-//! backlog остаётся у `CServer::Listen`.
-//!
-//! Базовые виртуальные `Create` и `Send` намеренно возвращали `0` и `1`; живые
-//! реализации принадлежат производным `CClient/CServerClient`, поэтому пустых
-//! Rust-методов здесь нет. `Recv` возвращал число байт или socket error, отдельно
-//! узнавая `WSAEWOULDBLOCK`; `RecvFrom` на любой ошибке возвращал `0`, а при
-//! успехе — число байт, dotted IPv4 и host-order port. `Sendto` повторял вызов
-//! при `WSAEWOULDBLOCK`, на успехе возвращал `1`, иначе `0`. Эти различающиеся
-//! return-контракты обязаны быть сохранены непосредственным UDP/TCP owner, если
-//! соответствующий путь окажется живым.
-//!
-//! `WSAStartup/WSACleanup`, socket handle `-1`, `closesocket`, vtable,
-//! security-cookie, imported CRT/WinSock и чужие STL-тела не получают Rust-
-//! аналогов. Tokio закрывает socket через `Drop` и предоставляет Linux
-//! readiness вместо `WSAEventSelect/IOCP`; очередность, лимиты чтения, connect
-//! timeout и публикация команд остаются обязанностью будущих `clients/servers`.
-//!
-//! `GetSocketID` увеличивал отдельный process-global signed `long` и возвращал
-//! новое значение. `VERIFIED_DISASSEMBLY`: Misc RVA `0x000130C0` читает,
-//! увеличивает и записывает storage RVA `0x001505B0`; адрес лежит в нулевом
-//! virtual tail секции `.data`, поэтому loader задавал исходный ноль. В едином
-//! процессе каждому историческому сервису нужен свой `SocketIdAllocator`: один
-//! общий static изменил бы ID из-за активности других бывших EXE. `AtomicU32`
-//! сохраняет 32-битное машинное wrapping и устраняет неопределённую data race,
-//! не меняя последовательность одного сервиса.
-
 //! Платформенный I/O принадлежит владельцу процесса; Shared несёт только
 //! значения endpoint, legacy-грамматику адресов и шаблон выдачи socket ID.
+//! Доказательства: docs/reconstruction/shared-technical.md#общие-факты-cmysocket
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicU32, Ordering};

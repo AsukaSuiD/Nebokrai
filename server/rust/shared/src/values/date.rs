@@ -1,42 +1,27 @@
-//! Владелец исторического `tagTime`.
+//! Владелец исторического `tagTime` (`public/date.cpp/.h`, пары EXE/PDB
+//! Login/Game/World в `server/rust/src/manifest/`). Реализованы: оба
+//! конструктора, `IsLeap`, пять сравнений, `AddDay/Hour/Minute/Second`,
+//! `GetTimeDifference` и `GetFormatStr`.
 //!
-//! Полный достигнутый owner имеет статус `IMPLEMENTED`: field constructor,
-//! string constructor, `IsLeap`, пять сравнений, `AddDay/AddHour/AddMinute/
-//! AddSecond`, `GetTimeDifference` и `GetFormatStr`. Исходники:
-//! `e:\svn\fengyun_russia_dev\public\date.cpp` и `public\date.h`. Точные пары:
-//! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb`,
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
+//! PDB задаёт восемь последовательных `u16` и размер `0x10`; сравнения
+//! намеренно игнорируют `wDayOfWeek`/`wMilliseconds`, поэтому стандартные
+//! `Eq`/`Ord` создали бы иной контракт и не реализованы. `chrono::Local`
+//! заменяет только `GetLocalTime` (weekday в SYSTEMTIME-форме Sunday=0);
+//! календарная арифметика буквально сохраняет наблюдаемые странности: stale
+//! `wDayOfWeek`, component-wise difference, допуск month `0` через нулевой
+//! элемент `dtab`, оборачивание `u16` year. Month за пределами `0..=12` и
+//! signed overflow исходного `long` — локальный `BLOCKED_MISSING_FACT`, а не
+//! придуманная нормализация.
 //!
-//! Существенные RVA WorldServer: constructor `0x000A3CF0`, `IsLeap`
-//! `0x000A36A0`, comparisons `0x000A3560..0x000A3680`, `AddDay`
-//! `0x000A36E0`, `AddHour/AddMinute/AddSecond` `0x000A3990/0x000A3A10/
-//! 0x000A3A90`, `GetTimeDifference` `0x000A3B10`, `GetFormatStr`
-//! `0x000A41B0`. GameServer и LoginServer содержат тот же достигнутый контракт.
-//! `VERIFIED_DISASSEMBLY`: обе строки `dtab` прочитаны по VA `0x0056B640`
-//! точного `Nworldserver.exe`; это `0,31,28,...` и `0,31,29,...`.
+//! String constructor разбирает шесть colon-частей семантикой `atoi` и сужает
+//! до `u16`; при отсутствии `:` старый `npos + 1` оборачивался в ноль, поэтому
+//! та же строка используется для следующих частей. Переполнение `atoi` не
+//! имеет доказанного результата и блокируется отдельно. Формат: без
+//! zero-padding и секунд — `year-month-day hour:minute`.
 //!
-//! PDB задаёт восемь последовательных `u16` и размер `0x10`. Сравнения
-//! намеренно учитывают только год, месяц, день, час, минуту и секунду:
-//! `wDayOfWeek` и `wMilliseconds` игнорируются. Поэтому Rust не реализует
-//! стандартные `Eq/Ord`, которые создали бы иной контракт.
-//!
-//! `chrono::Local` заменяет только Win32 `GetLocalTime`; номер дня недели
-//! переводится в SYSTEMTIME-форму Sunday=0. Календарная арифметика не заменена
-//! `chrono`: оригинал сохраняет stale `wDayOfWeek`, использует component-wise
-//! difference, допускает month `0` через нулевой элемент `dtab` и оборачивает
-//! `u16` year. Узкий compatibility-layer буквально сохраняет эти наблюдаемые
-//! свойства. Month за пределами `0..=12` и signed overflow исходного `long`
-//! получают локальный `BLOCKED_MISSING_FACT`, а не придуманную нормализацию.
-//!
-//! String constructor разбирает шесть colon-separated частей через семантику
-//! `atoi`, сужает signed результат до `u16` и ставит weekday/milliseconds в
-//! ноль. При отсутствии очередного `:` старый `npos + 1` оборачивался в ноль,
-//! поэтому та же оставшаяся строка используется для следующих частей.
-//! Переполнение `atoi` не имеет доказанного результата и блокируется отдельно.
-//! Формат остаётся без zero-padding и секунд: `year-month-day hour:minute`.
 //! Экземпляры и их мутации остаются у владельца роли; shared держит только
 //! представление и календарную арифметику.
+//! Доказательства: docs/reconstruction/shared-technical.md#календарное-значение-tagtime
 
 use chrono::{Datelike, Local, Timelike};
 

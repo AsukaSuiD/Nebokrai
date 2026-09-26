@@ -1,43 +1,27 @@
-//! Конфигурация CiQing Miracle.
+//! Конфигурация CiQing Miracle. Источник: `original/server/Miracle_server/`,
+//! пары WorldServer/GameServer EXE/PDB в `server/rust/src/manifest/`;
+//! исходный owner PDB: `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`.
+//! Поиск рецепта сохраняет порядок записей и отдельный `random(0x2711)`;
+//! применение к игроку остаётся у GameServer.
 //!
-//! Источник: `original/server/Miracle_server/`, WorldServer
-//! `Nworldserver.exe + WorldServer.pdb`: `CCiQingSetup::ReadSetupFile`
-//! VA `0x4877F0`, `AddByteToArray` VA `0x486080`; GameServer
-//! `gameserver.exe + GameServer.pdb`: `AddByteToArray` VA `0x4E4740`,
-//! `DeByteFromArray` VA `0x4E6110`. ImageBase обоих EXE — `0x400000`.
-//! Исходный owner: `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`.
-//! Поиск рецепта сохраняет порядок записей, а `RandChoise` использует
-//! отдельный `random(0x2711)`; применение к игроку остаётся у GameServer.
+//! Wire: шесть отдельных полей `stComposeNode`, затем размер result-vector;
+//! отдельные source A/B и `dwResultNum` подтверждены PDB-типом, дубля source
+//! A нет. Объявленное число результатов — самостоятельный `u32`, а число
+//! читаемых пар задаёт следующий счётчик. Общий формат World → Game → клиент:
+//! docs/protocol/opcode-catalog.md, раздел CiQing. Непредставимая в `i32`
+//! длина блокирует append до изменения destination.
 //!
-//! Общий формат World → Game → клиент описан в
-//! `docs/protocol/opcode-catalog.md`, раздел конфигурации CiQing. Game writer
-//! VA `0x4E4800..0x4E4852` пишет шесть отдельных полей `stComposeNode`
-//! по смещениям `0, 4, 8, 0x10, 0x0C, 0x14`, затем размер result-vector.
-//! GameServer.pdb, тип `CCiQingSetup::stComposeNode` (`0xD48C`), подтверждает
-//! отдельные source A/B и `dwResultNum` по `+0x14`: дубля source A нет.
-//! Клиент `Miracle game.exe` (SHA-256
-//! `5b41ebfcea8c40ab8756e3fb676c8e03ec1f45fba527f33bc163b084cf520971`),
-//! decoder VA `0x4684A0`, читает ту же часть в `0x468603..0x468662`.
-//! Объявленное число результатов сохраняется как самостоятельный `u32`;
-//! число читаемых пар задаёт следующий счётчик. Rust ограничивает длины
-//! списков диапазоном `i32`; непредставимая длина блокирует append до
-//! изменения destination.
+//! Text-loader открывает точный `/data/ciqing.ini`: отсутствующий ресурс
+//! сохраняет прежнее состояние, успешный open сначала очищает все три списка.
+//! Возврат `0` только при null path/open failure и `1` после любого открытого
+//! stream; после stream fail MSVC оставлял defaults и продолжал declared
+//! loops — Rust сохраняет это для представимых counts, но отклоняет count
+//! больше размера source, не перенося конфигурационный DoS/OOM. Game decoder
+//! очищает vectors, сохраняет только полные records и трактует отрицательные
+//! counts как пустые секции вместо legacy unbounded-read.
 //!
-//! Text-loader открывает точный `/data/ciqing.ini`: при отсутствующем ресурсе
-//! прежнее состояние сохраняется, а после успешного open сначала очищаются все
-//! три списка. Затем whitespace stream читает label/count и записи трёх секций;
-//! original names разрешаются через уже загруженный `CGoodsFactory`, miss даёт
-//! `0`. Loader возвращает `0` только при null path/open
-//! failure и `1` после любого открытого stream. После stream fail MSVC оставлял
-//! default values и продолжал declared loops; Rust сохраняет это для
-//! представимых counts, но отклоняет count больше размера самого source, чтобы
-//! не переносить конфигурационный DoS/OOM как часть поведения Miracle.
-//! Game decoder очищает три vector-а, сохраняет только полные records и
-//! безопасно трактует отрицательные counts как пустые секции вместо legacy
-//! unbounded-read. Все скалярные поля compose сохраняются отдельно; ни source B,
-//! ни объявленное число результатов не восстанавливаются из соседнего поля.
-
 //! Установленный экземпляр и его потребители остаются у владельца роли.
+//! Доказательства: docs/reconstruction/shared-technical.md#конфигурация-ciqing-cciqingsetup
 
 use std::error::Error;
 use std::fmt;

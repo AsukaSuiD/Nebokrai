@@ -1,5 +1,5 @@
 //! Ежедневные действия `CThingSetup` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! Контракт подтверждён точными `Nworldserver.exe + WorldServer.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/leitingsetup.cpp`.
 //!
 //! Wire — signed count и шестибайтные `TID/max/point` records. Daily projection
