@@ -565,8 +565,11 @@ impl CThunderBlowPhalanx {
             let mut writer = LegacyWriter::new(&mut payload);
             writer.write_i32(THUNDER_BLOW_SKILL_ID as i32);
             writer.write_i32(self.skill_level);
-            writer.write_i32(self.shape.identity().object_type);
-            writer.write_i32(self.shape.identity().id);
+            // Машинное тело 0x1F54D0 пишет master type/id ([esi+0x84]/[esi+0x88],
+            // копия tagMasterInfo из базового ctor), не собственную идентичность
+            // формы — как и все sibling-конверты этой ICF-группы (досверка хвоста).
+            writer.write_i32(self.master.master_type);
+            writer.write_i32(self.master.master_id);
             writer.write_u32(remained);
         }
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)

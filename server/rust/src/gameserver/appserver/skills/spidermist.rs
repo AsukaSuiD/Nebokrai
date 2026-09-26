@@ -31,7 +31,9 @@ pub(crate) fn send_phalanx_entry(game: &CGame, region: &CServerRegion, phalanx_i
     else {
         return;
     };
-    let Some(payload) = phalanx.encode_client_snapshot() else { return };
+    let Some(payload) = phalanx.encode_client_snapshot(|| game_tick_milliseconds()) else {
+        return;
+    };
     let message = zone::spider_mist_entry_message(phalanx.shape().identity(), &payload);
     let _ = game.send_game_shape_around(region, phalanx.shape(), None, &message);
 }

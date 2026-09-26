@@ -161,7 +161,7 @@ impl SummonedSkillShape {
             Self::ThunderSlash(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Leiming2(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Tianhuo(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::SpiderMist(shape) => shape.encode_client_snapshot(),
+            Self::SpiderMist(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Weak(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::MaskedElement(shape) => shape.encode_client_snapshot(&mut now_milliseconds),

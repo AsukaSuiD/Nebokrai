@@ -12,7 +12,7 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::values::CGuid;
-use nebokrai_zone::skills::SpiderMistPhalanx;
+use nebokrai_zone::skills::{SPIDER_MIST_SKILL_ID, SpiderMistPhalanx};
 
 pub(crate) use nebokrai_zone::skills::SpiderMistPhalanxTick;
 
@@ -94,11 +94,20 @@ impl CSpiderMistPhalanx {
         self.rule.replace_affect_region(center_x, center_y, incoming_tile_x, incoming_tile_y);
     }
 
-    pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
-        let mut payload = Vec::new();
-        self.shape
-            .add_to_byte_array(&mut payload, true)
-            .then_some(payload)
+    /// Машинное тело `?AddToByteArray@CSpiderMistPhalanx@@` = RVA `0x1E47A0`
+    /// (ICF-группа): пятипольный префикс (skill id, уровень, master type/id,
+    /// GetRemainedTime) перед CShape — досверка хвоста счётчика 0xBF502.
+    pub(crate) fn encode_client_snapshot(&self, now_milliseconds: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        nebokrai_zone::skills::encode_related_phalanx_snapshot(
+            &self.shape,
+            SPIDER_MIST_SKILL_ID as i32,
+            self.rule.skill_level(),
+            self.master().master_type,
+            self.master().master_id,
+            self.rule.started_at_ms(),
+            self.rule.lifetime_ms(),
+            now_milliseconds,
+        )
     }
 }
 
