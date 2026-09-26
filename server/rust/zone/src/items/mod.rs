@@ -5,6 +5,7 @@ pub mod cbank; // CBank: lock-gate поверх однослотового walle
 pub mod cbattlefairyproperty; // CBattleFairyProperty: конфигурация и свойства боевой феи.
 pub mod ccontainer; // CContainer: базовый lifecycle контейнера.
 pub mod cdepot; // CDepot: lock/position/expansion core склада с extension-anchor группами.
+pub mod cequipmentcontainer; // CEquipmentContainer: позиционное ядро экипировки (17 колонок) с add/remove/swap и fairy growth.
 pub mod cgoods; // CGoods: object/addon core товара и кодек persistence-wire.
 pub mod cgoodscontainer; // CGoodsContainer: базовый derived lifecycle owner type/id/mode и stack-merge.
 pub mod cjifen; // CJiFen: JiFen-вариант однослотового currency-контейнера.
