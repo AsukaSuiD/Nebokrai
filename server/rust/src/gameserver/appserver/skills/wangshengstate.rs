@@ -1,6 +1,10 @@
 //! Живые callbacks сохранённого состояния CWangshengState.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/wangshengstate.cpp/.h;
-//! данные, срок, codec и правило HP перенесены в Zone effects.
+//! Источник: gameserver.exe `4F5C98E0…` + GameServer.pdb (RSDS match),
+//! appserver/skills/wangshengstate.cpp/.h; данные, срок, codec и правило HP
+//! перенесены в Zone effects, а Check/AI самого навыка 0x221 — в Zone
+//! `skills/wangsheng.rs` порцией №6b. CWangshengState этим навыком не
+//! создаётся; этот hub-lifecycle остаётся здесь до переноса общей арены
+//! состояний.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
