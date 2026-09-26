@@ -22,9 +22,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_AUCTION_SCALE, GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
-use crate::gameserver::appserver::player::{
-    AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh,
-};
+use nebokrai_zone::trade::auction::{AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh};
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
