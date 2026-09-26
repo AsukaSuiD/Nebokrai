@@ -14,8 +14,10 @@
 //! Общий кадр `publish_state_cast_visual` — перенос тела
 //! `publish_state_skill_visual` переходного `stateskill.rs`: wire `0xBFE01`,
 //! личная ветвь отказов BYTE-парой `[0, mode]` только игроку, around-кадр
-//! с S (fallback U) для mode 1. У пятёрки нет flight-хвоста и
-//! DWORD-формы отказов (та принадлежит Fury/RageBreak и не переносится).
+//! с S (fallback U) для mode 1. У пятёрки нет flight-хвоста; DWORD-форма
+//! отказов `[dword 0][byte mode]` принадлежит Fury/RageBreak и переносится
+//! порцией T4 как `RageCastVisualContract` + `publish_rage_cast_visual`
+//! (якорь `UpdateVisualEffect@CRageBreakEffect` VA `0x59FB90`).
 //!
 //! Объявленные швы переноса (не расхождения): трейты ниже — переходные
 //! фасады прежнего владельца `CGame`/`CPlayer`/`CMoveShape`, реализация
@@ -379,6 +381,17 @@ pub struct StateCastVisualContract {
     pub target: StateCastVisualTarget,
 }
 
+/// Контракт visual Fury/RageBreak: поверх пятёрочного один RP-отказ несёт
+/// DWORD-префикс (`add_long(0)` перед BYTE mode) — форма `[dword 0][byte 8]`,
+/// отложенная порцией №6a и перенесённая порцией T4.
+pub struct RageCastVisualContract {
+    pub skill_id: u32,
+    pub kind: SkillVisualEffectKind,
+    pub failures: &'static [u32],
+    pub dword_failures: &'static [u32],
+    pub target: StateCastVisualTarget,
+}
+
 /// Общий wire-каркас `0xBFE01` state-кастов пятёрки и heal-квартета —
 /// перенос `publish_state_skill_visual` переходного `stateskill.rs`.
 /// Перечень отказов, fallback и адресат — реальные игровые различия
@@ -389,15 +402,50 @@ pub fn publish_state_cast_visual<Game: StateCastGame>(
     mode: u32,
     contract: &StateCastVisualContract,
 ) {
-    if skill.id() != contract.skill_id || skill.visual_effect().is_none_or(|effect| {
-        effect.kind() != contract.kind || effect.is_ended()
+    publish_state_cast_visual_impl(
+        game, skill, mode, contract.skill_id, contract.kind,
+        contract.failures, &[], contract.target,
+    );
+}
+
+/// Каркас `0xBFE01` Fury/RageBreak: отказы из `dword_failures` пишут
+/// `add_long(0)` перед BYTE mode (внешний вид `[dword 0][byte 8]` вместо
+/// BYTE-пары пятёрки); остальные режимы идут общим путём.
+pub fn publish_rage_cast_visual<Game: StateCastGame>(
+    game: &Game,
+    skill: &RegisteredSkillRecord<Game::MonsterExecution>,
+    mode: u32,
+    contract: &RageCastVisualContract,
+) {
+    publish_state_cast_visual_impl(
+        game, skill, mode, contract.skill_id, contract.kind,
+        contract.failures, contract.dword_failures, contract.target,
+    );
+}
+
+#[allow(clippy::too_many_arguments, reason = "части контракта независимы, как в исходном владельце")]
+fn publish_state_cast_visual_impl<Game: StateCastGame>(
+    game: &Game,
+    skill: &RegisteredSkillRecord<Game::MonsterExecution>,
+    mode: u32,
+    skill_id: u32,
+    kind: SkillVisualEffectKind,
+    failures: &[u32],
+    dword_failures: &[u32],
+    target_kind: StateCastVisualTarget,
+) {
+    if skill.id() != skill_id || skill.visual_effect().is_none_or(|effect| {
+        effect.kind() != kind || effect.is_ended()
     }) { return; }
     let (user_region, user) = skill.lifecycle().user();
     let Some(source) = game.resolve_state_move_shape(user_region, user).map(|shape| shape.shape()) else { return; };
     let mut message = CMessage::new(0x000b_fe01);
-    if contract.failures.contains(&mode) {
+    if failures.contains(&mode) {
         if source.identity().object_type == PLAYER_TYPE {
-            message.add_byte(0);
+            // RP-отказ Fury/RageBreak имеет DWORD-префикс; остальные
+            // ошибки семейства используют BYTE даже в том же owner-е.
+            if dword_failures.contains(&mode) { message.add_long(0); }
+            else { message.add_byte(0); }
             message.add_byte(mode as u8);
             game.send_state_cast_visual_to_player(source.identity().id, &message);
         }
@@ -405,12 +453,12 @@ pub fn publish_state_cast_visual<Game: StateCastGame>(
     }
     let target = match mode {
         0 => None,
-        1 if matches!(contract.target, StateCastVisualTarget::User) => Some(source),
+        1 if matches!(target_kind, StateCastVisualTarget::User) => Some(source),
         1 => {
             let target = game.resolve_skill_sufferer(skill.lifecycle())
                 .and_then(|(region, identity)| game.resolve_state_move_shape(region, identity))
                 .or_else(|| {
-                    if matches!(contract.target, StateCastVisualTarget::SuffererOrUser) {
+                    if matches!(target_kind, StateCastVisualTarget::SuffererOrUser) {
                         game.resolve_state_move_shape(user_region, user)
                     } else { None }
                 });

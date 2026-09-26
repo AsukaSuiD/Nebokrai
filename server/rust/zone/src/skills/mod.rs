@@ -32,7 +32,7 @@ mod firewall; // правила призыва и маска области CFir
 mod fatalblow; // Check/AI и Summon CFatalBlow (0x21C) над hub-швами `battlefairyskill` (порция №6b).
 mod fatalblowphalanx; // снаряд CFatalBlowPhalanx: форма, тики, клиентский снимок и формула (порция №6b).
 pub mod flash; // CFlash (0x69): Check/AI рывка, visual, master_info/target_level семейства.
-mod fury; // ID состояний, которые Fury снимает перед созданием.
+pub mod fury; // общая RP-подготовка CFury/CRageBreak (check/расход RP, свип девяти id) и RP-шов RageCastPlayer; сам CFury остаётся у прежнего владельца (хелперы размещены здесь порцией T4).
 pub mod godbless; // Check/AI CGodBless/CGodBless2 и параметры создания их состояний (порция №6a; clock/install-шов `GodBlessCastRuntime`).
 pub mod godblessstate; // живые callbacks CGodBlessState/CGodBlessState2 (порция №6a).
 mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2, живая форма CGodThunderPhalanx и тела их Summon (порция T5).
@@ -56,6 +56,8 @@ pub mod poisonfogstate; // живые Begin/update/restart/AI/End CPoisonFogStat
 pub mod promotion; // Check/AI CPromotion (порция №6a; hub-швы `statecast`).
 pub mod promotionstate; // живой Begin/restart CPromotionState и wire-тип его пакета (порция №6a).
 mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall, общий серверный decoder и живые композиты FireBall и GodPunishment.
+pub mod ragebreak; // CRageBreak (0x6E): Check/AI и порядок состояний (End+dtor прежнего 0x6E → новый state → свип девяти id → только-End первого 0x131 → CCureState → UpdateProperty → End(1)); visual с DWORD-формой mode 8 (порция T4; hub-швы `statecast`+`fury`).
+pub mod ragebreakstate; // живые Begin×3/End/Restart/AI и пересчёт CRageBreakState, общие AttackGain-callbacks семьи и consume для ThunderSlash (порция T4; hub-шов `statecast` + AttackGain-фасады CGame).
 pub mod roar; // Check/AI и границы обхода клеток CRoar (порция №6c; hub-швы `selfcast`).
 pub mod roarstate; // живые replace/restart/AI/End и OnUpdateProperties CRoarState (порция №6c).
 pub mod rush; // CRush/CRush2 (0x73/0x7C): Check/AI, AddRushState, visual и типы состояний RushState/Rush2State.
@@ -75,7 +77,10 @@ mod thunder; // CThunder (0x21F): семейные Check/AI громовых о�
 mod thunder2phalanx; // живая область CLeimingPhalanx2: одна активная ячейка, expiry-attack, собственные Replace/AddTo/Decord (порция T2).
 pub mod thunderblow; // CThunderBlow (0x13F) и его живая область CThunderBlowPhalanx: Begin/Check/AI/Summon и формула; FIX порции T3 — MP/поворот до повторной дальности (якорь 0x17A520) (порция T3).
 pub mod thunderblow2; // CThunderBlow2 (0x14D): Check/AI с отбрасыванием/контактом по impactattack-швам и wire-visual 0xBFE01 modes 0/1/3 (порция T3; visual слит из thunderblow2visual — один исходный thunderblow2.cpp).
+pub mod thunderfirephalanx; // форма CThunderFirePhalanx (0x322) предметного CItemSkill_2: путь с разовым ForceMove, calc с GetWeaponModifier; FIX #2 — idx>=count завершает форму только в due-ветке с регионом (якорь 0x5E1970) (порция T4).
 mod thunderphalanx; // живая область CThunderPhalanx: 49-ячеечные окна, три часа, wire со счётчиком окон и calc с оружейным швом (порция T2).
+pub mod thunderslash; // CThunderSlash (0x72) и слитый visual CThunderSlashEffect (один cpp): Check оружия/MP/RP, двухфазный AI с consume первого 0x6E без RTTI/ended-фильтра, Summon свежей таблицы (порция T4; hub-швы поверх `statecast`).
+pub mod thunderslashphalanx; // форма CThunderSlashPhalanx: три часа со штампом freq до разрешения региона, цель собственной клетки, Attack с IncreaseRp(1,0); FIX #1 — Calc info[+0] := instance-id [this+8] (якорь 0x5F77B0) (порция T4).
 mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже при нулевой цене, точечная BF918, поворот U, свёртка старой области (порция T1).
 mod tianhuophalanx; // живая область CTianhuoPhalanx: скан клетки каждый проход, End→BF504, x87-calc (порция T2).
 mod visualeffect; // visual-ресурс зарегистрированного навыка.

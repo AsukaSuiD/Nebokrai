@@ -1,19 +1,22 @@
 //! Живой Begin, End и пересчёт CFuryState и CRageBreakState.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/furystate.cpp/.h
-//! и ragebreakstate.cpp/.h. Данные и числовые правила — в Zone effects.
+//! и ragebreakstate.cpp/.h. Данные и числовые правила — в Zone effects;
+//! общие живые callbacks AttackGain-семьи (ICF-пара Serialize/
+//! OnUpdateProperties/Unserialize/AI) перенесены буквально в
+//! `nebokrai_zone::skills::ragebreakstate` порцией T4; здесь — обёртки
+//! Fury-ветки и делегации с прежними сигнатурами.
 
 use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    StatePropertyTarget, end_base_applied_state, resolve_applied_state_sufferer,
-    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_end_visual,
-    update_property_state_visual,
+    StatePropertyTarget, end_base_applied_state, resolve_state_move_shape,
+    update_applied_state_end_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
-use nebokrai_shared::values::CGuid;
 pub(crate) use nebokrai_zone::effects::{
     ATTACK_GAIN_STATE_BYTES as FURY_STATE_BYTES, AttackGainState, FURY_STATE_SKILL_ID, FuryState,
 };
+
 #[allow(clippy::too_many_arguments, reason = "User, Sufferer и держатель арены независимы")]
 pub(crate) fn begin_primary_fury_state(
     game: &mut CGame,
@@ -35,32 +38,15 @@ pub(super) fn begin_primary_attack_gain_state<const ID: u32>(
     holder: ShapeIdentity,
     user: Option<(i32, ShapeIdentity)>,
     sufferer: Option<(i32, ShapeIdentity)>,
-    mut state: AttackGainState<ID>,
+    state: AttackGainState<ID>,
     now: &mut dyn FnMut() -> u32,
 ) -> Option<StateKey>
 where
     AttackGainState<ID>: AppliedState,
 {
-    if user.is_some() { state.restart_timer(now()); }
-    let participant = |(region, identity)| {
-        let shape = resolve_state_move_shape(game, region, identity)?.shape();
-        Some((shape.get_region_id(), ShapeIdentity {
-            ex_id: CGuid::GUID_INVALID, ..shape.identity()
-        }))
-    };
-    let user = match user { Some(user) => Some(participant(user)?), None => None };
-    let sufferer = match sufferer {
-        Some(sufferer) => Some(participant(sufferer)?), None => None,
-    };
-    let record = state.encoded_for_install();
-    let shape = resolve_state_move_shape_mut(game, holder_region, holder)?;
-    let key = shape.append_applied_state_record(state, &record);
-    shape.mark_applied_state_begun(key);
-    shape.set_applied_state_user(key, user);
-    shape.set_applied_state_sufferer(key, sufferer);
-    // Между base Begin, созданием loop1 и append нет внешнего callback.
-    // Ресурс создаёт каталог арены; первый пакет принадлежит UpdateProperty.
-    Some(key)
+    nebokrai_zone::skills::ragebreakstate::begin_primary_attack_gain_state(
+        game, holder_region, holder, user, sufferer, state, now,
+    )
 }
 
 pub(crate) fn update_fury_state_properties(
@@ -80,40 +66,9 @@ pub(super) fn update_attack_gain_state_properties<const ID: u32>(
 where
     AttackGainState<ID>: AppliedState,
 {
-    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
-    else { return false; };
-    let _ = update_property_state_visual::<AttackGainState<ID>>(
-        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
-        |state, now| state.client_time(now) as u32,
-    );
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<AttackGainState<ID>>(key)).copied()
-    else { return false; };
-    if target.object_type == 600 {
-        let maximum = game.find_region(target_region)
-            .and_then(|region| region.base().find_monster_by_id(target.id))
-            .and_then(|monster| {
-                let property = game.find_monster_property_by_origin_name(monster.original_name())?;
-                Some(monster.state_attack_bounds(property.minimum_attack, property.maximum_attack).1)
-            });
-        if let Some(maximum) = maximum {
-            let gain = state.truncated_gain(maximum);
-            if let Some(monster) = game.find_region_mut(target_region)
-                .and_then(|region| region.base_mut().find_monster_by_id_mut(target.id))
-            {
-                let modifiers = monster.move_shape_mut().property_modifiers_mut();
-                modifiers.maximum_attack = modifiers.maximum_attack.wrapping_add(gain);
-            }
-        }
-    } else if target.object_type == 400 {
-        if let Some(player) = game.find_player_mut(target.id) {
-            player.update_state_combat_properties(|mut properties| {
-                properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
-                properties
-            });
-        }
-    }
-    true
+    nebokrai_zone::skills::ragebreakstate::update_attack_gain_state_properties::<CGame, ID>(
+        game, region_id, holder, key, now,
+    )
 }
 
 pub(crate) fn restart_fury_state(

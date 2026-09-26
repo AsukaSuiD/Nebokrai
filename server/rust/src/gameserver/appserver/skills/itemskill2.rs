@@ -31,7 +31,7 @@ use super::baseattack::{real_distance, time_reached, SKILL_USAGE_TARGET_MAX_DIST
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED};
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::soulcollectstate::consume_soul_collect_snapshot;
-use super::thunderfirephalanx::CThunderFirePhalanx;
+use nebokrai_zone::skills::thunderfirephalanx::CThunderFirePhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{CS2CContainerObjectMove, ContainerObjectMoveOperation};

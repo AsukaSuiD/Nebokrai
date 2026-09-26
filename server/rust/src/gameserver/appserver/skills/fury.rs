@@ -1,6 +1,9 @@
 //! Ярость CFury (0x1A3), gameserver.exe/GameServer.pdb,
 //! appserver/skills/fury.cpp. Общая RP-подготовка обслуживает также
-//! CRageBreak из appserver/skills/ragebreak.cpp.
+//! CRageBreak из appserver/skills/ragebreak.cpp. Сами RP-хелперы перенесены
+//! буквально в `nebokrai_zone::skills::fury` порцией T4 (с приездом
+//! CRageBreak хелпер стал разделяемым); здесь — делегации-пeреадресации на
+//! них, реализация RP-шва и собственное тело Fury без изменений.
 //!
 //! Игрок и монстр используют одно зарегистрированное исполнение. Begin
 //! создаёт visual до проверки U; RP расходуется только первым AI игрока,
@@ -15,172 +18,71 @@
 //! Полный End принадлежит захваченному экземпляру навыка.
 
 use std::ops::ControlFlow;
-use nebokrai_zone::skills::is_fury_conflicting_state_id;
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::curestate::{CureState, begin_primary_cure_state};
 use super::furystate::{FuryState, begin_primary_fury_state};
-use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
+use super::kernel::SkillTermination;
 use super::ragebreakstate::{RAGE_BREAK_STATE_ID, RageBreakState};
-use super::skillbaseproperties::CSkillBaseProperties;
+use super::statecast::finish_state_cast;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
     execute_owned_state_skill, execute_player_state_skill, finish_player_state_skill,
-    publish_state_skill_visual, state_skill_outcome,
+    publish_state_skill_visual,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_state_move_shape, resolve_state_move_shape_mut,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
-    ServerRegionOwner,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, ServerRegionOwner,
 };
 
+pub(super) use nebokrai_zone::skills::fury::{RageRpPolicy, RageSkillEffect};
+
 pub(crate) const FURY_SKILL_ID: u32 = 0x1a3;
-const PLAYER_TYPE: i32 = 400;
-const RP_LOSS: u32 = 3;
-const CAN_BREAK: u32 = 10_006;
 const PERSIST: u32 = 10_002;
 const ATTACK_GAIN: u32 = 105;
 
-fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
-    let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
-    Some((shape.get_region_id(), shape.identity()))
+/// RP-шов Zone яростных навыков над прежним `CPlayer` (реализация
+/// единственная; Zone не зависит от старого пакета).
+impl nebokrai_zone::skills::fury::RageCastPlayer for CPlayer {
+    fn rp(&self) -> u16 { self.rp() }
+
+    fn set_rp(&mut self, rp: u16) { self.set_rp(rp) }
 }
 
 pub(crate) fn remove_reached_conflict_states(
     game: &mut CGame, region_id: i32, holder: ShapeIdentity,
 ) {
-    let mut position = 0;
-    loop {
-        let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return; };
-        if position >= shape.state_slot_count() { break; }
-        if shape.state_at(position).is_some_and(|(_, state)| is_fury_conflicting_state_id(state.state_id())) {
-            let _ = end_and_destroy_state_at(game, region_id, holder, position);
-        }
-        position += 1;
-    }
-}
-
-fn fail_rp(
-    game: &mut CGame, address: RegisteredSkill, source: (i32, ShapeIdentity),
-    properties: &CSkillBaseProperties,
-) {
-    game.update_registered_skill_visual(address, 8);
-    if source.1.object_type == PLAYER_TYPE {
-        game.send_skill_system_info_with_unsigned(
-            source.1.id, b"GS0289", properties.query_property(RP_LOSS),
-        );
-    }
-}
-
-/// Различие двух RP-навыков касается только первого Check, не расхода в AI.
-pub(super) enum RageRpPolicy {
-    AllowZero,
-    RequirePositive,
-}
-
-pub(super) struct RageSkillEffect {
-    pub(super) source: (i32, ShapeIdentity),
-    pub(super) properties: CSkillBaseProperties,
+    nebokrai_zone::skills::fury::remove_reached_conflict_states(game, region_id, holder)
 }
 
 pub(super) fn check_rage_skill_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, address: RegisteredSkill, policy: RageRpPolicy, runtime: &mut Runtime,
 ) -> bool {
-    let Some(skill) = game.registered_skill(address) else { return false; };
-    let Some(source) = participant(game, skill.lifecycle().user()) else { return false; };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
-        return false;
-    };
-    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
-        game.update_registered_skill_visual(address, 13);
-        if source.1.object_type == PLAYER_TYPE {
-            game.send_skill_system_info(source.1.id, b"GS0278");
-        }
-        return false;
-    }
-    if source.1.object_type != PLAYER_TYPE { return true; }
-    // RageBreak проверяет стоимость до чтения RP, затем запрашивает её вновь.
-    // Fury сразу читает RP и только после этого делает единственный запрос.
-    if matches!(policy, RageRpPolicy::RequirePositive) && properties.query_property(RP_LOSS) == 0 {
-        return false;
-    }
-    let Some(rp) = game.find_player(source.1.id).map(|player| player.rp()) else { return false; };
-    if (u32::from(rp).wrapping_sub(properties.query_property(RP_LOSS)) as i32) < 0 {
-        fail_rp(game, address, source, &properties);
-        return false;
-    }
-    if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) {
-        user.set_moveable(false);
-    }
-    true
+    nebokrai_zone::skills::fury::check_rage_skill_cast(
+        game, address, policy, &mut || runtime.now_milliseconds(),
+    )
 }
 
-/// Общая подготовка Fury/RageBreak заканчивается visual1. Таблица этого AI
-/// и его U передаются обработчику состояний, не разрешаясь заново по ID навыка.
+/// Делегация Zone-подготовки: точки прежнего `end_state_skill(0/1)` идут
+/// тем же полным End через общий terminal statecast-адаптера.
 pub(super) fn prepare_rage_skill_effect<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
 ) -> ControlFlow<QueuedSkillExecutionOutcome, RageSkillEffect> {
-    let Some(skill) = game.registered_skill(address) else {
-        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Rejected));
-    };
-    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
-        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
-    }
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
-        return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
-    };
-    let Some(source) = participant(game, skill.lifecycle().user()) else {
-        return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
-    };
-    if game.move_shape_health(source.0, source.1) == Some(0) {
-        // Смерть U завершает оба навыка с AfterUse, хотя усиления не создаются.
-        game.update_registered_skill_visual(address, 2);
-        return ControlFlow::Break(end_state_skill(game, address, 1, runtime));
-    }
-    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Begin) {
-        if source.1.object_type == PLAYER_TYPE {
-            let Some(rp) = game.find_player(source.1.id).map(|player| player.rp()) else {
-                return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
-            };
-            let remaining = u32::from(rp).wrapping_sub(properties.query_property(RP_LOSS));
-            if (remaining as i32) < 0 {
-                fail_rp(game, address, source, &properties);
-                return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
-            }
-            if let Some(player) = game.find_player_mut(source.1.id) {
-                player.set_rp(remaining as u16);
-            }
-            let _ = game.publish_player_states(source.1.id);
-        }
-        if let Some(skill) = game.registered_skill_mut(address) {
-            skill.lifecycle_mut().set_available(properties.query_property(CAN_BREAK) != 0);
-        }
-        game.update_registered_skill_visual(address, 0);
-        if let Some(skill) = game.registered_skill_mut(address) {
-            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+    match nebokrai_zone::skills::fury::prepare_rage_skill_effect(
+        game, address, &mut || runtime.now_milliseconds(),
+    ) {
+        ControlFlow::Continue(effect) => ControlFlow::Continue(effect),
+        ControlFlow::Break(outcome) => {
+            ControlFlow::Break(finish_state_cast(game, address, outcome, runtime))
         }
     }
-    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) != Some(SkillStage::Check) {
-        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
-    }
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let Some(started) = game.registered_skill(address).map(|skill| skill.lifecycle().started_at_ms()) else {
-        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Rejected));
-    };
-    if started.wrapping_add(delay) > runtime.now_milliseconds() {
-        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
-    }
-    game.update_registered_skill_visual(address, 1);
-    ControlFlow::Continue(RageSkillEffect { source, properties })
 }
 
 struct Fury;
