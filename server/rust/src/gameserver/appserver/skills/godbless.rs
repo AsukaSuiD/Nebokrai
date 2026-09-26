@@ -1,152 +1,79 @@
 //! Божественное благословение CGodBless/CGodBless2.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/godbless{,2}.cpp.
-//! Оба Begin сохраняют исходную цель в общей базе, создают visual loop1
-//! и проверяют только исходного U. Нет проверки S, пути или оружия.
-//! После абсолютного reuse источник не типа Player проходит без Move0;
-//! Player MP0 означает тихий отказ, иначе signed DWORD-разность допускает Move0.
-//! Отказ Begin вызывает End0 без дополнительного visual2.
-//!
-//! AI удерживает одну таблицу и найденные U/S через callbacks. GodBless
-//! при NULL S использует захваченного U; GodBless2 требует именно Monster
-//! при каждом входе AI, иначе Player получает visual10/GS0305 и End0.
-//! Обычный неприручённый монстр без Carriage AI заменяется свежим U,
-//! с записью базовых type/id S. Поэтому GodBless2 после такой замены и
-//! ожидания задержки может отвергнуть уже изменившуюся S на следующем AI.
-//! Нет проверки смерти или смены направления. Первый AI выполняет
-//! MP→OnChangeStates→CAN→visual0→condition; выпуск ждёт unsigned start+delay.
-//!
-//! После visual1 захваченный U даёт живой уровень оружия либо ноль.
-//! Свойства читаются в порядке MIN_COEFF→MIN→MAX_COEFF→MAX→ELEMENT_COEFF→ELEMENT.
-//! Каждое unsigned wrapping-произведение с 0.01f сохраняется в f32,
-//! затем прибавление константы отдельно сохраняется в f32. Значения живут
-//! через удаление прежнего состояния; только потом PERSIST→FISTP
-//! ELEMENT/MAX/MIN→ctor→primary Begin→append→безусловный UpdateProperty.
-//! Различие DelExStateByType у GodBless принадлежит общему установщику.
-//! Выпуск заканчивается End1 даже при отказе state Begin; ранние отказы — End0.
-//! Общий End сбрасывает фазу, разрешает свежий U либо S Move1 и сохраняет
-//! исходный аргумент. Общий kernel и SlotMap исключают отдельную копию исполнения.
+//! Тела Check/AI и живые callbacks состояний перенесены буквально в Zone
+//! `skills/{godbless,godblessstate}.rs` (порция №6a «state-касты пятёрки +
+//! heal-квартет»; основание — Check `0x1B02A0` (не-Player → 1 до MP/Move0;
+//! arg-null → тихий 0; cost0 → тихий 0; signed-diff → visual7/GS0288 или
+//! Move0 → 1), AI `0x1B0480`; CGodBless2 AI `0x150990` (visual10/GS0305
+//! при не-Monster); End(H) 3-fold `0x1502F0` — см. там и в записи аудита
+//! «Zone skills: машинная разведка battlefairy-навыков (порция №6)»).
+//! Здесь — делегации с прежними сигнатурами: общий цикл и visual остаются
+//! у stateskill/playercast, первая установка состояния — у
+//! `CGame::install_god_bless_state` (`game/godbless.rs`), часы и установка
+//! приходят связкой через Zone-трейт `GodBlessCastRuntime`; потребители не
+//! меняются. Замена состояния, в отличие от GodBless, не вызывает у
+//! GodBless2 DelExStateByType — это различие общего установщика.
 
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::SkillExecutionKernel;
 use super::playercast::execute_registered_player_cast;
-use super::rangedweaponcast::{check_cast_mana, spend_cast_mana, terminal};
+use super::statecast::state_cast_outcome;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
-    execute_owned_state_skill, publish_state_skill_visual,
+    execute_owned_state_skill,
 };
-use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
-use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
-use nebokrai_zone::skills::GodBlessGains;
+use nebokrai_zone::skills::godbless::GodBlessCastRuntime;
 
-pub(crate) const GOD_BLESS_SKILL_ID: u32 = 0x12f;
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
-const DELAY_TIME: u32 = 10_001;
-const REUSE_DELAY_TIME: u32 = 10_005;
-const CAN_BE_BREAKED: u32 = 10_006;
+pub(crate) use nebokrai_zone::skills::godbless::GOD_BLESS_SKILL_ID;
 
 pub(crate) const fn is_god_bless_skill(skill_id: u32) -> bool {
-    matches!(skill_id, GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID)
-}
-
-fn resolved_user(game: &CGame, skill: &MoveShapeSkill) -> Option<(i32, ShapeIdentity)> {
-    let (region, identity) = skill.lifecycle().user();
-    let user = resolve_state_move_shape(game, region, identity)?.shape();
-    Some((user.get_region_id(), user.identity()))
+    nebokrai_zone::skills::godbless::is_god_bless_skill(skill_id)
 }
 
 pub(crate) fn check_god_bless_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((region, identity)) = original_user else { return false; };
-    let Some(user) = resolve_state_move_shape(game, region, identity).map(|user| user.shape()) else { return false; };
-    let source = (user.get_region_id(), user.identity());
-    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
-    let Some(skill) = game.registered_skill(instance) else { return false; };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
-    let reuse = properties.query_property(REUSE_DELAY_TIME);
-    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
-        game.update_registered_skill_visual(instance, 13);
-        if let Some(player) = player { game.send_skill_system_info(player, b"GS0278"); }
-        return false;
+    nebokrai_zone::skills::godbless::check_cast(
+        game, instance, original_user, &mut || runtime.now_milliseconds(),
+    )
+}
+
+/// Владелец часов и первичной установки состояния благословения: runtime
+/// прежнего главного цикла (в нём же Begin часов состояния).
+struct GodBlessRuntime<'a, Runtime>(&'a mut Runtime);
+
+impl<Runtime: GameMainLoopRuntime> GodBlessCastRuntime<CGame> for GodBlessRuntime<'_, Runtime> {
+    fn now_milliseconds(&mut self) -> u32 {
+        self.0.now_milliseconds()
     }
-    check_cast_mana(game, instance, source, &properties)
+
+    fn install_god_bless_state(
+        &mut self,
+        game: &mut CGame,
+        user: (i32, ShapeIdentity),
+        sufferer: (i32, ShapeIdentity),
+        skill_id: u32,
+        create: &mut dyn FnMut() -> nebokrai_zone::effects::GodBlessState,
+    ) -> bool {
+        game.install_god_bless_state(user, sufferer, skill_id, create, self.0)
+    }
 }
 
 pub(crate) fn run_god_bless_ai<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
-        return terminal(QueuedSkillExecutionState::Pending);
-    };
-    let skill_id = skill.id();
-    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let source = resolved_user(game, skill);
-    let target = resolve_skill_sufferer(game, skill.lifecycle())
-        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
-        .map(|target| (target.shape().get_region_id(), target.shape().identity()));
-    let Some(source) = source else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
-    let monster = target.filter(|(_, identity)| identity.object_type == MONSTER_TYPE)
-        .and_then(|(region, identity)| game.find_region(region)?.base().find_monster_by_id(identity.id));
-    if skill_id == GOD_BLESS_2_SKILL_ID && monster.is_none() {
-        if let Some(player) = player {
-            game.update_registered_skill_visual(instance, 10);
-            game.send_skill_system_info(player, b"GS0305");
-        }
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let ordinary_monster = monster.is_some_and(|monster| !monster.is_tamed() && !matches!(
-        monster.active_ai(), Some(ActiveMonsterAi::Carriage | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)),
-    ));
-    let target = if ordinary_monster {
-        let Some(target) = game.registered_skill(instance).and_then(|skill| resolved_user(game, skill)) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        if let Some(skill) = game.registered_skill_mut(instance) {
-            skill.lifecycle_mut().set_sufferer_identity(target.1);
-        }
-        target
-    } else { target.unwrap_or(source) };
-    if stage == SkillStage::Begin {
-        if !spend_cast_mana(game, instance, player, &properties) {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let can_break = properties.query_property(CAN_BE_BREAKED);
-        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        skill.lifecycle_mut().set_available(can_break != 0);
-        game.update_registered_skill_visual(instance, 0);
-        if let Some(skill) = game.registered_skill_mut(instance) {
-            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let delay = properties.query_property(DELAY_TIME);
-    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if runtime.now_milliseconds() < started.wrapping_add(delay) {
-        return terminal(QueuedSkillExecutionState::Pending);
-    }
-    game.update_registered_skill_visual(instance, 1);
-    let weapon = player.and_then(|player| game.find_player(player))
-        .map_or(0, |player| player.weapon_damage_level(game.goods_factory()) as u32);
-    let gains = GodBlessGains::read(weapon, |key| properties.query_property(key));
-    let _ = game.install_god_bless_state(source, target, skill_id, || {
-        gains.create_state(skill_id, |key| properties.query_property(key))
-    }, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+    state_cast_outcome(nebokrai_zone::skills::godbless::run_god_bless_ai(
+        game, instance, &mut GodBlessRuntime(runtime),
+    ))
 }
 
 pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(
@@ -174,7 +101,8 @@ impl<const ID: u32> RegisteredStateSkill for GodBlessSkill<ID> {
         game: &mut CGame, instance: RegisteredSkill, _begin_target: StateSkillBeginTarget,
         runtime: &mut Runtime,
     ) -> bool {
-        let user = game.registered_skill(instance).and_then(|skill| resolved_user(game, skill));
+        let user = game.registered_skill(instance)
+            .and_then(|skill| nebokrai_zone::skills::statecast::state_cast_participant(game, skill.lifecycle().user()));
         check_god_bless_cast(game, instance, user, runtime)
     }
 
@@ -199,9 +127,5 @@ pub(crate) fn execute_owned_monster_god_bless<const ID: u32, Runtime: GameMainLo
 }
 
 pub(crate) fn publish_god_bless_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    match skill.id() {
-        GOD_BLESS_SKILL_ID => publish_state_skill_visual::<GodBlessSkill<GOD_BLESS_SKILL_ID>>(game, skill, mode),
-        GOD_BLESS_2_SKILL_ID => publish_state_skill_visual::<GodBlessSkill<GOD_BLESS_2_SKILL_ID>>(game, skill, mode),
-        _ => {}
-    }
+    nebokrai_zone::skills::godbless::publish_god_bless_visual(game, skill, mode);
 }

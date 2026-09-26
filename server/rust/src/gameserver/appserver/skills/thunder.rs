@@ -17,6 +17,11 @@
 //! региона U. Отказ AddShape не подавляет сериализацию; отказ самого Summon
 //! не меняет последующий End(1). Область живёт независимо от навыка. Численные
 //! адаптеры сохраняют x87-усечение и младший DWORD результата i64.
+//!
+//! Read-проекции BF-summon (`summon_user_cch`, `summon_user_add_element`,
+//! `summon_user_region`) перенесены порцией №6b в Zone
+//! `skills/battlefairyskill` без дублирования; здесь их shim-реэкспорт до
+//! порции №6c (прецедент moveshape), потребители thunder2 не меняются.
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -276,25 +281,9 @@ pub(super) fn thunder_summon_properties(
     Some((master, properties, element))
 }
 
-pub(super) fn summon_user_cch(game: &CGame, source: ShapeIdentity) -> i32 {
-    if source.object_type == 400 {
-        game.find_player(source.id).map_or(0, |player| i32::from(player.combat_properties().cch))
-    } else { 0 }
-}
-
-pub(super) fn summon_user_add_element(game: &CGame, source: ShapeIdentity) -> i32 {
-    if source.object_type == 400 {
-        game.find_player(source.id).map_or(0, |player| player.combat_properties().add_element_attack as i32)
-    } else { 0 }
-}
-
-pub(super) fn summon_user_region(game: &CGame, source: (i32, ShapeIdentity)) -> Option<i32> {
-    let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
-    if !shape.is_assigned_to_server_region() { return None; }
-    let region = shape.get_region_id();
-    game.find_region(region)?;
-    Some(region)
-}
+pub(super) use nebokrai_zone::skills::{
+    summon_user_add_element, summon_user_cch, summon_user_region,
+};
 
 fn summon_thunder<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),

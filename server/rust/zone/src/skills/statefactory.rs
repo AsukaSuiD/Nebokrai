@@ -80,7 +80,7 @@ const HEAL_2_SKILL_ID: u32 = 0xe3;
 const SUPER_HEAL_SKILL_ID: u32 = 0xd9;
 const SUPER_HEAL_2_SKILL_ID: u32 = 0xe4;
 const POISON_ARROW_SKILL_ID: u32 = 0x21e;
-const SPIDER_POISON_SKILL_ID: u32 = 0x191;
+pub const SPIDER_POISON_SKILL_ID: u32 = 0x191;
 const SPRITE_BURN_SKILL_ID: u32 = 0x1a6;
 
 // Псевдонимы конкретных вариантов общих payload семей; в переходном Game тем
