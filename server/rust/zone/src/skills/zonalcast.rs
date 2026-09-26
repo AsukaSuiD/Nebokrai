@@ -656,6 +656,22 @@ pub fn check_zonal_cast<Game: ZonalCastGame>(
     match id {
         POISON_FOG_SKILL_ID => game.check_crossbow_cast(instance, source, &properties),
         SNOW_STORM_SKILL_ID => game.check_cast_mana_without_text(instance, source, &properties),
+        SOUL_MIRROR_SKILL_ID => {
+            // Машинный Check `0x1A4850`: MP-контракт по arg1 (U), но цель
+            // `SetMoveable(_, 0)` — arg2 (sufferer); для практических кастов
+            // self-цели они совпадают. Разрешаем sufferer с откатом к source
+            // (patch-контур verify-t5); разрешение — вложенным неизменяемым
+            // блоком, чтобы не продлевать заём `skill` до &mut-вызова.
+            let target = game
+                .registered_skill(instance)
+                .and_then(|skill| game.resolve_skill_sufferer(skill.lifecycle()))
+                .and_then(|(region, identity)| {
+                    game.resolve_state_move_shape(region, identity)
+                        .map(|_| (region, identity))
+                })
+                .map_or(source, |resolved| resolved);
+            game.check_cast_mana(instance, target, &properties)
+        }
         _ => game.check_cast_mana(instance, source, &properties),
     }
 }
