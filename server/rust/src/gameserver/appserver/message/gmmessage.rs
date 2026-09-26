@@ -51,13 +51,12 @@
 //! ветви, ищет цель по имени и только для локального владельца читает регион/X/Y и вызывает полный
 //! `ChangeRegion` с текущим направлением и нулевыми use/range/carriage.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
-//! Ответ списка блокировок `0x7FC14` строго проверяет всю полезную нагрузку,
-//! продолжает только ожидающую `ListBanedPlayer 5106` и после этого публикует
-//! строки игроку отдельными `0xBF806`.
+//! Собственный ответ списка блокировок `0x7FC14` без машинного основания
+//! удалён.
 //! `Vec` заменяет исходное выделение памяти; поле объявленной ёмкости сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
 //! расхождение между двумя зависящими от времени проходами. Все селекторы
-//! `0x7FC01..14` связаны с typed dispatcher-ом.
+//! `0x7FC01..13` связаны с typed dispatcher-ом.
 //! `ParseGMCommand` сохраняет двухуровневую авторизацию, legacy-разбор четырёх
 //! параметров, upsert сценарных переменных и отложенный запуск
 //! `scripts/gm/{command}.script` через канонический script owner.
@@ -71,7 +70,6 @@ use crate::gameserver::appserver::script::script::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameKickAroundOutcome, ScriptRegionChangeContext,
-    colored_text_message,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::GameMessageDomainOps;
@@ -97,7 +95,6 @@ const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
 const GM_MOVE_PLAYER_MESSAGE: i32 = 0x0007_FC10;
 const GM_LIST_REQUEST_MESSAGE: i32 = 0x0007_FC11;
 const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
-const GM_ACTIVE_BAN_LIST_RESPONSE: i32 = 0x0007_FC14;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
 const GM_QUERY_SILENCE_RESPONSE: i32 = 0x0005_FF10;
 const GM_KICK_BY_NAME_RESPONSE: i32 = 0x0005_FF09;
@@ -145,7 +142,6 @@ pub(crate) enum GmMessageError {
     MissingCountry,
     MissingCountryBroadcastFirstField,
     MissingCountryBroadcastSecondField,
-    InvalidActiveBanList,
     MissingBroadcastText,
     MissingBroadcastFirstField,
     MissingBroadcastSecondField,
@@ -183,79 +179,12 @@ pub(crate) fn dispatch_gm_message<Runtime: GameClockContext + ScriptRegionChange
             | GM_MOVE_PLAYER_MESSAGE
             | GM_LIST_REQUEST_MESSAGE
             | GM_COUNTRY_BROADCAST_MESSAGE
-            | GM_ACTIVE_BAN_LIST_RESPONSE
     ) {
         return None;
     }
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
-
-    if message_type == GM_ACTIVE_BAN_LIST_RESPONSE {
-        let Some(script_id) = message.base_mut().get_long() else {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        };
-        let Some(success) = message.base_mut().get_byte().filter(|value| *value <= 1) else {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        };
-        let Some(total_count) = message.base_mut().get_long().filter(|value| *value >= 0) else {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        };
-        let Some(truncated) = message.base_mut().get_byte().filter(|value| *value <= 1) else {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        };
-        let Some(record_count) = message
-            .base_mut()
-            .get_long()
-            .filter(|value| (0..=256).contains(value))
-        else {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        };
-        let mut published_texts = Vec::with_capacity(record_count as usize);
-        for _ in 0..record_count {
-            let Some(account) = message.base_mut().get_str_bytes(33) else {
-                return Some(Err(GmMessageError::InvalidActiveBanList));
-            };
-            let Some(ban_until) = message.base_mut().get_str_bytes(20) else {
-                return Some(Err(GmMessageError::InvalidActiveBanList));
-            };
-            if account.is_empty() || account.len() > 32 || ban_until.len() != 19 {
-                return Some(Err(GmMessageError::InvalidActiveBanList));
-            }
-            let mut text = account;
-            text.extend_from_slice(b"  ");
-            text.extend_from_slice(&ban_until);
-            published_texts.push(text);
-        }
-        if !message.base_mut().unread_bytes().is_empty()
-            || (success == 0 && (total_count != 0 || truncated != 0 || record_count != 0))
-            || (success != 0
-                && (total_count < record_count
-                    || truncated != u8::from(total_count > record_count)))
-        {
-            return Some(Err(GmMessageError::InvalidActiveBanList));
-        }
-        if truncated != 0 {
-            published_texts.push(
-                format!("List truncated: shown {} of {}.", record_count, total_count).into_bytes(),
-            );
-        }
-        let continued = game.continue_player_script_function(
-            script_id,
-            requester_id,
-            5106,
-            if success != 0 { total_count } else { -1 },
-        );
-        let published_count = published_texts.len();
-        if continued && success != 0 && game.find_player(requester_id).is_some() {
-            for text in &published_texts {
-                let _delivery = colored_text_message(PLAYER_SYSTEM_MESSAGE, 0xffff_ffff, 0, text)
-                    .send_to_player(game.net_server(), requester_id);
-            }
-        }
-        trace!(requester_id, script_id, success = success != 0, total_count, continued, published_count, "Обработан список блокировок GM");
-        return Some(Ok(()));
-    }
 
     if message_type == GM_GET_PLAYER_PROPERTY_REQUEST {
         let Some(target_player_id) = message.base_mut().get_long() else {

@@ -60,7 +60,7 @@ use super::function::{
     SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION,
     SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
     SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
     SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
     SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
@@ -293,21 +293,15 @@ impl ActiveScript {
             };
         }
         if let Some(function_id) = self.waiting_function {
-            if matches!(
-                function_id,
-                SCRIPT_FUNCTION_GET_COPY_NUMBER | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
-            ) && self
-                .waiting_started_ms
-                .is_some_and(|started| runtime.now_milliseconds().wrapping_sub(started) >= 10_000)
+            if function_id == SCRIPT_FUNCTION_GET_COPY_NUMBER
+                && self
+                    .waiting_started_ms
+                    .is_some_and(|started| runtime.now_milliseconds().wrapping_sub(started) >= 10_000)
             {
                 self.waiting_function = None;
                 self.waiting_replay = false;
                 self.waiting_started_ms = None;
-                let legacy_return = if function_id == SCRIPT_FUNCTION_LIST_BANNED_PLAYER {
-                    -1
-                } else {
-                    0
-                };
+                let legacy_return = 0;
                 self.integer_variables
                     .insert(normalize_name(b"$m_TalkRet"), legacy_return);
                 tracing::warn!(
@@ -896,10 +890,6 @@ impl<'a> CScript<'a> {
                 }
             }
             ScriptFunctionDispatchOutcome::Handled { legacy_return } => {
-                if function_id == SCRIPT_FUNCTION_LIST_BANNED_PLAYER && legacy_return == -1 {
-                    self.integer_variables
-                        .insert(normalize_name(b"$m_TalkRet"), -1);
-                }
                 ScriptCommandOutcome::Handled {
                     function_id,
                     legacy_return,

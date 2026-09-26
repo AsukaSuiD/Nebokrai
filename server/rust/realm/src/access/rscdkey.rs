@@ -104,7 +104,6 @@ pub enum RsCdKeyOperation {
     CdKeyBan,
     FixPtAccount,
     GetBanTime,
-    ListActiveBans,
     IpIsAllowed,
     IpIsForbidden,
     IsBetweenIp,
@@ -192,18 +191,6 @@ pub enum MatrixValidation {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ActiveBanRecord {
-    pub account: Vec<u8>,
-    pub ban_until: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ActiveBanList {
-    pub total_count: i32,
-    pub records: Vec<ActiveBanRecord>,
-}
-
 /// Узкая объектная граница достигнутых операций исходного `CRsCDKey`.
 pub trait RsCdKeyOwner {
     /// Пытается заблокировать byte-exact account на исходное число минут.
@@ -214,9 +201,6 @@ pub trait RsCdKeyOwner {
 
     /// Возвращает ненулевой исходный `ban_time`; отсутствие/DB-ошибка дают `None`.
     fn get_ban_time(&mut self, account: &[u8]) -> Option<NaiveDateTime>;
-
-    /// Возвращает до 256 действующих блокировок и полный размер выборки.
-    fn list_active_bans(&mut self) -> Option<ActiveBanList>;
 
     /// Проверяет allow-диапазоны, если исходный setup-флаг включён.
     fn ip_is_allowed(&mut self, check_enabled: bool, raw_ipv4: u32) -> bool;
@@ -361,53 +345,6 @@ impl TiberiusRsCdKey {
         row.get::<NaiveDateTime, _>(1)
             .map(Some)
             .ok_or(RsCdKeyDatabaseError::MissingRequiredValue("ban_time"))
-    }
-
-    async fn read_active_bans(config: Config) -> Result<ActiveBanList, RsCdKeyDatabaseError> {
-        let mut client = Self::connect(config).await?;
-        let stream = client
-            .query(
-                "SELECT TOP (256) cdkey, \
-                 CONVERT(varchar(19), ban_time, 120) AS ban_until, \
-                 COUNT(*) OVER() AS total_count \
-                 FROM dbo.CSL_CDKEY \
-                 WHERE ban_time IS NOT NULL AND ban_time > GETDATE() \
-                 ORDER BY ban_time ASC, cdkey ASC",
-                &[],
-            )
-            .await?;
-        let rows = stream.into_first_result().await?;
-        let mut total_count = 0_i32;
-        let mut records = Vec::with_capacity(rows.len());
-        for row in rows {
-            let account = row
-                .get::<&str, _>(0)
-                .ok_or(RsCdKeyDatabaseError::MissingRequiredValue("cdkey"))?;
-            let ban_until = row
-                .get::<&str, _>(1)
-                .ok_or(RsCdKeyDatabaseError::MissingRequiredValue("ban_until"))?;
-            let row_total = row
-                .get::<i32, _>(2)
-                .ok_or(RsCdKeyDatabaseError::MissingRequiredValue("total_count"))?;
-            let account = encode_ansi(account);
-            let ban_until = ban_until.as_bytes().to_vec();
-            if account.is_empty()
-                || account.len() > 32
-                || ban_until.len() != 19
-                || row_total < records.len() as i32 + 1
-                || (total_count != 0 && total_count != row_total)
-            {
-                return Err(RsCdKeyDatabaseError::MissingRequiredValue(
-                    "контракт действующих блокировок",
-                ));
-            }
-            total_count = row_total;
-            records.push(ActiveBanRecord { account, ban_until });
-        }
-        Ok(ActiveBanList {
-            total_count,
-            records,
-        })
     }
 
     async fn execute_gas_procedure(
@@ -594,16 +531,6 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
             Ok(ban_time) => ban_time,
             Err(error) => {
                 self.push_database_failure(RsCdKeyOperation::GetBanTime, error);
-                None
-            }
-        }
-    }
-
-    fn list_active_bans(&mut self) -> Option<ActiveBanList> {
-        match self.block_on_database(Self::read_active_bans(self.config.clone())) {
-            Ok(result) => Some(result),
-            Err(error) => {
-                self.push_database_failure(RsCdKeyOperation::ListActiveBans, error);
                 None
             }
         }

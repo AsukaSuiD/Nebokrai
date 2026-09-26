@@ -23,9 +23,8 @@
 //! запрашивает БД и только затем отправляет `0x20001` LoginServer. Запросивший
 //! игрок не проверяется и ответа не получает. Tiberius заменяет ADO, сохраняя
 //! этот порядок.
-//! Сценарный запрос списка блокировок `0x5FF17` проверяет принадлежность игрока
-//! исходному GameServer и передаёт ID игрока и сценария в LoginServer как
-//! `0x20002`; отказ очереди немедленно возвращается исходной карте.
+//! Собственная ветвь `0x5FF17` без машинного основания удалена: исходный
+//! switch заканчивается `0x5FF16`.
 //! Список GM сохраняет маршрут `0x5FF14 → 0x7FC11 → 0x5FF15 → 0x7FC12`:
 //! ответ GameServer несёт ID запросившего игрока, ID исходной карты, число и
 //! строки; WorldServer выбирает адресатом исходную карту и не удаляет эти поля
@@ -76,8 +75,6 @@ const ONLINE_PLAYER_COUNT_REQUEST: i32 = 0x0005_FF01;
 const ONLINE_PLAYER_COUNT_RESPONSE: i32 = 0x0007_FC01;
 const ONLINE_PLAYER_ID_REQUEST: i32 = 0x0005_FF05;
 const ONLINE_PLAYER_ID_RESPONSE: i32 = 0x0007_FC05;
-const ACTIVE_BAN_LIST_REQUEST: i32 = 0x0005_ff17;
-const ACTIVE_BAN_LIST_LOGIN_REQUEST: i32 = 0x0002_0002;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum WorldGmTransportOutcome {
@@ -264,16 +261,6 @@ pub enum WorldGmMessageOutcome {
         wire: Option<Vec<u8>>,
         delivery: Option<Result<i32, SendMessageError>>,
     },
-    ActiveBanListRequested {
-        requester_player_id: i32,
-        script_id: i32,
-        source_map_id: i32,
-        requester_map_id: i32,
-        payload_complete: [bool; 2],
-        wire: Option<Vec<u8>>,
-        delivery: Option<Result<i32, SendMessageError>>,
-        failure_delivery: Option<Result<i32, SendMessageError>>,
-    },
     Transport(WorldGmTransportOutcome),
 }
 
@@ -303,52 +290,6 @@ pub async fn on_gm_message(
     let decoded_request_id = message.base_mut().get_long();
     let request_id = decoded_request_id.unwrap_or(0);
     match message.message_type() {
-        ACTIVE_BAN_LIST_REQUEST => {
-            let decoded_script_id = message.base_mut().get_long();
-            let script_id = decoded_script_id.unwrap_or(0);
-            let source_map_id = message.map_id();
-            let requester_map_id = game.game_server_number_by_player_id(request_id);
-            let (wire, delivery) =
-                if request_id > 0 && script_id > 0 && requester_map_id == source_map_id {
-                    let mut request = CMessage::new(ACTIVE_BAN_LIST_LOGIN_REQUEST);
-                    request.base_mut().add_long(request_id);
-                    request.base_mut().add_long(script_id);
-                    let wire = request.as_wire_bytes().to_vec();
-                    let delivery = request.send(
-                        game.current_login_client()
-                            .map(|client| client.send_queue()),
-                        false,
-                    );
-                    (Some(wire), Some(delivery))
-                } else {
-                    (None, None)
-                };
-            let failure_delivery = if delivery
-                .as_ref()
-                .is_some_and(|result| !matches!(result, Ok(1)))
-            {
-                let mut failure = CMessage::new(0x0007_fc14);
-                failure.base_mut().add_long(request_id);
-                failure.base_mut().add_long(script_id);
-                failure.base_mut().add_byte(0);
-                failure.base_mut().add_long(0);
-                failure.base_mut().add_byte(0);
-                failure.base_mut().add_long(0);
-                Some(game.send_msg_to_game_server(source_map_id, &failure))
-            } else {
-                None
-            };
-            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::ActiveBanListRequested {
-                requester_player_id: request_id,
-                script_id,
-                source_map_id,
-                requester_map_id,
-                payload_complete: [decoded_request_id.is_some(), decoded_script_id.is_some()],
-                wire,
-                delivery,
-                failure_delivery,
-            })
-        }
         ONLINE_PLAYER_COUNT_REQUEST => {
             let decoded_script_id = message.base_mut().get_long();
             let script_id = decoded_script_id.unwrap_or(0);

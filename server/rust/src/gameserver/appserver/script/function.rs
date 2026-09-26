@@ -178,10 +178,7 @@
 //! игрока и ID сценария в World-запрос `0x5FD0B`; ответ `0x7FA15` возвращается
 //! через общего владельца продолжения, а десятисекундный тайм-аут записывает ноль
 //! в `$m_TalkRet` и освобождает сохранённую позицию сценария.
-//! `ListBanedPlayer 5106` тем же способом передаёт ID игрока и сценария по
-//! цепочке GameServer → WorldServer → LoginServer, получает до 256 действующих
-//! блокировок, продолжает только ожидающую функцию `5106` и публикует строки
-//! клиенту; отказ и десятисекундный тайм-аут возвращают `-1`.
+//! Собственная функция `5106 / ListBanedPlayer` без машинного основания удалена.
 //! Связка `DeleteGoodsFromCiQing 9627`, `OpenCiQingPage 9628` и
 //! `PushItemToCiQing 9629` использует канонические состояние игрока, фабрику
 //! предметов и кодек старого клиента. Удаление расходует `CQ0008`, записывает
@@ -693,7 +690,6 @@ pub(crate) const SCRIPT_FUNCTION_LIST_SILENCE_PLAYER: i32 = 5104;
 pub(crate) const SCRIPT_FUNCTION_SAVE_ALL_PLAYERS: i32 = 5105;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_LIST_ONLINE_PLAYER: i32 = 5109;
-pub(crate) const SCRIPT_FUNCTION_LIST_BANNED_PLAYER: i32 = 5106;
 pub(crate) const SCRIPT_FUNCTION_KICK_ALL: i32 = 5301;
 pub(crate) const SCRIPT_FUNCTION_KICK_MAP: i32 = 5302;
 pub(crate) const SCRIPT_FUNCTION_GET_COPY_NUMBER: i32 = 9314;
@@ -3862,7 +3858,6 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_SAVE_ALL_PLAYERS
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
         | SCRIPT_FUNCTION_LIST_ONLINE_PLAYER
-        | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
         | SCRIPT_FUNCTION_KICK_ALL
         | SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL
         | SCRIPT_FUNCTION_GET_AREA_ID
@@ -7224,18 +7219,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = response.send_to_player(game.net_server(), player_id);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
-        }
-        SCRIPT_FUNCTION_LIST_BANNED_PLAYER => {
-            if argument_count != 0 || game.find_player(player_id).is_none() || script_id <= 0 {
-                return Some(ScriptFunctionDispatchOutcome::Invalid);
-            }
-            let mut request = CMessage::new(0x0005_ff17);
-            request.add_long(player_id);
-            request.add_long(script_id);
-            Some(match request.send(game, false) {
-                Ok(1) => ScriptFunctionDispatchOutcome::Yielded { legacy_return: -1 },
-                _ => ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 },
-            })
         }
         SCRIPT_FUNCTION_KICK_ALL => {
             if argument_count != 0 || game.find_player(player_id).is_none() {

@@ -15,9 +15,7 @@
 //! выбирает произвольные биты и возвращает typed safe-block без внешнего send.
 //! Любой opcode вне четырёх case завершает dispatcher без чтения,
 //! отправки и fallback-маршрута; Rust представляет это `NoOp`.
-//! Ответ LoginServer `0x4FD05` маршрутизируется как `0x7FC14` только на
-//! актуальный GameServer запрашивающего игрока, сохраняя полезную нагрузку без
-//! изменений.
+//! Собственная ветвь `0x4FD05` без машинного основания удалена.
 //!
 use std::ffi::CString;
 
@@ -90,15 +88,6 @@ pub enum WorldGmaMessageOutcome {
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
-    ActiveBanListRouted {
-        requester_player_id: i32,
-        script_id: i32,
-        payload_complete: [bool; 2],
-        payload_valid: bool,
-        game_server_id: i32,
-        wire: Option<Vec<u8>>,
-        delivery: Option<Result<i32, SendMessageError>>,
-    },
     MissingWorldNumber {
         request_type: i32,
         response_type: i32,
@@ -118,36 +107,6 @@ pub fn on_gma_message(
 ) -> WorldGmaMessageDispatch {
     let request_type = message.message_type();
     match request_type {
-        0x0004_FD05 => {
-            let requester = message.base_mut().get_long();
-            let script = message.base_mut().get_long();
-            let requester_player_id = requester.unwrap_or(0);
-            let script_id = script.unwrap_or(0);
-            let payload_valid = active_ban_list_payload_is_valid(&mut message);
-            let game_server_id = game.game_server_number_by_player_id(requester_player_id);
-            let (wire, delivery) = if requester_player_id > 0
-                && script_id > 0
-                && payload_valid
-                && game_server_id > 0
-            {
-                message.set_message_type(0x0007_fc14);
-                let wire = message.as_wire_bytes().to_vec();
-                let delivery = message
-                    .send_to_map_id(game.current_game_server_sender().as_ref(), game_server_id);
-                (Some(wire), Some(delivery))
-            } else {
-                (None, None)
-            };
-            WorldGmaMessageDispatch::Handled(WorldGmaMessageOutcome::ActiveBanListRouted {
-                requester_player_id,
-                script_id,
-                payload_complete: [requester.is_some(), script.is_some()],
-                payload_valid,
-                game_server_id,
-                wire,
-                delivery,
-            })
-        }
         KICK_PLAYER_REQUEST => on_kick_player(game, message, add_log_text),
         0x0004_FD04 => {
             let response_type = 0x0008_0002;
@@ -187,41 +146,6 @@ pub fn on_gma_message(
         }
         _ => WorldGmaMessageDispatch::Handled(WorldGmaMessageOutcome::NoOp { request_type }),
     }
-}
-
-fn active_ban_list_payload_is_valid(message: &mut CMessage) -> bool {
-    let Some(success) = message.base_mut().get_byte().filter(|value| *value <= 1) else {
-        return false;
-    };
-    let Some(total_count) = message.base_mut().get_long().filter(|value| *value >= 0) else {
-        return false;
-    };
-    let Some(truncated) = message.base_mut().get_byte().filter(|value| *value <= 1) else {
-        return false;
-    };
-    let Some(record_count) = message
-        .base_mut()
-        .get_long()
-        .filter(|value| (0..=256).contains(value))
-    else {
-        return false;
-    };
-    for _ in 0..record_count {
-        let Some(account) = message.base_mut().get_str_bytes(33) else {
-            return false;
-        };
-        let Some(ban_until) = message.base_mut().get_str_bytes(20) else {
-            return false;
-        };
-        if account.is_empty() || account.len() > 32 || ban_until.len() != 19 {
-            return false;
-        }
-    }
-    message.base_mut().unread_bytes().is_empty()
-        && ((success == 0 && total_count == 0 && truncated == 0 && record_count == 0)
-            || (success != 0
-                && total_count >= record_count
-                && truncated == u8::from(total_count > record_count)))
 }
 
 fn on_kick_player(
