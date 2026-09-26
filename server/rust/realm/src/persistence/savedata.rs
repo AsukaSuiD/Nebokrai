@@ -1,15 +1,18 @@
-//! Data/handle-типы save-batch одного `DoSaveData` (`tagDBData` владельца
-//! `CGame`). Источник контракта — та же точная пара, что у
+//! Накопитель и data/handle-типы save-batch одного `DoSaveData` (прежний
+//! `tagDBData`). Источник контракта — та же точная пара, что у
 //! [`crate::app::world_server`] (`.exe/Nworldserver.exe` +
 //! `.exe/WorldServer.pdb`; канонические идентификаторы сборки —
 //! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Доказательства: docs/reconstruction/realm-services.md#world-процесс-и-lifecycle
 //!
-//! Accumulator, session facade и отделённый batch owner остаются чистыми
-//! данными: generation-ветки (`app/world_db_data_collect`) и DB I/O
-//! save worker-а (`persistence/saveworker`) наполняют и разбирают их,
-//! поэтому поля публичны.
+//! Первичное хранилище принадлежит `persistence`:
+//! [`WorldSaveDataAccumulator`] владеет типом, инвариантами и
+//! append/swap/clear операциями, а `CGame` хранит только cloneable
+//! composition handle. Generation-ветки (`app/world_db_data_collect`)
+//! обращаются через handle; session facade и отделённый batch owner
+//! остаются чистыми данными, которые DB I/O save worker-а
+//! (`persistence/saveworker`) разбирает, поэтому поля публичны.
 //! Frozen-вход worker-а `WorldSaveThreadJob` живёт в
 //! [`crate::persistence::savedb`] вместе с цитируемым им lifecycle-типом.
 
@@ -17,6 +20,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use nebokrai_shared::network::ClientSendQueue;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::characters::player::CPlayer;
 use crate::organizations::dbcountry::CountrySaveSnapshot;
@@ -95,6 +99,168 @@ pub struct WorldDbDataSaveSession<'game> {
 pub struct WorldSaveDataOwner {
     pub data: WorldDbData,
     pub login_sender: Option<Arc<ClientSendQueue>>,
+}
+
+/// Первичное хранилище мирового save-накопителя.
+///
+/// Клон — composition handle одного общего mutex; тип, инварианты и
+/// операции принадлежат `persistence`, а `CGame` хранит только свой клон.
+/// Guard и границы операций повторяют прежнюю critical-section семантику.
+#[derive(Clone)]
+pub struct WorldSaveDataAccumulator {
+    data: Arc<Mutex<WorldDbData>>,
+}
+
+impl WorldSaveDataAccumulator {
+    pub fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(WorldDbData::new())),
+        }
+    }
+
+    /// Эксклюзивный guard накопителя.
+    pub fn lock(&self) -> MutexGuard<'_, WorldDbData> {
+        self.data.lock()
+    }
+
+    /// Эксклюзивный доступ `DoSaveData` без guard-а.
+    ///
+    /// Достижим только у единственного держателя handle-а: composition не
+    /// публикует вторых клонов наружу.
+    pub fn save_session(&mut self) -> WorldDbDataSaveSession<'_> {
+        WorldDbDataSaveSession {
+            data: Arc::get_mut(&mut self.data)
+                .expect("save-session достижим только у единственного держателя handle-а")
+                .get_mut(),
+        }
+    }
+
+    /// Передаёт сформированный batch отдельному owner-у и публикует пустой
+    /// accumulator для событий, пришедших уже после save-trigger-а.
+    pub fn take_save_data_owner(
+        &self,
+        login_sender: Option<Arc<ClientSendQueue>>,
+    ) -> WorldSaveDataOwner {
+        let mut db_data = self.data.lock();
+        WorldSaveDataOwner {
+            data: std::mem::replace(&mut db_data, WorldDbData::new()),
+            login_sender,
+        }
+    }
+
+    /// Добавляет save-копию в `m_stDBData.liDBCreationPlayer`.
+    ///
+    /// При первом совпадении inherited ID старая копия уничтожается и
+    /// удаляется, после чего новая всегда дописывается в хвост под тем же lock.
+    pub fn append_db_creation_player(&self, player: Box<CPlayer>) {
+        let player_id = player.get_id();
+        let mut db_data = self.data.lock();
+
+        if let Some(index) = db_data
+            .creation_players
+            .iter()
+            .position(|existing| existing.get_id() == player_id)
+        {
+            drop(db_data.creation_players.remove(index));
+        }
+        db_data.creation_players.push_back(player);
+    }
+
+    /// Вставляет save-копию в `m_stDBData.mDBPlayer` по unsigned ID.
+    ///
+    /// Существующая копия уничтожается до вставки новой и всё изменение
+    /// остаётся внутри исходной critical-section границы.
+    pub fn append_db_player(&self, player: Box<CPlayer>) {
+        let player_id = player.get_id() as u32;
+        let mut db_data = self.data.lock();
+
+        if let Some(previous) = db_data.players.remove(&player_id) {
+            drop(previous);
+        }
+        db_data.players.insert(player_id, player);
+    }
+
+    pub fn append_save_faction(&self, faction: Box<CFaction>, goods_war_count: i32) {
+        let faction_id = faction.faction_id();
+        let mut db_data = self.data.lock();
+        db_data.save_factions.push_back(faction);
+        db_data
+            .faction_goods_war_counts
+            .insert(faction_id, goods_war_count);
+    }
+
+    pub fn append_save_union(&self, union: Box<CUnion>) {
+        self.data.lock().save_unions.push_back(union);
+    }
+
+    pub fn append_delete_faction(&self, faction_id: i32) {
+        self.data.lock().delete_factions.push_back(faction_id);
+    }
+
+    pub fn append_delete_union(&self, union_id: i32) {
+        self.data.lock().delete_unions.push_back(union_id);
+    }
+
+    pub fn append_region_param(&self, region: RegionSaveSnapshot) {
+        self.data.lock().regions.push_back(Some(region));
+    }
+
+    pub fn append_db_country(&self, country: CountrySaveSnapshot) {
+        self.data.lock().countries.push_back(Some(country));
+    }
+
+    /// Заменяет весь `m_stDBData.listEnemyFactions` под save-lock.
+    ///
+    /// Вход уже владеет отдельными копиями. `Option` сохраняет допустимый
+    /// null pointer-list элемент, хотя готовый generator создаёт только
+    /// non-null записи.
+    pub fn set_enemy_factions(
+        &self,
+        enemy_factions: VecDeque<Option<EnemyFactionSaveSnapshot>>,
+    ) {
+        let mut db_data = self.data.lock();
+        db_data.enemy_factions = enemy_factions;
+    }
+
+    /// Выполняет полный действующий `CGame::ClearDBData` под одним lock.
+    ///
+    /// Scalar ID исходная функция не сбрасывала. Region-часть удаляет только
+    /// nodes: их non-null save-копии обязан уничтожить предшествующий save.
+    pub fn clear_db_data(&self) {
+        let mut db_data = self.data.lock();
+
+        while let Some(player) = db_data.creation_players.pop_front() {
+            drop(player);
+        }
+        db_data.restore_players.clear();
+        db_data.deletion_players.clear();
+        while let Some((_player_id, player)) = db_data.players.pop_first() {
+            drop(player);
+        }
+        while let Some(faction) = db_data.save_factions.pop_front() {
+            drop(faction);
+        }
+        while let Some(union) = db_data.save_unions.pop_front() {
+            drop(union);
+        }
+        db_data.delete_factions.clear();
+        db_data.delete_unions.clear();
+        // WorldServer не вызывает virtual destructor здесь:
+        // save-фаза уничтожает value, сохраняя node до этой общей очистки.
+        db_data.regions.clear();
+    }
+
+    /// Освобождает snapshot-очереди, которые точный `ClearDBData` не трогал.
+    ///
+    /// Вызывается только после join save worker-а в normal `Release`: к этой
+    /// точке штатный game-thread уже не оставляет DB-потребителя и сразу
+    /// уничтожает `CGame`. У самих snapshot-значений нет callback/DB side
+    /// effects, поэтому это исправляет лишь внутреннее удержание owner-ов.
+    pub(crate) fn clear_release_only_db_snapshots(&self) {
+        let mut db_data = self.data.lock();
+        db_data.enemy_factions.clear();
+        db_data.countries.clear();
+    }
 }
 
 impl WorldDbDataSaveSession<'_> {

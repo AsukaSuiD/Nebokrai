@@ -1,8 +1,12 @@
-//! Save-семья `CGame` (`GenerateDBData` и materialize/take/append/clear):
-//! владелец типа — [`crate::app::world_game`], методы семьи живут здесь.
+//! Save-семья `CGame` (`GenerateDBData` и materialize/take): владелец типа —
+//! [`crate::app::world_game`], методы семьи живут здесь.
 //!
-//! БД-поля остаются обычными полями `CGame` (`db_data: Mutex<WorldDbData>` и
-//! соседи), поэтому семья не параметризуется. Порядок снапшотов, отдельные
+//! Первичное хранилище накопителя принадлежит `persistence`
+//! ([`WorldSaveDataAccumulator`](crate::persistence::savedata::WorldSaveDataAccumulator)):
+//! append/swap/clear — его операции, а живущие здесь inherent-методы `CGame`
+//! остаются делегирующим facade для старого пакета и sink-швов. Здесь —
+//! только оркестрация над живым состоянием `CGame` (players, очереди
+//! присутствия, regions, setup, login sender). Порядок снапшотов, отдельные
 //! соединения, частичный успех и исходное сопоставление ошибок сохраняются.
 //!
 //! Контракт подтверждён точной парой `Nworldserver.exe` + `WorldServer.pdb`
@@ -31,7 +35,7 @@ use crate::organizations::faction::CFaction;
 use crate::organizations::organizingctrl::{COrganizingCtrl, OrganizingSaveDataBlock};
 use crate::organizations::rsenemyfactions::EnemyFactionSaveSnapshot;
 use crate::organizations::union::CUnion;
-use crate::persistence::savedata::{WorldDbData, WorldDbDataSaveSession, WorldSaveDataOwner};
+use crate::persistence::savedata::{WorldDbDataSaveSession, WorldSaveDataOwner};
 use crate::persistence::savedb::{SaveDataLifecycleState, WorldSaveThreadJob};
 use crate::persistence::saveworker::WorldSaveRuntimeContext;
 use crate::regions::rsregion::RegionSaveSnapshot;
@@ -50,21 +54,18 @@ pub type WorldRunSaveTriggerReport<'game> =
     crate::app::world_save_reports::WorldRunSaveTriggerReport<'game, CGame>;
 
 impl CGame {
+    /// Делегирует накопителю typed-доступ save-потока.
     pub fn db_data_save_session(&mut self) -> WorldDbDataSaveSession<'_> {
-        WorldDbDataSaveSession {
-            data: self.db_data.get_mut(),
-        }
+        self.db_data.save_session()
     }
 
- /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
- /// accumulator для событий, пришедших уже после save-trigger-а.
+    /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
+    /// accumulator для событий, пришедших уже после save-trigger-а.
     pub fn take_save_data_owner(&mut self) -> WorldSaveDataOwner {
-        WorldSaveDataOwner {
-            data: std::mem::replace(self.db_data.get_mut(), WorldDbData::new()),
-            login_sender: self
-                .current_login_client()
-                .map(CMyNetClient::send_queue_handle),
-        }
+        let login_sender = self
+            .current_login_client()
+            .map(CMyNetClient::send_queue_handle);
+        self.db_data.take_save_data_owner(login_sender)
     }
 
     pub fn take_save_thread_job(
@@ -114,10 +115,11 @@ impl CGame {
         }
     }
 
- /// Создаёт player-prefix `GenerateDBData` до доменных generators.
- ///
- /// Restore-копирование выполняется через эксклюзивный `&mut self` без lock;
- /// deletion и обе player-очереди используют исходную save-блокировку.
+    /// Создаёт player-prefix `GenerateDBData` до доменных generators.
+    ///
+    /// Границы save-блокировки накопителя сохранены прежними: scalar ID и
+    /// restore берут по одному взятию, deletion — lock на каждую запись, обе
+    /// player-очереди наполняют append-примитивы владельца.
     pub fn generate_db_data_player_prefix(
         &mut self,
         registry: &GoodsBasePropertiesRegistry,
@@ -127,9 +129,11 @@ impl CGame {
         let leave_word_id = self.leave_word_id;
         let player_id = self.player_id;
 
-        let db_data = self.db_data.get_mut();
-        db_data.player_id = player_id;
-        db_data.leave_word_id = leave_word_id;
+        {
+            let mut db_data = self.db_data.lock();
+            db_data.player_id = player_id;
+            db_data.leave_word_id = leave_word_id;
+        }
 
         let creation_ids = self
             .creation_players
@@ -145,7 +149,7 @@ impl CGame {
         }
 
         self.db_data
-            .get_mut()
+            .lock()
             .restore_players
             .extend(self.restore_players.iter().copied());
 
@@ -165,10 +169,10 @@ impl CGame {
         Ok(())
     }
 
- /// Создаёт полный DB snapshot в исходном порядке владельцев.
- ///
- /// Функция ничего не очищает в live player-list после snapshot: это
- /// отдельные операции caller-а, следующие за `GenerateDBData`.
+    /// Создаёт полный DB snapshot в исходном порядке владельцев.
+    ///
+    /// Функция ничего не очищает в live player-list после snapshot: это
+    /// отдельные операции caller-а, следующие за `GenerateDBData`.
     #[allow(
         clippy::too_many_arguments,
         reason = "семь прежних singleton/static зависимостей передаются явно без нового общего owner-а"
@@ -194,10 +198,10 @@ impl CGame {
         Ok(WorldGenerateDbDataReport { organizing })
     }
 
- /// Создаёт отдельную `g_bSaveAllOrg` ветвь `CGame::Run`.
- ///
- /// Она не вызывает player-prefix и Country generator: исходник выполнял
- /// только organizing, faction-war, region и HonorRanks перед тем же launch.
+    /// Создаёт отдельную `g_bSaveAllOrg` ветвь `CGame::Run`.
+    ///
+    /// Она не вызывает player-prefix и Country generator: исходник выполнял
+    /// только organizing, faction-war, region и HonorRanks перед тем же launch.
     pub fn materialize_save_all_organizations_snapshot(
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
@@ -231,10 +235,10 @@ impl CGame {
         })
     }
 
- /// Выполняет snapshot и live-cleanup save-trigger ветви `CGame::Run`.
- ///
- /// Только после snapshot/cleanup закрывает прежний handle-state, передаёт
- /// job process save-owner-у и сохраняет возвращённое `Open/Empty` состояние.
+    /// Выполняет snapshot и live-cleanup save-trigger ветви `CGame::Run`.
+    ///
+    /// Только после snapshot/cleanup закрывает прежний handle-state, передаёт
+    /// job process save-owner-у и сохраняет возвращённое `Open/Empty` состояние.
     #[allow(
         clippy::too_many_arguments,
         reason = "исходный Run обращался к тем же семи singleton/static зависимостям"
@@ -286,14 +290,14 @@ impl CGame {
         })
     }
 
- /// Выполняет snapshot/cleanup хвост завершённой ветви `0x5FA03`.
- ///
- /// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и передача
- /// job process save-owner-у достигаются только после успешных
- /// snapshot/cleanup. Тело переехало из бывшего
- /// `appworld/message/servermessage.rs` вместе с тем же save-хвостом
- /// `materialize_run_save_snapshot`; различие — только обязательный
- /// player-prefix в генераторе.
+    /// Выполняет snapshot/cleanup хвост завершённой ветви `0x5FA03`.
+    ///
+    /// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и передача
+    /// job process save-owner-у достигаются только после успешных
+    /// snapshot/cleanup. Тело переехало из бывшего
+    /// `appworld/message/servermessage.rs` вместе с тем же save-хвостом
+    /// `materialize_run_save_snapshot`; различие — только обязательный
+    /// player-prefix в генераторе.
     #[allow(
         clippy::too_many_arguments,
         reason = "исходный handler повторно обращался к тем же singleton/static владельцам"
@@ -339,10 +343,10 @@ impl CGame {
         })
     }
 
- /// Исполняет ручную collect-player-data ветвь `CGame::Run`.
- ///
- /// Флаг очищается до создания пустого broadcast; исходно игнорировавшийся
- /// результат `SendAll` сохраняется только как наблюдаемый отчёт.
+    /// Исполняет ручную collect-player-data ветвь `CGame::Run`.
+    ///
+    /// Флаг очищается до создания пустого broadcast; исходно игнорировавшийся
+    /// результат `SendAll` сохраняется только как наблюдаемый отчёт.
     pub fn materialize_collect_player_data_request(
         &self,
         state: &mut WorldCollectPlayerDataRequestState,
@@ -362,11 +366,11 @@ impl CGame {
         })
     }
 
- /// Выполняет точный pre-gate save-участка `CGame::Run`.
- ///
- /// `try_enter` вызывается только после строгого прохождения wrapping-
- /// интервала. Его `false` соответствует занятому critical section и
- /// сдвигает прежний save tick на исходные `1000` миллисекунд.
+    /// Выполняет точный pre-gate save-участка `CGame::Run`.
+    ///
+    /// `try_enter` вызывается только после строгого прохождения wrapping-
+    /// интервала. Его `false` соответствует занятому critical section и
+    /// сдвигает прежний save tick на исходные `1000` миллисекунд.
     #[allow(
         clippy::too_many_arguments,
         reason = "Run обращался к тем же process-global и singleton владельцам"
@@ -477,12 +481,12 @@ impl CGame {
         }
     }
 
- /// Выполняет действующее save-решение `CGame::Run` после успешного try-lock.
- ///
- /// При manual-save и живых GameServer исходник сначала строит локальный
- /// snapshot/launch, затем повторно считает подключения и рассылает notify.
- /// Blocked generator сохраняет guard: исходный невозвратившийся путь не
- /// достигает ни второй проверки, ни `LeaveCriticalSection`.
+    /// Выполняет действующее save-решение `CGame::Run` после успешного try-lock.
+    ///
+    /// При manual-save и живых GameServer исходник сначала строит локальный
+    /// snapshot/launch, затем повторно считает подключения и рассылает notify.
+    /// Blocked generator сохраняет guard: исходный невозвратившийся путь не
+    /// достигает ни второй проверки, ни `LeaveCriticalSection`.
     #[allow(
         clippy::too_many_arguments,
         reason = "Run обращался к тем же process-global и singleton владельцам"
@@ -644,118 +648,59 @@ impl CGame {
             .collect()
     }
 
- /// Добавляет save-копию в `m_stDBData.liDBCreationPlayer`.
- ///
- /// При первом совпадении inherited ID старая копия уничтожается и
- /// удаляется, после чего новая всегда дописывается в хвост под тем же lock.
+    /// Делегирует накопителю; контракт вставки —
+    /// `WorldSaveDataAccumulator::append_db_creation_player`.
     pub fn append_db_creation_player(&self, player: Box<CPlayer>) {
-        let player_id = player.get_id();
-        let mut db_data = self.db_data.lock();
-
-        if let Some(index) = db_data
-            .creation_players
-            .iter()
-            .position(|existing| existing.get_id() == player_id)
-        {
-            drop(db_data.creation_players.remove(index));
-        }
-        db_data.creation_players.push_back(player);
+        self.db_data.append_db_creation_player(player);
     }
 
- /// Вставляет save-копию в `m_stDBData.mDBPlayer` по unsigned ID.
- ///
- /// Существующая копия уничтожается до вставки новой и всё изменение
- /// остаётся внутри исходной critical-section границы.
+    /// Делегирует накопителю; контракт вставки —
+    /// `WorldSaveDataAccumulator::append_db_player`.
     pub fn append_db_player(&self, player: Box<CPlayer>) {
-        let player_id = player.get_id() as u32;
-        let mut db_data = self.db_data.lock();
-
-        if let Some(previous) = db_data.players.remove(&player_id) {
-            drop(previous);
-        }
-        db_data.players.insert(player_id, player);
+        self.db_data.append_db_player(player);
     }
 
     pub fn append_save_faction(&self, faction: Box<CFaction>, goods_war_count: i32) {
-        let faction_id = faction.faction_id();
-        let mut db_data = self.db_data.lock();
-        db_data.save_factions.push_back(faction);
-        db_data
-            .faction_goods_war_counts
-            .insert(faction_id, goods_war_count);
+        self.db_data.append_save_faction(faction, goods_war_count);
     }
 
     pub fn append_save_union(&self, union: Box<CUnion>) {
-        self.db_data.lock().save_unions.push_back(union);
+        self.db_data.append_save_union(union);
     }
 
     pub fn append_delete_faction(&self, faction_id: i32) {
-        self.db_data.lock().delete_factions.push_back(faction_id);
+        self.db_data.append_delete_faction(faction_id);
     }
 
     pub fn append_delete_union(&self, union_id: i32) {
-        self.db_data.lock().delete_unions.push_back(union_id);
+        self.db_data.append_delete_union(union_id);
     }
 
     pub fn append_region_param(&self, region: RegionSaveSnapshot) {
-        self.db_data.lock().regions.push_back(Some(region));
+        self.db_data.append_region_param(region);
     }
 
     pub fn append_db_country(&self, country: CountrySaveSnapshot) {
-        self.db_data.lock().countries.push_back(Some(country));
+        self.db_data.append_db_country(country);
     }
 
- /// Заменяет весь `m_stDBData.listEnemyFactions` под save-lock.
- ///
- /// Вход уже владеет отдельными копиями. `Option` сохраняет допустимый
- /// null pointer-list элемент, хотя готовый generator создаёт только
- /// non-null записи.
+    /// Делегирует накопителю; контракт замены списка —
+    /// `WorldSaveDataAccumulator::set_enemy_factions`.
     pub fn set_enemy_factions(
         &self,
         enemy_factions: VecDeque<Option<EnemyFactionSaveSnapshot>>,
     ) {
-        let mut db_data = self.db_data.lock();
-        db_data.enemy_factions = enemy_factions;
+        self.db_data.set_enemy_factions(enemy_factions);
     }
 
- /// Выполняет полный действующий `CGame::ClearDBData` под одним lock.
- ///
- /// Scalar ID исходная функция не сбрасывала. Region-часть удаляет только
- /// nodes: их non-null save-копии обязан уничтожить предшествующий save.
+    /// Делегирует накопителю полную очистку snapshot-списков.
     pub fn clear_db_data(&self) {
-        let mut db_data = self.db_data.lock();
-
-        while let Some(player) = db_data.creation_players.pop_front() {
-            drop(player);
-        }
-        db_data.restore_players.clear();
-        db_data.deletion_players.clear();
-        while let Some((_player_id, player)) = db_data.players.pop_first() {
-            drop(player);
-        }
-        while let Some(faction) = db_data.save_factions.pop_front() {
-            drop(faction);
-        }
-        while let Some(union) = db_data.save_unions.pop_front() {
-            drop(union);
-        }
-        db_data.delete_factions.clear();
-        db_data.delete_unions.clear();
-        // WorldServer не вызывает virtual destructor здесь:
-        // save-фаза уничтожает value, сохраняя node до этой общей очистки.
-        db_data.regions.clear();
+        self.db_data.clear_db_data();
     }
 
- /// Освобождает snapshot-очереди, которые точный `ClearDBData` не трогал.
- ///
- /// Вызывается только после `join_save_worker` в normal `Release`: к этой
- /// точке штатный `GameThreadFunc` уже не оставляет DB-потребителя и сразу
- /// уничтожает `CGame`. У самих snapshot-значений нет callback/DB side
- /// effects, поэтому это исправляет лишь внутреннее удержание owner-ов.
+    /// Делегирует накопителю; вызывается только после join save worker-а.
     pub(crate) fn clear_release_only_db_snapshots(&self) {
-        let mut db_data = self.db_data.lock();
-        db_data.enemy_factions.clear();
-        db_data.countries.clear();
+        self.db_data.clear_release_only_db_snapshots();
     }
 
 }

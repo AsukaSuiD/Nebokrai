@@ -17,15 +17,15 @@
 //! login_players`) — физически здесь, целевой владелец `characters`, а не
 //! постоянная оркестрация; индекс `team_session_ids` — session/team
 //! projection, целевой владелец `sessions`; реестры `regions`/`game_servers`
-//! и ping-индекс — `regions`; накопитель `db_data: WorldDbData` —
-//! `persistence`;
+//! и ping-индекс — `regions`;
 //! `quest_system`, `script_resources` и setup/resource-таблицы — `content`
 //! (конкретные потребители); `system_broadcasts`/`goods_links` — `social`;
 //! `leave_word_id` — `organizations`; `honor_eliminate_list` — активности/
 //! рейтинги; `bai_tan` — исторический анти-флуд член, владелец назначается
 //! при разборе. Процессные и сетевые поля (`setup`, net-края, workers,
-//! очереди write-log/load, time-маркеры) остаются законной композиционной
-//! частью `app`. Дублирования состояния с domain-модулями нет: эти группы
+//! очереди write-log/load, time-маркеры) и handle накопителя сохранения
+//! (`persistence::savedata::WorldSaveDataAccumulator`) остаются законной
+//! композиционной частью `app`. Дублирования состояния с domain-модулями нет: эти группы
 //! существуют только здесь и перейдут к владельцам предметной
 //! reconstruction-работой, а не comment-правкой; новые domain-поля в этот
 //! агрегат не добавляются.
@@ -95,7 +95,7 @@ use crate::organizations::rsenemyfactions::EnemyFactionSaveSnapshot;
 use crate::organizations::union::{CUnion, UnionFormatArgument};
 use crate::persistence::rsplayer::RsPlayerOwner;
 use crate::persistence::rssetup::WorldTdsClient;
-use crate::persistence::savedata::{DeletionPlayerSnapshot, WorldDbData};
+use crate::persistence::savedata::{DeletionPlayerSnapshot, WorldSaveDataAccumulator};
 use crate::persistence::savedb::SaveDataLifecycleState;
 use crate::persistence::saveworker::WorldSaveRuntimeContext;
 use crate::persistence::writelogqueue::WorldWriteLogQueue;
@@ -1147,7 +1147,7 @@ pub struct CGame {
     pub(crate) offline_players: VecDeque<u32>,
     pub(crate) login_players: VecDeque<WorldLoginPlayerEntry>,
     pub(crate) db_responses: i32,
-    pub(crate) db_data: Mutex<WorldDbData>,
+    pub(crate) db_data: WorldSaveDataAccumulator,
     pub(crate) ping_game_servers: Vec<WorldPingGameServerInfo>,
     pub(crate) bai_tan: WorldBaiTanLists,
     pub(crate) honor_eliminate_list: BTreeMap<u32, VecDeque<u32>>,
@@ -2445,7 +2445,7 @@ impl CGame {
             offline_players: VecDeque::new(),
             login_players: VecDeque::new(),
             db_responses: 0,
-            db_data: Mutex::new(WorldDbData::new()),
+            db_data: WorldSaveDataAccumulator::new(),
             ping_game_servers: Vec::new(),
             bai_tan: WorldBaiTanLists::new(),
             honor_eliminate_list: BTreeMap::new(),

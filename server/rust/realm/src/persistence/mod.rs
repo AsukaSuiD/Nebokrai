@@ -6,10 +6,10 @@ pub mod row; // чтение именованных полей SQL-строки 
 pub mod rsgenvar; // CRsGenVar: DB-владелец общих переменных мира.
 pub mod rsplayer; // CRsPlayer: DB-владелец игрока, его трейт, Tiberius-реализация и адаптер загрузки.
 pub mod rssetup; // инициализация World DB.
-pub mod savedata; // tagDBData: data/handle-типы save-batch одного DoSaveData.
+pub mod savedata; // tagDBData: накопитель и data/handle-типы save-batch одного DoSaveData.
 pub mod savedb; // оркестрация сохранения мира.
 pub mod saveworker; // worker-вход SaveThreadFunc и RAII/trigger seam сохранения.
 pub mod writelog; // payload-контракт FIFO журнала World.
 pub mod writelogqueue; // FIFO команд World write-log.
 pub mod writelogworker; // worker журнала с явным владением.
-pub mod world_db_data_collect; // save-семья CGame: GenerateDBData, materialize/take/append/clear DB-батчей.
+pub mod world_db_data_collect; // save-семья CGame: GenerateDBData, materialize/take и делегирование append/clear накопителю.
