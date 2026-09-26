@@ -1,4 +1,10 @@
 //! Малая звезда `CLittleStar` (`0x1a4`) для игроков и монстров.
+//! Числовые правила, формулы, геометрия пути и wire-кадры visual перенесены
+//! буквально в Zone `skills/littlestar.rs` (кластер B полосы Monster 0x19x;
+//! основание и машинные статусы см. там). Здесь — hub-оркестрация с прежними
+//! сигнатурами: обход клеток и применение атак, публикация AI/региона,
+//! `finish_summon_skill`, зарегистрированный цикл монстра и доставка кадров;
+//! потребители не меняются.
 //! На время применения удара настоящий AI источника опубликован в CPlayer;
 //! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
@@ -46,8 +52,7 @@ use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
-use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
-use super::fightdefense::truncate_original;
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
@@ -74,40 +79,34 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 pub(crate) use nebokrai_zone::skills::execution::{PlayerLittleStarExecutionState, LittleStarProgress};
+use nebokrai_zone::skills::littlestar::{
+    self as littlestar, BLOCK_UNFLY, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK,
+    SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_SKILL_PERSIST_TIME, SKILL_USAGE_TARGET_AFFECT_FREQUENCY,
+    SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_MP_LOSE,
+};
+
+pub(crate) use nebokrai_zone::skills::littlestar::LITTLE_STAR_SKILL_ID;
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-const BLOCK_UNFLY: u8 = 2;
-const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
-const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
-const SKILL_USAGE_SKILL_PERSIST_TIME: u32 = 10_007;
-const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
-const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
-pub(crate) const LITTLE_STAR_SKILL_ID: u32 = 0x1a4;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
-pub(crate) const fn is_player_little_star_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::Point { skill_id: LITTLE_STAR_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object { skill_id: LITTLE_STAR_SKILL_ID, .. })
-}
+pub(crate) use nebokrai_zone::skills::littlestar::is_player_little_star_dispatch;
 
 fn player_target_position(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
-    match dispatch {
-        PlayerSkillDispatch::Point { skill_id: LITTLE_STAR_SKILL_ID, x, y } => Some((x, y)),
+    let object_view = match dispatch {
         PlayerSkillDispatch::Object { skill_id: LITTLE_STAR_SKILL_ID, target } => {
             game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y))
         }
         _ => None,
-    }
+    };
+    littlestar::player_target_position(dispatch, object_view)
 }
 
 fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
@@ -122,21 +121,12 @@ fn send_player_visual(
     destination: Option<(i32, i32)>,
 ) {
     let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(LITTLE_STAR_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if action == 2 {
+    let message = if action == 2 {
         let Some((x, y)) = destination else { return };
-        message.add_long(0);
-        message.add_long(0);
-        message.add_long(x);
-        message.add_long(y);
+        littlestar::little_star_fire_message(level, PLAYER_TYPE, player_id, x, y)
     } else {
-        message.add_long(player.shape().get_direction());
-    }
+        littlestar::little_star_action_message(action, level, PLAYER_TYPE, player_id, player.shape().get_direction())
+    };
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
@@ -225,15 +215,10 @@ fn calculate_player_attack(
         divisor,
         floor,
     );
-    let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
-    let random_damage = game.skill_random_below(width);
-    let modifier = truncate_original(
-        f64::from(element_modifier)
-            * f64::from(0.01_f32)
-            * f64::from(combat.element_modify),
+    let random_damage = game.skill_random_below(littlestar::little_star_span(minimum, maximum));
+    let damage = littlestar::little_star_player_element(
+        combat.add_element_attack as i32, minimum, random_damage, element_modifier, combat.element_modify as f32,
     );
-    let damage = (combat.add_element_attack as i32).wrapping_add(random_damage)
-        .wrapping_add(minimum).wrapping_add(modifier).max(0);
     Some((master, AttackInformation {
         skill_id: LITTLE_STAR_SKILL_ID,
         skill_level: level as u8,
@@ -334,9 +319,8 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, Some(maximum_distance));
-        if path.first().is_some_and(|cell| cell.0 == source_x && cell.1 == source_y) { path.remove(0); }
-        path.truncate(maximum_distance as usize);
-        let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
+        littlestar::prune_little_star_path(&mut path, source_x, source_y, maximum_distance);
+        let endpoint = littlestar::little_star_endpoint(&path, target_x, target_y);
         send_player_visual(game, player_id, level, 2, Some(endpoint));
         if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
             state.path = Some(path);
@@ -373,7 +357,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
     }
 
     let expiration_now = runtime.now_milliseconds();
-    if started.wrapping_add(delay).wrapping_add(persist) < expiration_now {
+    if littlestar::little_star_expired(started, delay, persist, expiration_now) {
         if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
             if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
@@ -386,13 +370,9 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 }
 
 fn send_start(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(1);
-    message.add_long(LITTLE_STAR_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
+    let message = littlestar::little_star_action_message(
+        1, skill_level as i32, MONSTER_TYPE, source.identity().id, source.get_direction(),
+    );
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
@@ -404,27 +384,16 @@ fn send_fire(
     target_x: i32,
     target_y: i32,
 ) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(2);
-    message.add_long(LITTLE_STAR_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(target_x);
-    message.add_long(target_y);
+    let message = littlestar::little_star_fire_message(
+        skill_level as i32, MONSTER_TYPE, source.identity().id, target_x, target_y,
+    );
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
 pub(crate) fn send_end(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(3);
-    message.add_long(LITTLE_STAR_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
+    let message = littlestar::little_star_action_message(
+        3, skill_level as i32, MONSTER_TYPE, source.identity().id, source.get_direction(),
+    );
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
@@ -449,11 +418,13 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
             let source = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
             if !game.live_skill_target_attackable_in(region_owner, source, identity) { continue; }
             let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
-            let span = (properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32)
-                .wrapping_sub(minimum)
-                .unsigned_abs()
-                .wrapping_add(1) as i32;
-            let damage = minimum.wrapping_add(game.skill_random_below(span)).max(0);
+            let span = littlestar::little_star_monster_span(
+                minimum,
+                properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32,
+            );
+            let damage = littlestar::little_star_monster_element(
+                minimum, game.skill_random_below(span),
+            );
             let attack = AttackInformation {
                 skill_id: LITTLE_STAR_SKILL_ID,
                 skill_level: skill_level as u8,
@@ -608,7 +579,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             Some(maximum_distance as u32),
         );
         path.truncate(maximum_distance);
-        let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
+        let endpoint = littlestar::little_star_endpoint(&path, target_x, target_y);
         send_fire(game, region, &source, skill_level, endpoint.0, endpoint.1);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(LITTLE_STAR_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
@@ -629,10 +600,12 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
 
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     let expiration_now_ms = runtime.now_milliseconds();
-    let expired = cast.started_at_ms()
-        .wrapping_add(delay_ms)
-        .wrapping_add(properties.query_property(SKILL_USAGE_SKILL_PERSIST_TIME))
-        < expiration_now_ms;
+    let expired = littlestar::little_star_expired(
+        cast.started_at_ms(),
+        delay_ms,
+        properties.query_property(SKILL_USAGE_SKILL_PERSIST_TIME),
+        expiration_now_ms,
+    );
     if expired {
         drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

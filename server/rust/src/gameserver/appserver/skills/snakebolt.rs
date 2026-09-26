@@ -1,15 +1,16 @@
 //! CSnakeBolt (0x1A5) использует общий пошаговый снаряд.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/snakebolt.cpp.
-//! Общий зарегистрированный PathProjectile сохраняет его Begin/Check/AI/End;
-//! прямой стихийный урон учитывает оружейный множитель.
-//! Нулевая MP-цена этого Check всё равно запрещает движение; первый AI затем
-//! выполняет обычное списание MP и публикацию состояния.
+//! Общий зарегистрированный PathProjectile — Zone `skills/pathprojectile.rs`
+//! (кластер B полосы Monster 0x19x); прямой стихийный урон учитывает оружейный
+//! множитель. Нулевая MP-цена этого Check всё равно запрещает движение;
+//! первый AI затем выполняет обычное списание MP и публикацию состояния.
+//! ID владельца живёт в Zone.
 
 use super::energybolt::execute_owned_path_projectile;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 
-pub(crate) const SNAKE_BOLT_SKILL_ID: u32 = 0x1a5;
+pub(crate) use nebokrai_zone::skills::pathprojectile::SNAKE_BOLT_SKILL_ID;
 
 pub(crate) fn execute_owned_monster_snake_bolt<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
