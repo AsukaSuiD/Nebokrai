@@ -4,12 +4,12 @@
 //! внутри отдельной категории предпочитается ближайшая цель не ближе
 //! минимальной дистанции, а при отсутствии такой цели остаётся последняя
 //! слишком близкая запись. Фильтры страны, фракции и союза остаются у
-//! конкретных владельцев.
+//! конкретных владельцев. Проход ближайшего игрока/питомца владыки и синего
+//! босса (`select_nearest_player_or_pet`) переехал в Zone `ai/lord.rs`
+//! кластером E1; здесь остаются дистанционное ядро и групповой выбор
+//! охранников до своей порции.
 
-use crate::gameserver::appserver::moveshape::CMoveShape;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::gameserver::game::CGame;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GuardStationState {
@@ -71,62 +71,4 @@ pub(crate) fn select_guard_target_groups(
         (Some(first), _) => Some(first),
         (None, second) => second,
     }
-}
-
-/// Выбирает ближайшую живую цель общим проходом игроков, затем питомцев.
-/// Равная дистанция заменяет предыдущую запись, поэтому порядок индексов и
-/// категорий остаётся частью результата.
-pub(crate) fn select_nearest_player_or_pet(
-    game: &CGame,
-    region: &CServerRegion,
-    owner: ShapeView,
-    area_index: usize,
-    guard_range: i32,
-) -> Option<GuardDistanceTarget> {
-    let mut selected = None;
-    for player_id in region.player_ids_around_area(area_index) {
-        let Some(player) = game.find_player(player_id) else {
-            continue;
-        };
-        if player.server_region_id() != Some(region.id) || player.is_dead() {
-            continue;
-        }
-        let Some(candidate) = player.shape_view() else {
-            continue;
-        };
-        let candidate = GuardDistanceTarget {
-            identity: candidate.identity,
-            distance: owner.real_distance(Some(candidate)),
-        };
-        if candidate.distance <= guard_range
-            && selected.is_none_or(|current: GuardDistanceTarget| {
-                candidate.distance <= current.distance
-            })
-        {
-            selected = Some(candidate);
-        }
-    }
-    for pet_id in region.pet_ids_around_area(area_index) {
-        let Some(candidate) = region
-            .find_monster_by_id(pet_id)
-            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-            .and_then(|pet| {
-                let property =
-                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                pet.shape_view(property)
-            })
-        else {
-            continue;
-        };
-        let candidate = GuardDistanceTarget {
-            identity: candidate.identity,
-            distance: owner.real_distance(Some(candidate)),
-        };
-        if candidate.distance <= guard_range
-            && selected.is_none_or(|current| candidate.distance <= current.distance)
-        {
-            selected = Some(candidate);
-        }
-    }
-    selected
 }
