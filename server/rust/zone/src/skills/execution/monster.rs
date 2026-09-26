@@ -1,9 +1,9 @@
-//! Исполнение боевого навыка монстра в Zone (волна Z-M4, «растворение сварки
-//! исполнения монстра»). До неё enum-каталог `MonsterSkillProgress` и обёртка
+//! Исполнение боевого навыка монстра в Zone; сформировано растворением
+//! hub-сварки. Раньше enum-каталог `MonsterSkillProgress` и обёртка
 //! `MonsterSkillExecution` (kernel + typed progress) жили в hub
 //! `appserver/monster.rs`, а `impl MonsterSkillExecutionAccess` и каталог
 //! impl-ов `MonsterSkillProgressState<M>` — в `appserver/moveshape.rs`; запись
-//! Zone `RegisteredSkillRecord<M>` сваривалась с этими hub-данными только
+//! Zone `RegisteredSkillRecord<M>` связывалась с этими hub-данными только
 //! generic-трейтами. Теперь payload исполнения монстра — данные этого
 //! компонента, alias `MoveShapeSkill` (в `skills/execution/mod.rs`)
 //! специализирует запись монстра-владельцем, а hub `appserver` сохраняет
@@ -22,9 +22,9 @@
 //! обнуляется вместе с derived-полётными флагами: End 0x0057B810 пишет только
 //! +0x4C/+0x50/+0x54/+0x58 перед GetUser, а координаты базового CState
 //! очищаются уже общим хвостом. Тип dispatch активного cast-а монстра — Zone
-//! `ai/monsterai.rs` (кластер A1 Monster 0x19x); полная запись реестра
+//! `ai/monsterai.rs`; полная запись реестра
 //! навыков фигуры и скалярная база `SkillIdentity` — Zone
-//! `regions/skillregistry.rs` (порции 4–5 волны moveshape).
+//! `regions/skillregistry.rs`.
 
 use super::payload::{
     BossFiendPenetrateProgress, ChainLightningProgress, LightningProgress, LittleStarProgress,
@@ -36,7 +36,7 @@ use crate::ai::monsterai::MonsterBaseAttackDispatch;
 use crate::skills::SkillExecutionKernel;
 
 /// Ядро исполнения атаки/навыка монстра: kernel над Zone-dispatch активного
-/// cast-а (`ai/monsterai`, кластер A1 Monster 0x19x); lifecycle-фасады
+/// cast-а (`ai/monsterai`); lifecycle-фасады
 /// hub-владельца сохраняют прежний контракт через re-export.
 pub type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
 
@@ -48,7 +48,7 @@ macro_rules! monster_skill_progress {
         }
 
         /// Typed извлечение конкретного progress-состояния из enum-каталога
-        /// (read/mut), выделенное из hub `appserver/monster.rs` волной Z-M4.
+        /// (read/mut), выделенное из hub `appserver/monster.rs`.
         /// Форма установки — `From<$state> for MonsterSkillProgress` ниже;
         /// геттеры записи `monster_progress`/`set_monster_progress` обслуживает
         /// generic-трейт `MonsterSkillProgressState<M>` (record).

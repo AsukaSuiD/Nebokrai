@@ -1,7 +1,7 @@
-//! Исполнение зарегистрированного навыка Zone (порция 5 волны moveshape +
-//! волна Z-M4). Обязанность компонента — lifecycle исполнения: typed payload
-//! игрока и боевого духа (`payload`, `player`, `battlefairy`), payload
-//! исполнения монстра с его progress-каталогом (`monster`, волна Z-M4) и
+//! Исполнение зарегистрированного навыка Zone. Обязанность компонента —
+//! lifecycle исполнения: typed payload игрока и боевого духа (`payload`,
+//! `player`, `battlefairy`), payload исполнения монстра с его
+//! progress-каталогом (`monster`) и
 //! полная запись реестра (`record`): скалярная база `SkillIdentity` +
 //! execution + retained данные полёта с фасадами install/clear/progress/
 //! advance/prepare/clear_end. Alias `MoveShapeSkill` специализирует запись

@@ -1,7 +1,7 @@
 //! Каталог конкретных исполнений боевого духа в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/states/skill.cpp/.h
-//! и конкретные appserver/skills/*.cpp/.h (адаптер перенесён из hub
-//! `appserver/skills/kernel.rs` порцией 5 волны moveshape без смены тел).
+//! и конкретные appserver/skills/*.cpp/.h (тела перенесены из hub
+//! `appserver/skills/kernel.rs` без изменений).
 //! End(int) перед конкретной очисткой сначала очищает DWORD-фазу kernel.
 
 use super::payload::{BattleFairyBaseMagicExecutionState, FatalBlowExecutionState};

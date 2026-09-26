@@ -1,7 +1,7 @@
 //! Запись зарегистрированного навыка `CMoveShape` в Zone: скалярная база
-//! `SkillIdentity`, исполнение и retained данные полёта (порция 5 волны
-//! moveshape; до неё эти поля оставались hub-владением записи
-//! `appserver/moveshape.rs`, тела перенесены буквально).
+//! `SkillIdentity`, исполнение и retained данные полёта; раньше эти поля
+//! были hub-владением записи `appserver/moveshape.rs`, тела перенесены
+//! буквально.
 //! Источник: gameserver.exe + GameServer.pdb, `appserver/moveshape.h/.cpp`,
 //! `appserver/states/skill.cpp/.h` и конкретные `appserver/skills/*.cpp/.h`.
 //!

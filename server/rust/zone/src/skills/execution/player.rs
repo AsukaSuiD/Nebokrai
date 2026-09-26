@@ -1,7 +1,7 @@
 //! Каталог конкретных исполнений игрока в Zone.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/states/skill.cpp/.h
-//! и конкретные appserver/skills/*.cpp/.h (адаптеры перенесены из hub
-//! `appserver/skills/kernel.rs` порцией 5 волны moveshape без смены тел).
+//! и конкретные appserver/skills/*.cpp/.h (тела перенесены из hub
+//! `appserver/skills/kernel.rs` без изменений).
 //! Из игровых данных ниже выводятся хранение, доступ к kernel и безопасное
 //! извлечение конкретного состояния; сами payload — в `execution/payload.rs`.
 
