@@ -21,3 +21,4 @@
 
 pub mod clientsnapshot; // клиентские снимки игрока AddToByteArray_ForClient: short area/query и полный login 0xBF401.
 pub mod gamesave; // GameSave codec игрока: DecordFromByteArray/AddGameSaveToByteArray, wires свойств, организационный блок, LeiTing, persistence-проекции.
+pub mod properties; // ATTR-семья UpdateProperty: base+equipment/CiQing пересчёт, apply_*_state формулы, combat-wire commit, flash, stat allocation, домен GetCurrentTypeValue.
