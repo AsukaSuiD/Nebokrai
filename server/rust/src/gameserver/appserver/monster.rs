@@ -457,12 +457,10 @@ pub(crate) struct CMonster {
     base_ai: [CBaseAI; 3],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterBaseAttackDispatch {
-    pub(crate) target: ShapeIdentity,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_level: u16,
-}
+// Тип dispatch активного cast-а монстра перенесён в Zone
+// `ai/monsterai.rs` (кластер A1 Monster 0x19x); alias ядра исполнения и все
+// hub-методы lifecycle сохраняют прежний контракт.
+pub(crate) use nebokrai_zone::ai::monsterai::MonsterBaseAttackDispatch;
 
 pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
 

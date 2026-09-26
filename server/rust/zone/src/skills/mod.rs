@@ -47,6 +47,7 @@ mod lifeshield; // Check/AI CLifeShield (0x220) над hub-швами `battlefai
 pub mod littleflash; // CLittleFlash/CLittleFlash2 (0x71/0x7F): Check/AI и visual малых рывков.
 pub mod littlestar; // CLittleStar (0x1A4): кадры visual, формулы, геометрия пути и правила длительности; hub-оркестрация у делегата.
 mod masked_area; // маска неподвижных областей FireWall и YinYang и живая форма MaskedElementPhalanx.
+pub mod monsterbasedispatch; // диспетчерский костяк CMonsterBaseAttack: select/change навыка и продолжение cast из OnFighting; реестр исполнителей остаётся hub-швом (кластер A1 Monster 0x19x).
 pub mod pathprojectile; // CEnergyBolt/CSnakeBolt/CZombieClaw (0x1A0/0x1A5/0x1A2): Check/AI путевого снаряда буквально + hub-швы делегата.
 pub mod pillar; // Check/AI и параметры стойки CPillar (порция №6c; hub-швы `selfcast`).
 pub mod pillarstate; // живые toggle/restart/AI/End CPillarState (порция №6c).

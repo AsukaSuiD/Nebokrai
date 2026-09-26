@@ -345,7 +345,7 @@ use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lo
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, has_owned_search_enemy, trace_owned_target_state_skill,
     hibernates_without_nearby_players, release_owned_monster_target,
-    queue_monster_idle, schedule_attack_interval, select_attack_skill, uses_stationary_attack_schedule,
+    queue_monster_idle, schedule_attack_interval, uses_stationary_attack_schedule,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
@@ -369,11 +369,15 @@ use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    game_tick_milliseconds,
+};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
+use nebokrai_zone::skills::monsterbasedispatch::{MonsterBaseDispatchGame, MonsterBaseDispatchRuntime};
 use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::MonsterProperties;
+use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -584,6 +588,10 @@ fn pet_combat_master_anchor(
     Some((master.tile_x, master.tile_y))
 }
 
+/// Взвешенный выбор `CMonsterAI::SelectAttackSkill` (RVA `0x1DD0B0`) перенесён
+/// в Zone `skills/monsterbasedispatch.rs`; здесь делегат прежней формы вызова
+/// для боевого dispatcher-а ниже. Selector-владельцы боссов/владыки остаются
+/// своими hub-швами (реализация `MonsterBaseDispatchGame` ниже в этом файле).
 fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -592,51 +600,9 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     monster_health: u32,
     runtime: &mut Runtime,
 ) -> Option<u16> {
-    let monster = region.find_monster_by_id(monster_id)?;
-    let default_skill_id = monster.move_shape().default_attack_skill_id() as u16;
-    let primary_ai = monster.active_primary_ai_type();
-    let roll = game.skill_random_below(10_000);
-    let selected = if primary_ai == Some(21) {
-        choose_boss_blue_attack_skill(
-            region,
-            monster_id,
-            property,
-            monster_health,
-            roll,
-            default_skill_id,
-        )
-    } else if primary_ai == Some(23) {
-        choose_boss_fiend_attack_skill(
-            game,
-            region,
-            monster_id,
-            property,
-            monster_health,
-            roll,
-            runtime,
-        )
-    } else if primary_ai == Some(19) {
-        Some(select_lord_attack_skill(
-            monster_health,
-            property.maximum_hp,
-            &property.skills,
-            roll,
-            default_skill_id,
-        ))
-    } else {
-        Some(select_attack_skill(
-            &property.skills,
-            roll,
-            default_skill_id,
-        ))
-    }
-    .unwrap_or(default_skill_id);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster
-            .move_shape_mut()
-            .set_current_skill_id(Some(u32::from(selected)));
-    }
-    Some(selected)
+    nebokrai_zone::skills::monsterbasedispatch::select_and_store_monster_attack_skill(
+        game, region, monster_id, property, monster_health, runtime,
+    )
 }
 
 /// Выполняет `CMonsterAI::OnChangeSkill` из FIFO либо непосредственно OnSchedule. После
@@ -645,75 +611,17 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// monster AI заменяется `GetDefaultAttackSkillID`. AI5 и наследующий его
 /// AI103 сохраняют существующий навык на cooldown и ставят полный restore
 /// delay в хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
+/// Тело перенесено в Zone `skills/monsterbasedispatch.rs`; здесь делегат
+/// прежней сигнатуры для dispatcher-входа `run_owned_monster_change_skill`.
 pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, monster_health, primary_ai)) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            Some((
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?
-                    .clone(),
-                monster.hit_points(),
-                monster.active_primary_ai_type(),
-            ))
-        })
-    else {
-        return false;
-    };
-    let selected = select_and_store_monster_attack_skill(
-        game,
-        region,
-        monster_id,
-        &property,
-        monster_health,
-        runtime,
-    );
-    let Some(selected_skill_id) = selected else {
-        return false;
-    };
-    if primary_ai.is_some_and(inherits_fixed_archer_change_skill) {
-        if queue_fixed_archer_skill_delay(
-            game,
-            region,
-            monster_id,
-            &property,
-            selected_skill_id,
-            runtime,
-        )
-        {
-            return true;
-        }
-    } else if region.find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().current_skill(game.skill_factory()))
-        .and_then(|skill| {
-            let properties = game.skill_base_properties(
-                skill.id(),
-                skill.level(),
-            )?;
-            let last_used_ms = region
-                .find_monster_by_id(monster_id)?
-                .skill_last_used_ms(u32::from(selected_skill_id), game.skill_factory());
-            Some(skill_is_restored(
-                last_used_ms,
-                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                runtime.now_milliseconds(),
-            ))
-        })
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let default_skill_id = monster.move_shape().default_attack_skill_id();
-        monster
-            .move_shape_mut()
-            .set_current_skill_id(Some(default_skill_id));
-    }
-    true
+    nebokrai_zone::skills::monsterbasedispatch::change_owned_monster_attack_skill(
+        game, region, monster_id, runtime, game_tick_milliseconds,
+    )
 }
 
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
@@ -1150,6 +1058,85 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
     }
 }
 
+// Hub-швы Zone `skills/monsterbasedispatch`: реестр `owned_registered_cast_executor`
+// и делегат общей CBaseAttack остаются здесь (их перенос — свои порции);
+// selector-владельцы боссов/владыки/стационарных лучников подключены теми же
+// вызовами, что исполняло тело до переноса.
+impl MonsterBaseDispatchGame for CGame {
+    fn choose_boss_blue_attack_skill(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        property: &MonsterProperties,
+        hit_points: u32,
+        roll: i32,
+        default_skill_id: u16,
+    ) -> Option<u16> {
+        choose_boss_blue_attack_skill(region, monster_id, property, hit_points, roll, default_skill_id)
+    }
+
+    fn select_lord_attack_skill(
+        hit_points: u32,
+        maximum_hit_points: u32,
+        skills: &[MonsterSkill],
+        roll: i32,
+        default_skill_id: u16,
+    ) -> u16 {
+        select_lord_attack_skill(hit_points, maximum_hit_points, skills, roll, default_skill_id)
+    }
+
+    fn fixed_archer_change_skill_inherited(ai_type: u32) -> bool {
+        inherits_fixed_archer_change_skill(ai_type)
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> MonsterBaseDispatchRuntime<Runtime> for CGame {
+    fn execute_registered_cast(
+        &mut self,
+        owner: &mut Option<ServerRegionOwner>,
+        monster_id: i32,
+        skill_id: u32,
+        target: ShapeIdentity,
+        skill_level: u16,
+        runtime: &mut Runtime,
+    ) -> Option<bool> {
+        owned_registered_cast_executor::<Runtime>(skill_id)
+            .map(|execute| execute(self, owner, monster_id, target, skill_level, runtime))
+    }
+
+    fn continue_common_base_attack(
+        &mut self,
+        owner: &mut Option<ServerRegionOwner>,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        super::baseattack::execute_owned_monster_base_attack(self, owner, monster_id, runtime)
+    }
+
+    fn choose_boss_fiend_attack_skill(
+        &self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        property: &MonsterProperties,
+        hit_points: u32,
+        roll: i32,
+        runtime: &mut Runtime,
+    ) -> Option<u16> {
+        choose_boss_fiend_attack_skill(self, region, monster_id, property, hit_points, roll, runtime)
+    }
+
+    fn queue_fixed_archer_skill_delay(
+        &self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        property: &MonsterProperties,
+        selected_skill_id: u16,
+        runtime: &mut Runtime,
+    ) -> bool {
+        queue_fixed_archer_skill_delay(self, region, monster_id, property, selected_skill_id, runtime)
+    }
+}
+
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
@@ -1158,6 +1145,17 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
     wide_arc_dispatch: &mut Option<WideArcAttackDispatch>,
 ) -> bool {
+    // Продолжение активного cast-а из OnFighting перенесено в Zone
+    // `skills/monsterbasedispatch` (`continue_active_attack_cast`); реестр
+    // исполнителей и общая CBaseAttack остаются hub-швами этого файла.
+    // Вызов стоит до взятия region_owner: прежний cast-блок читал только
+    // существование active_ai до своих ранних return, чистые чтения не
+    // переставлены относительно побочных эффектов.
+    if let Some(result) = nebokrai_zone::skills::monsterbasedispatch::continue_active_attack_cast(
+        game, owner, monster_id, runtime,
+    ) {
+        return result;
+    }
     let Some(region_owner) = owner.as_mut() else { return false; };
     let Some(active_ai) = region_owner.base().find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
         return false;
@@ -1165,17 +1163,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let carriage_ai = matches!(active_ai, ActiveMonsterAi::Carriage
         | ActiveMonsterAi::Primary(MonsterAiKind::Carriage));
     let pet_ai = matches!(active_ai, ActiveMonsterAi::Pet);
-    if let Some(cast) = region_owner.base().find_monster_by_id(monster_id)
-        .and_then(|monster| monster.current_active_attack_cast(game.skill_factory()))
-    {
-        let dispatch = cast.dispatch();
-        if dispatch.skill_id == COMMON_BASE_ATTACK_SKILL_ID {
-            return super::baseattack::execute_owned_monster_base_attack(game, owner, monster_id, runtime);
-        }
-        if let Some(execute) = owned_registered_cast_executor(dispatch.skill_id) {
-            return execute(game, owner, monster_id, dispatch.target, dispatch.skill_level, runtime);
-        }
-    }
     let Some((
         property,
         monster_shape,
