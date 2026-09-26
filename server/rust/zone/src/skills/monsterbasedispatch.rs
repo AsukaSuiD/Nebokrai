@@ -22,7 +22,7 @@
 //!   `SetCurrentSkill(GetDefaultAttackSkillID())`; возврат всегда 1.
 //! - `SelectAttackSkill`: `dynamic_cast CMonster`, один `random(10000)`,
 //!   обход списка в исходном порядке, первый ID с префикс-суммой odds ≥ r,
-//!   иначе default. AI5/AI103 вместо отката ждут полный restore delay в
+//!   иначе default. AI5/AI23 вместо отката ждут полный restore delay в
 //!   собственном FIFO; CPet (vtable `0x00652D0C`, `+0x24 → 0x1DCBC0`,
 //!   `+0x8C → 0x1DD0B0`) наследует общий порядок, поэтому приручение отключает
 //!   boss/lord-selector, но сохраняет исходный список odds, один RNG и
@@ -68,7 +68,7 @@ use super::baseattackruntime::SKILL_USAGE_REUSE_DELAY_TIME;
 /// `CBaseAttack` остаются старым пакетом через швы ниже.
 pub trait MonsterBaseDispatchGame: MonsterDispatcherGame {
     // Selector-полосы владельцев производных AI (их перенос — свои порции).
-    /// Пороговый выбор BossBlue (AI21) по здоровью и зарегистрированному Fury.
+    /// Пороговый выбор BossBlue (AI103) по здоровью и зарегистрированному Fury.
     fn choose_boss_blue_attack_skill(
         &mut self,
         region: &mut <Self::RegionOwner as MonsterDispatcherOwner>::Region,
@@ -79,7 +79,7 @@ pub trait MonsterBaseDispatchGame: MonsterDispatcherGame {
         default_skill_id: u16,
     ) -> Option<u16>;
 
-    /// Фазовый выбор владыки (AI19) по доле здоровья от максимума.
+    /// Фазовый выбор владыки (AI100) по доле здоровья от максимума.
     fn select_lord_attack_skill(
         hit_points: u32,
         maximum_hit_points: u32,
@@ -88,7 +88,7 @@ pub trait MonsterBaseDispatchGame: MonsterDispatcherGame {
         default_skill_id: u16,
     ) -> u16;
 
-    /// Стационарная семья (AI5 и наследующий AI103) вместо отката ждёт полный
+    /// Стационарная семья (AI5 и наследующий AI23) вместо отката ждёт полный
     /// restore delay в собственном FIFO.
     fn fixed_archer_change_skill_inherited(ai_type: u32) -> bool;
 }
@@ -120,7 +120,7 @@ pub trait MonsterBaseDispatchRuntime<Runtime>: MonsterBaseDispatchGame {
         runtime: &mut Runtime,
     ) -> bool;
 
-    /// Пороговый выбор BossFiend (AI23) поверх общего RNG ритма региона.
+    /// Пороговый выбор BossFiend (AI104) поверх общего RNG ритма региона.
     fn choose_boss_fiend_attack_skill(
         &self,
         region: &mut <Self::RegionOwner as MonsterDispatcherOwner>::Region,
@@ -240,7 +240,7 @@ where
 /// После единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
 /// monster AI заменяется `GetDefaultAttackSkillID`. AI5 и наследующий его
-/// AI103 сохраняют существующий навык на cooldown и ставят полный restore
+/// AI23 сохраняют существующий навык на cooldown и ставят полный restore
 /// delay в хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
 pub fn change_owned_monster_attack_skill<Game, Region, Runtime>(
     game: &mut Game,

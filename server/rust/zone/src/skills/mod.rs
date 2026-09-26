@@ -48,6 +48,12 @@ pub mod littleflash; // CLittleFlash/CLittleFlash2 (0x71/0x7F): Check/AI и visu
 pub mod littlestar; // CLittleStar (0x1A4): кадры visual, формулы, геометрия пути и правила длительности; hub-оркестрация у делегата.
 mod masked_area; // маска неподвижных областей FireWall и YinYang и живая форма MaskedElementPhalanx.
 pub mod monsterbasedispatch; // диспетчерский костяк CMonsterBaseAttack: select/change навыка и продолжение cast из OnFighting; реестр исполнителей остаётся hub-швом (кластер A1 Monster 0x19x).
+pub mod monsterattack; // общая доставка удара боевых навыков монстров: допуск целей, клеточный resolver 400/500/600/1100/1200, снимок цели и применение попадания; hub-трейты `MonsterCombat*` (кластер A2).
+pub mod monsterbaseattack; // CMonsterBaseAttack (0x2bd): player-путь Check/AI и машинная база семьи (500-skip, IsAttackAble-вирт, IncreaseRp, max(max-min,0)+1, записи 1/3/4, weapon-фактор vt+0x184, dyn-CPlayer crit); End без movement-restore; монстр-вход — hub прежнего dispatcher; FIX B1 — End(1)+reuse при мёртвой цели mid-cast (якорь 0x114820) (кластер A2).
+pub mod monsterfastattack; // CMonsterFastAttack (0x2d1): фазы +0x50/+0x54/+0x58, кумулятивные сроки 15001/15002, MP только player, двойной Attack с End(1), calc max(max-min,0)+1 (кластер A2).
+pub mod monsterrangeattack; // CMonsterRangeAttack (0x2ef): Check (player-only MP + молчаливый нулевой cost), AI без поворота, маска 7×7 (x+7y, центр −3, dedup после hit), calc trunc(unsigned(EM)×0.01f×EC) (кластер A2).
+pub mod monsterthorn; // CMonsterThorn (0x197): Check/AI/Attack/Calc и shared End 0x146090; обязательный второй RNG crit-roll (vt+0x114 ≡ 0 у монстра); монстр-вход буквально (кластер A2).
+pub mod monstertaming; // CMonsterTaming (0xd4): player-путь приручения; FIX T1 — нулевой MP-cost → молчаливый reject (jbe→ret0 0x57C18B), FIX T2 — терминальный кадр {0xBFE01,0,2} после каждого CheckCastCondition-отказа всех трёх Begin (кластер A2).
 pub mod pathprojectile; // CEnergyBolt/CSnakeBolt/CZombieClaw (0x1A0/0x1A5/0x1A2): Check/AI путевого снаряда буквально + hub-швы делегата.
 pub mod pillar; // Check/AI и параметры стойки CPillar (порция №6c; hub-швы `selfcast`).
 pub mod pillarstate; // живые toggle/restart/AI/End CPillarState (порция №6c).
@@ -205,3 +211,27 @@ pub use yinyang::summon_yin_yang;
 pub use godthunder::summon_god_thunder;
 pub use chaossphere::summon_chaos_sphere;
 pub use elementphalanx::{apply_element_phalanx_attack, apply_element_phalanx_war_soul};
+
+// Кластер A2 «семьи боевых навыков монстров»: hub-трейты доставки и
+// перенесённые тела навыков 0x2bd/0x2d1/0x2ef/0x197/0xd4.
+pub use monsterattack::{MonsterCombatCast, MonsterCombatContact, MonsterCombatFacts,
+    MonsterCombatGame, MonsterCombatOutcome, MonsterCombatPlayer, MonsterShapeFacts,
+    MonsterTamingTarget, OwnedMonsterAttackTarget,
+    apply_owned_monster_attack_hit, end_owned_monster_skill_without_reuse,
+    finish_owned_monster_attack_impact, monster_attack_cell_candidates,
+    resolve_owned_monster_attack_target};
+pub use monsterbaseattack::{MONSTER_BASE_ATTACK_SKILL_ID, execute_player_monster_base_attack,
+    finish_player_monster_base_attack, is_player_monster_base_attack};
+pub use monsterfastattack::{MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME,
+    SKILL_USAGE_SECOND_TIME, fast_attack_fire_message};
+pub use monsterrangeattack::{MONSTER_RANGE_ATTACK_SKILL_ID, MonsterRangeAttackDispatch,
+    SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, begin_owned_monster_range_cast,
+    calculate_monster_range_attack, execute_owned_monster_range_target,
+    execute_player_monster_range_attack, finish_player_monster_range_attack,
+    prepare_owned_monster_range_cast, range_attack_cell_candidates, range_attack_fire_message,
+    range_attack_scope_cells};
+pub use monsterthorn::{MONSTER_THORN_SKILL_ID, cancel_player_monster_thorn,
+    complete_player_monster_thorn, execute_owned_monster_thorn, execute_player_monster_thorn,
+    is_player_monster_thorn_dispatch};
+pub use monstertaming::{MONSTER_TAMING_SKILL_ID, cancel_player_monster_taming,
+    complete_player_monster_taming, execute_player_monster_taming};

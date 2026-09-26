@@ -643,7 +643,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
     let region = region_owner.base_mut();
     if cast.is_some() && target.as_ref().is_none_or(|target| target.dead) {
-        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game);
         return MonsterSkillCallOutcome::Handled;
     }
     let Some(target) = target else { return MonsterSkillCallOutcome::NotHandled };

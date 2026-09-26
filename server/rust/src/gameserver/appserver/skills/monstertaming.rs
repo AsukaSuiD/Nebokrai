@@ -1,208 +1,35 @@
-//! Приручение обычного монстра (`CMonsterTaming`, навык `0xd4`).
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
-//!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
-//! `appserver/skills/monstertaming.cpp`. Владелец навыка сохраняет проверки
-//! пути, MP, безопасных клеток, уровней, лимита питомцев, единственный бросок
-//! `random(10000)` и странную границу счётчика попыток. Успех переводит тот же
-//! региональный объект в жизненный цикл питомца без параллельной копии и рассылает
-//! `0xC0201`; `CGame` используется только для доступа к владельцам и доставки.
-//! Восстановление использует абсолютный срок `CSkill::IsRestored`; cast-delay
-//! и дальнейший lifecycle питомца остаются elapsed.
-//! Успешная ветвь AI (0x0057C802..0x0057C98E) вызывает StopAllSkills до
-//! DoesCreatureBeenTamed и назначения master. После увеличения счётчика попыток
-//! IsTamable не проверяется повторно. Только auxiliary CPet получает смену
-//! режима и OnLoseTarget; primary AI, его команды и hate не очищаются.
-//! AddPet предшествует UpgradePetLevel с текущими level/experience; лишь затем
-//! идут C0201 и уменьшение refresh-count. Регион и монстр остаются опубликованы
-//! через синхронные End, пакет читает живую shape без копирования владельца.
+//! Тонкий путь к приручению `CMonsterTaming` (ID `0xd4`) в Zone. Источник:
+//! gameserver.exe/GameServer.pdb, владелец `appserver/skills/monstertaming.cpp`.
+//! Player-путь Check/AI и жизненный цикл питомца перенесены буквально в
+//! `nebokrai_zone::skills::monstertaming` (статусы VERIFIED/MATCH см. там,
+//! тела `.local/recon-a2/out/`); там же исправления DIFF-T1 (нулевая
+//! стоимость MP → молчаливый reject машинного jbe→ret0 вместо прежнего
+//! допуска) и DIFF-T2 (терминальный кадр `{0xBFE01, 0, 2}` после каждого
+//! CheckCastCondition-отказа всех трёх Begin, message-owner mode 2 по
+//! jump-таблице 0x57BD74 и remap16 0x57BD98). Здесь — делегации с прежними
+//! сигнатурами и re-export; внешние потребители (диспетчер `game.rs`) не
+//! меняются. Часы — общий `game_tick_milliseconds` делегата старого main
+//! loop (blanket `GameClockContext::now_milliseconds`, как у соседей).
 
-use super::baseattack::time_reached;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{
-    finish_summon_skill,
-};
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    game_tick_milliseconds,
 };
-use crate::nets::netserver::message::CMessage;
-use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::MonsterProperties;
+use nebokrai_zone::skills::{MonsterCombatOutcome, monstertaming as zone};
 
-pub(crate) const MONSTER_TAMING_SKILL_ID: u32 = 0xd4;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const MONSTER_TYPE: i32 = 600;
-const PLAYER_TYPE: i32 = 400;
-const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
-const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
-const SKILL_USAGE_WEAPON_LEVEL_MODIFIER: u32 = 20_018;
-const SKILL_USAGE_PET_AMOUNT_LIMIT: u32 = 31_001;
-const SKILL_USAGE_BASE_PROBABILITY: u32 = 40_001;
+pub(crate) use nebokrai_zone::skills::MONSTER_TAMING_SKILL_ID;
 
-#[derive(Clone, Debug)]
-struct TamingTarget {
-    property: MonsterProperties,
-    tile_x: i32,
-    tile_y: i32,
-    display_name: Vec<u8>,
-    hit_points: u32,
-    tamable: bool,
-}
-
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn send_failure(game: &mut CGame, player_id: i32, reason: u8) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, reason);
-}
-
-fn target_snapshot(game: &CGame, region_id: i32, monster_id: i32) -> Option<TamingTarget> {
-    let monster = game.find_region(region_id)?.base().find_monster_by_id(monster_id)?;
-    let property = game
-        .find_monster_property_by_origin_name(monster.base_property_key()?)?
-        .clone();
-    Some(TamingTarget {
-        tile_x: monster.move_shape().shape().get_tile_x().ok()?,
-        tile_y: monster.move_shape().shape().get_tile_y().ok()?,
-        display_name: monster.display_name().to_vec(),
-        hit_points: monster.hit_points(),
-        tamable: monster.is_tamable(&property),
-        property,
-    })
-}
-
-fn send_cast(
-    game: &mut CGame,
-    player_id: i32,
-    monster_id: i32,
-    skill_level: i32,
-    action: u8,
-) {
-    let Some(player) = game.find_player(player_id) else { return; };
-    let source = player.shape().identity();
-    let region_id = player.server_region_id();
-    let direction = player.shape().get_direction();
-    let target = region_id.and_then(|region_id| target_snapshot(game, region_id, monster_id));
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(MONSTER_TAMING_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(source.object_type);
-    message.add_long(source.id);
-    if action == 1 {
-        message.add_long(direction);
-    } else if action == 2 {
-        let Some(target) = target else { return; };
-        message.add_long(MONSTER_TYPE);
-        message.add_long(monster_id);
-        message.add_long(target.tile_x);
-        message.add_long(target.tile_y);
-        message.add_long(0);
-    } else {
-        return;
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn finish_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-}
-
-fn abort_player_monster_taming(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); }
-fn finish_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) { finish_summon_skill(game, player_id, MONSTER_TAMING_SKILL_ID, runtime); }
-pub(crate) fn complete_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_monster_taming(game, player_id, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed) }
-pub(crate) fn cancel_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_monster_taming(game, player_id); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
-
-fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
-    let visible = value.iter().position(|byte| *byte == 0).map_or(value, |end| &value[..end]);
-    message.add(visible);
-    message.add_byte(0);
-}
-
-fn increase_attempt(game: &mut CGame, region_id: i32, monster_id: i32) -> bool {
-    let Some(owner) = game.find_region_mut(region_id) else { return false; };
-    owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
-        monster.increase_tame_attempt_count();
-        true
-    })
-}
-
-fn apply_success(
-    game: &mut CGame,
-    player_id: i32,
-    region_id: i32,
-    monster_id: i32,
-    property: &MonsterProperties,
-) -> bool {
-    let Some(holder) = game.find_region(region_id)
-        .and_then(|region| region.base().find_monster_by_id(monster_id))
-        .map(|monster| monster.move_shape().shape().identity()) else { return false; };
-    game.stop_all_move_shape_skills(region_id, holder);
-    let Some((player_name, pet_mode)) = game.find_player(player_id).map(|player| {
-        (player.player_name().to_vec(), player.current_pets_mode())
-    }) else {
-        return false;
+fn queued_outcome(outcome: MonsterCombatOutcome) -> QueuedSkillExecutionOutcome {
+    let state = match outcome {
+        MonsterCombatOutcome::Begun => QueuedSkillExecutionState::Begun,
+        MonsterCombatOutcome::Pending => QueuedSkillExecutionState::Pending,
+        MonsterCombatOutcome::Completed => QueuedSkillExecutionState::Completed,
+        MonsterCombatOutcome::Rejected => QueuedSkillExecutionState::Rejected,
+        MonsterCombatOutcome::RejectedAfterUse => QueuedSkillExecutionState::RejectedAfterUse,
     };
-    let Some(owner) = game.find_region_mut(region_id) else { return false; };
-    let succeeded = owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
-        monster.try_become_tamed(
-            MasterInfo {
-                master_type: PLAYER_TYPE,
-                master_id: player_id,
-                ..MasterInfo::default()
-            },
-            pet_mode,
-        )
-    });
-    if !succeeded { return false; }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.add_active_pet(MONSTER_TYPE, monster_id, property.figure as u8 as i32);
-    }
-    let Some(level) = game.find_region(region_id)
-        .and_then(|region| region.base().find_monster_by_id(monster_id))
-        .map(|monster| monster.pet_progress().0) else { return false; };
-    let progression = game.globe_setup().pet_progression(level);
-    let experience_factor = progression.map_or(0.0, |(factor, _)| factor);
-    let current_factors = progression.map(|(_, factors)| factors);
-    let next_factors = game.globe_setup().pet_progression(level.wrapping_add(1))
-        .map(|(_, factors)| factors);
-    let Some(monster) = game.find_region_mut(region_id)
-        .and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id)) else { return false; };
-    let _ = monster.increase_pet_experience(0, property, experience_factor, current_factors, next_factors);
-    let (level, experience) = monster.pet_progress();
-    let hit_points = monster.hit_points();
-    let maximum_hp = monster.maximum_hp(property);
-    let mut message = CMessage::new(0x000c_0201);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(monster_id);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    add_legacy_c_string(message.base_mut(), &player_name);
-    message.add_ulong(level);
-    message.add_ulong(experience);
-    message.add_ulong(hit_points);
-    message.add_ulong(maximum_hp);
-    if let Some(region) = game.find_region(region_id)
-        && let Some(monster) = region.base().find_monster_by_id(monster_id)
-    {
-        let _ = game.send_game_shape_around(region.base(), monster.move_shape().shape(), None, &message);
-    }
-    if let Some(owner) = game.find_region_mut(region_id) {
-        owner.base_mut().finish_owned_monster_taming(monster_id);
-    }
-    true
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
@@ -212,212 +39,25 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
     _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let monster_id = match dispatch {
-        PlayerSkillDispatch::Object {
-            skill_id: MONSTER_TAMING_SKILL_ID,
-            target: ShapeIdentity { object_type: MONSTER_TYPE, id, .. },
-        } => id,
-        _ => {
-            send_failure(game, player_id, 10);
-            game.send_skill_system_info(player_id, b"GS0286");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-    };
-    let Some((region_id, skill_level)) = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.server_region_id()?,
-            player.learned_skill_level(MONSTER_TAMING_SKILL_ID, game.skill_factory()),
-        ))
-    })
-    else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let Some(properties) = game.skill_base_properties(MONSTER_TAMING_SKILL_ID, skill_level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let weapon_modifier = properties.query_property(SKILL_USAGE_WEAPON_LEVEL_MODIFIER) as i32;
-    let pet_limit = properties.query_property(SKILL_USAGE_PET_AMOUNT_LIMIT);
-    let probability = properties.query_property(SKILL_USAGE_BASE_PROBABILITY);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    queued_outcome(zone::execute_player_monster_taming(
+        game, player_id, dispatch, runtime, game_tick_milliseconds,
+    ))
+}
 
-    if game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).is_none() {
-        let Some((source_x, source_y, initial_mana)) = game
-            .find_player(player_id)
-            .and_then(|player| {
-                Some((
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                    player.mana(),
-                ))
-            })
-        else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let Some(initial_target) = target_snapshot(game, region_id, monster_id) else {
-            send_failure(game, player_id, 10);
-            game.send_skill_system_info(player_id, b"GS0294");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        if !initial_target.tamable {
-            send_failure(game, player_id, 10);
-            game.send_skill_system_info(player_id, b"GS0312");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let path = game.base_magic_path(
-            region_id,
-            source_x,
-            source_y,
-            initial_target.tile_x,
-            initial_target.tile_y,
-            None,
-        );
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        if !skill_is_restored(
-            game.player_skill_last_used_ms(player_id, MONSTER_TAMING_SKILL_ID),
-            reuse_delay_ms,
-            runtime.now_milliseconds(),
-        ) {
-            send_failure(game, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            send_failure(game, player_id, 0x0b);
-            game.send_skill_system_info(player_id, b"GS0290");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if path.iter().any(|cell| cell.2 == 2) {
-            send_failure(game, player_id, 0x0f);
-            game.send_skill_system_info_with_text(player_id, b"GS0295", &initial_target.display_name);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            if mp_loss != 0 {
-                player.set_skill_moveable(false);
-            }
-            player.set_current_skill_id(Some(MONSTER_TAMING_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
+pub(crate) fn complete_player_monster_taming<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    zone::complete_player_monster_taming(game, player_id, player_ai, runtime)
+}
 
-    let Some(current_target) = target_snapshot(game, region_id, monster_id) else {
-        abort_player_monster_taming(game, player_id);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if current_target.hit_points == 0 {
-        send_failure(game, player_id, 10);
-        game.send_skill_system_info(player_id, b"GS0285");
-        abort_player_monster_taming(game, player_id);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    if game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            abort_player_monster_taming(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let Some((source_x, source_y)) = game.find_player(player_id).and_then(|player| {
-            Some((
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
-            ))
-        }) else {
-            abort_player_monster_taming(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(current_mana.wrapping_sub(mp_loss));
-            player.movement_shape_mut().set_direction(get_line_direction(
-                source_x,
-                source_y,
-                current_target.tile_x,
-                current_target.tile_y,
-            ));
-        }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_cast(game, player_id, monster_id, skill_level, 1);
-        if let Some(state) = game.player_skill_execution_mut(player_id, MONSTER_TAMING_SKILL_ID) {
-            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let started_at_ms = game
-        .player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID)
-        .map(SkillExecutionKernel::started_at_ms)
-        .expect("выполнение приручения создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
-        return terminal(QueuedSkillExecutionState::Pending);
-    }
-    abort_player_monster_taming(game, player_id);
-    let Some(target) = target_snapshot(game, region_id, monster_id) else {
-        finish_player_monster_taming(game, player_id, runtime);
-        return terminal(QueuedSkillExecutionState::Completed);
-    };
-    let Some((source_x, source_y, player_level, weapon_level, pet_count)) = game
-        .find_player(player_id)
-        .and_then(|player| {
-            Some((
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
-                player.level(),
-                player.weapon_damage_level(game.goods_factory()),
-                player.active_pets().len() as u32,
-            ))
-        })
-    else {
-        finish_player_monster_taming(game, player_id, runtime);
-        return terminal(QueuedSkillExecutionState::Completed);
-    };
-    let current_path = game.base_magic_path(region_id, source_x, source_y, target.tile_x, target.tile_y, None);
-    if maximum_distance != 0 && current_path.len() > maximum_distance as usize {
-        send_failure(game, player_id, 0x0b);
-        game.send_skill_system_info(player_id, b"GS0290");
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    send_cast(game, player_id, monster_id, skill_level, 2);
-    if let Some(state) = game.player_skill_execution_mut(player_id, MONSTER_TAMING_SKILL_ID) {
-        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-    if !target.tamable || !increase_attempt(game, region_id, monster_id) {
-        finish_player_monster_taming(game, player_id, runtime);
-        return terminal(QueuedSkillExecutionState::Completed);
-    }
-    let safe_cell = game.find_region(region_id).is_none_or(|region| {
-        region.base().region.get_block(target.tile_x, target.tile_y).unwrap_or(2) == 2
-            || region.base().region.get_block(source_x, source_y).unwrap_or(2) == 2
-    });
-    let target_level = target.property.level as u8;
-    if safe_cell {
-        game.send_skill_system_info(player_id, b"GS0315");
-    } else if player_level < target_level {
-        game.send_skill_system_info(player_id, b"GS0314");
-    } else if weapon_level.wrapping_sub(weapon_modifier) < i32::from(target_level) {
-        game.send_skill_system_info(player_id, b"GS0314");
-    } else if pet_limit <= pet_count {
-        game.send_skill_system_info(player_id, b"GS0313");
-    } else if game.skill_random_below(10_000) as u32 <= probability {
-        if !apply_success(game, player_id, region_id, monster_id, &target.property) {
-            game.send_skill_system_info(player_id, b"GS0312");
-        }
-    }
-    if let Some(state) = game.player_skill_execution_mut(player_id, MONSTER_TAMING_SKILL_ID) {
-        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_monster_taming(game, player_id, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+pub(crate) fn cancel_player_monster_taming<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    _runtime: &mut Runtime,
+) -> bool {
+    zone::cancel_player_monster_taming(game, player_id, player_ai)
 }
