@@ -1,6 +1,4 @@
-//! Регион `CRegion` из `region.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `regions/`.
+//! Регион `CRegion` из `region.cpp/.h`.
 //!
 //! Loader читает `CLS-RGN`, version 1, type, dimensions, cell bytes и 0x14-
 //! байтные switches. Полный serializer сохраняет resource ID, IEEE-754 scale,

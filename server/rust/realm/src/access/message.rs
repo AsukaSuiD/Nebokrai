@@ -1,8 +1,7 @@
-//! Свободные обработчики сообщений LoginServer из `applogin/message`, перенесённые в Realm `access/`.
+//! Свободные обработчики сообщений LoginServer из `applogin/message`.
 //!
-//! Исторический `CMessage::Run`, подтверждённый точной парой LoginServer
-//! EXE/PDB, выбирает
-//! ровно одного владельца Auth/GMA, GM, Log либо Server. `LoginComponentRunner`
+//! Исторический `CMessage::Run` выбирает ровно одного владельца Auth/GMA, GM,
+//! Log либо Server. `LoginComponentRunner`
 //! не повторяет его numeric switch: узкий selector принимает callback от
 //! `Run`, после чего вызывает соответствующий фактический handler. Auth-путь
 //! остаётся awaitable ради упорядоченного завершения прежней reconnect-задачи;

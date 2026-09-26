@@ -1,5 +1,4 @@
-//! Базовый `CPlug` из WorldServer, перенесённый в Realm `sessions/`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Базовый `CPlug` из WorldServer.
 //!
 //! Wire содержит plug type, owner type/ID и signed ended flag. Factory уже
 //! читает первые три поля, поэтому virtual decode получает только ended.

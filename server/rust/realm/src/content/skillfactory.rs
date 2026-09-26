@@ -1,6 +1,4 @@
-//! Skill cache `CSkillFactory` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `content/`.
+//! Skill cache `CSkillFactory` из WorldServer.
 //!
 //! Initial-config пишет ordered composite-key map: signed count и для каждого
 //! slot `u32 length + record`. Null/unknown/zero-ID skill сохраняет slot с

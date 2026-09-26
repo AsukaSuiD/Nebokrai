@@ -1,6 +1,4 @@
-//! Подвижная форма `CMoveShape` из `moveshape.cpp/.h`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесённая в Realm `regions/`.
+//! Подвижная форма `CMoveShape` из `moveshape.cpp/.h`.
 //!
 //! Владелец содержит один `CShape`, ex-state bytes и `is_god = false`.
 //! `SetExStates` дописывает непустой slice без очистки; player decoder очищает

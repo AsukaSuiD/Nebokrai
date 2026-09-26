@@ -1,6 +1,4 @@
-//! DB-владелец JJC WorldServer из `rsjjcsys.cpp`, перенесённый в Realm
-//! `activities/`.
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! DB-владелец JJC WorldServer из `rsjjcsys.cpp`.
 //!
 //! Owner сохраняет load/save игрока, weekly/season clear, исходный порядок
 //! команд и значения bool. Player snapshot и Tiberius заменяют прямой доступ

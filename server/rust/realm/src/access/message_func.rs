@@ -1,7 +1,6 @@
-//! Обработчики `appauth/message/message_func.cpp`, подтверждённые
-//! `authserver.exe` и `authserver.pdb`, перенесённый в Realm `access/`. Они
-//! связывают LoginServer-соединения, Auth DB-очереди, GM-команды и coalescing
-//! server-info с состоянием `CGame`.
+//! Обработчики `appauth/message/message_func.cpp`. Они связывают LoginServer-
+//! соединения, Auth DB-очереди, GM-команды и coalescing server-info с
+//! состоянием `CGame`.
 //!
 //! Таблица LoginServer остаётся упорядоченной по area ID; disconnect удаляет
 //! только первую найденную для socket запись. Auth-строки приводятся к нижнему

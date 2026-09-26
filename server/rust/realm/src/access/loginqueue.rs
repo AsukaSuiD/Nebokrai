@@ -1,6 +1,5 @@
-//! Очереди `loginqueue.cpp/.h`, перенесённые в Realm `access/`,
-//! подтверждённые `loginserver.exe` и
-//! `loginserver.pdb`. Они связывают CD-key/player/GAS FIFO, проверку пароля,
+//! Очереди `loginqueue.cpp/.h`. Они связывают CD-key/player/GAS FIFO, проверку
+//! пароля,
 //! valid-code и matrix с их wrapping-таймерами.
 //!
 //! Замена `TagPwdChecked`, полная выгрузка очереди и callbacks выполняются под

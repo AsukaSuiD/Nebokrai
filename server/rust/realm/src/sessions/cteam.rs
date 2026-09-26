@@ -1,5 +1,4 @@
-//! Командная session `CTeam`, подтверждённая `worldserver.exe` и
-//! `worldserver.pdb`, перенесённая в Realm `sessions/`.
+//! Командная session `CTeam` WorldServer.
 //!
 //! Owner сохраняет delay `125`, минутный leader-check, allocation `0`, team
 //! wire, порядок Start-before-plug-count при unserialize и opcodes
@@ -29,7 +28,7 @@ pub struct CTeam {
     allocation_scheme: i32,
     #[allow(
         dead_code,
-        reason = "список пополняется запросами team и читается позднее CPlayer container sequence, как и в оригинале; mod-allow старого пакета глушил то же предупреждение"
+        reason = "список пополняется запросами team и читается позднее CPlayer container sequence, как и в оригинале"
     )]
     queried_plugs: Vec<(i32, i32)>,
     delay: i32,

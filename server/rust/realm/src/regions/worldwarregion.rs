@@ -1,9 +1,7 @@
-//! Владелец промежуточного `CWorldWarRegion` исторического WorldServer,
-//! перенесённый в Realm `regions/`.
+//! Промежуточный `CWorldWarRegion` WorldServer из `worldwarregion.cpp/.h`.
 //!
-//! Constructor, `Load` и serializer
-//! действуют; подтверждает три signed
-//! DWORD по offsets `+0x120/+0x124/+0x128` после единственного
+//! Машина подтверждает действующие constructor, `Load` и serializer: она
+//! видит три signed DWORD по offsets `+0x120/+0x124/+0x128` после единственного
 //! `CWorldRegion`. Сам base-constructor их не назначает, поэтому Rust хранит
 //! `Option<i32>`; действующие Village/City constructors задают собственные
 //! `1/1/1` и `3/3/2`. `Load` всегда сначала выполняет полный base Load, затем
@@ -12,9 +10,8 @@
 //! Virtual `DecordFromByteArray` также действует: он
 //! вызывает исходный no-op World decoder, не меняет cursor и возвращает
 //! `true`. STL/compiler noise и destructors удалены в пользу стандартных
-//! Rust-механизмов.
-//! исходные owners `worldwarregion.cpp/.h`. STL stream и allocation заменены
-//! заимствованными resource bytes и владением Rust; старый ABI не копируется.
+//! Rust-механизмов. STL stream и allocation заменены заимствованными resource
+//! bytes и владением Rust; старый ABI не копируется.
 
 use crate::app::worldserver::WorldRegionResourceContext;
 use crate::regions::worldregion::{

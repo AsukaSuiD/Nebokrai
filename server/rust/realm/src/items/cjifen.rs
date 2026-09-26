@@ -1,5 +1,4 @@
-//! Однослотовый `CJiFen` из `cjifen.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`. Перенесён в Realm `items/`.
+//! Однослотовый `CJiFen` из `cjifen.cpp/.h`.
 //!
 //! Wire совпадает с `CWallet`: marker `0/1` и полный `CGoods`; decoder сначала
 //! освобождает прежний slot. `Clear` сохраняет owner, `Release` обнуляет его.

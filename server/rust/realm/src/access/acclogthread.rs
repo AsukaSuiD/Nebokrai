@@ -1,6 +1,4 @@
-//! Consumer account-журналов из `acclogthread.cpp`, подтверждённый
-//! `loginserver.exe` и `loginserver.pdb`. Реализация перенесена в Realm
-//! `access/`.
+//! Consumer account-журналов из `acclogthread.cpp`.
 //!
 //! Четыре SQL-шаблона, регистр имён, пробелы и формат времени без ведущих
 //! нулей соответствуют producer-функциям `game.cpp` и runtime-журналам

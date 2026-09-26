@@ -1,8 +1,7 @@
-//! DB-владелец `CRsCDKey` LoginServer из `rscdkey.cpp`, перенесённый в Realm `access/`.
+//! DB-владелец `CRsCDKey` LoginServer из `rscdkey.cpp`.
 //!
 //! Owner реализует `CDKeyBan`, IP-фильтры, matrix-card операции, `GetBanTime`,
 //! `FixPtAcc`, `ValidateLocalPassord` и GAS-процедуру `getAccInfoEx`.
-//! Контракты подтверждены точной парой LoginServer EXE/PDB.
 //!
 //! Каждая операция по-прежнему открывает отдельное соединение. `CDKeyBan`
 //! сохраняет нетранзакционный `SELECT WITH(NOLOCK) -> UPDATE/INSERT`;

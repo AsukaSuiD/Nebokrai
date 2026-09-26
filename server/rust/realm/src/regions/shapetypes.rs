@@ -1,12 +1,8 @@
-//! Codec error-типы мирового `CShape` и его `CBaseObject`, извлечённые из
-//! старого пакета в Realm `regions/`. Источник контракта — точная пара
-//! `Nworldserver.exe` и `WorldServer.pdb`.
+//! Codec error-типы мирового `CShape` и его `CBaseObject`.
 //!
 //! Сохранён исходный порядок вариантов: `ShapeDecodeError::BaseObject`
 //! оборачивает `BaseObjectDecodeError`, а `UnexpectedEnd` и
-//! `LegacyNameOverflow` хранят те же offset-счётформы. Полный codec и
-//! объектное дерево придут сюда отдельным связным шагом; этот файл — их
-//! типовая опора, уже нужная семьям player/cgoods/moveshape при их переносе.
+//! `LegacyNameOverflow` хранят те же offset-счётформы.
 
 use std::error::Error;
 use std::fmt;

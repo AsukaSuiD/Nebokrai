@@ -1,6 +1,6 @@
-//! Базовый объект `CBaseObject` из `baseobject.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `regions/`.
+//! Базовый объект `CBaseObject` из `baseobject.cpp/.h`; источник контракта
+//! WorldServer — точная пара `Nworldserver.exe` + `WorldServer.pdb`
+//! (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Type, ID, graphics ID, GUID и byte-exact имя сериализуются в исходном
 //! little-endian порядке; имя завершается единственным NUL. Decoder сохраняет

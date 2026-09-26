@@ -1,5 +1,5 @@
-//! Client/World-обработчики `logmessage.cpp`, подтверждённые `loginserver.exe`
-//! и `loginserver.pdb`, перенесённые в Realm `access/`. Неизвестные opcode не имеют побочных эффектов.
+//! Client/World-обработчики `logmessage.cpp`. Неизвестные opcode не имеют
+//! побочных эффектов.
 //!
 //! Valid-code и matrix ветви сохраняют endpoint-проверки, порядок изменения
 //! `ValidErr` и одноразовое удаление записей. Player list/data запросы используют

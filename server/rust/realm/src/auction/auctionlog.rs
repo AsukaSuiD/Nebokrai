@@ -222,7 +222,7 @@ const _: () = {
 // Runtime-семья `CAuctionLog` (world-владелец `public/auctionroom/auctionlog.cpp`)
 // ниже — единый владелец auction log вместе с data-контрактом выше.
 
-// Журнал аукциона WorldServer из точной пары EXE/PDB, перенесённый в Realm `auction/`.
+// Журнал аукциона WorldServer.
 //
 // `BTreeMap<i32, Vec<_>>` сохраняет numeric key-order и insertion order равных
 // ключей. Страница содержит до 17 записей; page transitions и bool results
@@ -746,7 +746,7 @@ impl CAuctionLog {
         AuctionGoodsLogWriteOutcome::Written { found: true }
     }
 
-    /// Публикует все записи игрока, включая ранее отмеченные, в оригинал порядке.
+    /// Публикует все записи игрока, включая ранее отмеченные, в исходном порядке.
     pub fn collect_no_notice<Q: AuctionNoticeWriteQueue>(
         &mut self,
         player_id: i32,

@@ -1,5 +1,4 @@
-//! Описание одного навыка, передаваемое из WorldServer в GameServer, перенесённое в Realm `content/`.
-//!
+//! Описание одного навыка, передаваемое из WorldServer в GameServer.
 //!
 //! EXE разрешает противоречие с очищенным C++ reference: wire начинается с
 //! `type, id, level, target`, имя передаётся как `length + bytes` без NUL,

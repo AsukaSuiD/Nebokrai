@@ -1,9 +1,8 @@
-//! Владелец `TimeToReturn` исторического WorldServer (`setup/TimeToReturn.ini`),
-//! перенесённый в Realm content — владельца событийных календарных таблиц Realm.
-//! Источник контракта — та же точная пара, что у [`crate::app::world_message`].
+//! Владелец `TimeToReturn` WorldServer (`setup/TimeToReturn.ini`) — событийные
+//! календарные таблицы Realm. Источник контракта — та же точная пара, что у
+//! [`crate::app::world_message`].
 //!
-//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`,
-//! дизассемблер этого прохода):
+//! Машинно подтверждённые точки (первая секция `.exe/Nworldserver.exe`):
 //! - `on_time` `0x472DC0`: map-lookup по event ID (call map `find` `0x472D50`),
 //!   существует только если entry есть; access World region через accessor
 //!   `0x4017A0` (g_Game) → `0x413AC0` (region по signed map ID); только на

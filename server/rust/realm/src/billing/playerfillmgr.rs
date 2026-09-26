@@ -1,12 +1,10 @@
-//! Optional worker `CPlayerFillMgr`, подтверждённый `billingserver.exe` и
-//! `billingserver.pdb` по owner-у `appbilling/playerfillmgr.cpp`.
+//! Optional worker `CPlayerFillMgr` из `appbilling/playerfillmgr.cpp`.
 //!
 //! Проход читает до 50 строк в DB-порядке, рассылает `0xFF004` для каждой и
 //! лишь затем одним вызовом удаляет все прочитанные ID; ошибка отправки не
 //! отменяет следующие ответы или delete. Worker проверяет общий exit перед
 //! проходом и всегда ждёт 5000 ms после него. `End` только присоединяет поток;
 //! Win32 thread API и ADO заменены owned `JoinHandle` и Tiberius.
-//! Перенесён в Realm `billing/`.
 
 use std::collections::VecDeque;
 use std::ffi::CString;

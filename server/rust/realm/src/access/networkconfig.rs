@@ -1,4 +1,4 @@
-//! Network-конфигурация роли AuthServer, перенесённая в Realm `access/`.
+//! Network-конфигурация роли AuthServer.
 
 pub struct AuthNetworkConfig {
     pub host_port: u32,

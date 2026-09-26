@@ -1,7 +1,5 @@
-//! DB-владелец товаров WorldServer из `dbgoods.cpp`, перенесённый в Realm
-//! `content/`: трейт `DbGoodsOwner`, его data-семья и Tiberius-реализация
-//! `TiberiusDbGoods`. Источник контракта — точная пара `Nworldserver.exe` и
-//! `WorldServer.pdb`.
+//! DB-владелец товаров WorldServer из `dbgoods.cpp`: трейт `DbGoodsOwner`,
+//! его data-семья и Tiberius-реализация `TiberiusDbGoods`.
 //!
 //! Контракт охватывает delete/load/save товара, base fields и addon properties.
 //! SQL-порядок, signed форматирование legacy `unsigned long`, provider rows и
@@ -17,12 +15,6 @@
 //! `&mut PlayerT` и выполняется `block_on` в том же потоке, поэтому `Send` не
 //! требуется; остальные методы захватывают только Sync-данные и помечены
 //! `+ Send`.
-//!
-//! При переносе реализации из старого пакета `pub(crate)` нормализован в
-//! `pub`; старый `dbaccess/worlddb/dbgoods` остаётся glob-реэкспортом этого
-//! модуля. Его локальные concrete-алиасы `GoodsLoadBlock`/`GoodsLoadOutcome`
-//! упразднены: generic-формы объявлены здесь же, а старый пакет уже не
-//! ссылается на них за пределами перенесённой реализации.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -260,8 +252,8 @@ pub trait DbGoodsOwner<PlayerT> {
 }
 
 /// Linux/TDS-реализация `CDBGoods` с caller-connection и собственной
-/// notice-очередью, перенесённая из старого пакета без изменения SQL-порядка,
-/// signed форматирования и значений отказа.
+/// notice-очередью; сохраняет SQL-порядок, signed форматирование и значения
+/// отказа.
 pub struct TiberiusDbGoods {
     settings: WorldDatabaseSettings,
     notices: VecDeque<DbGoodsNotice>,

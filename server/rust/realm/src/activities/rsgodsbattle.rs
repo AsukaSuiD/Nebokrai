@@ -1,6 +1,4 @@
-//! DB-владелец Gods Battle WorldServer из `rsgodsbattle.cpp`, перенесённый в
-//! Realm `activities/`.
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! DB-владелец Gods Battle WorldServer из `rsgodsbattle.cpp`.
 //!
 //! Сохраняются SaveFactionXYD, SaveNpcFaction и top-ten query: порядок строк
 //! провайдера, значения bool и уже применённые записи при последующей ошибке.

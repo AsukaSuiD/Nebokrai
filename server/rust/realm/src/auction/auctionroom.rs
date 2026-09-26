@@ -1,5 +1,4 @@
-//! Параметры поиска `CAuctionRoom::stPlayerOptNode` из `auctionroom.h`, перенесённые в Realm `auction/`.
-//! Источник контракта — точная пара MiscServer EXE/PDB.
+//! Параметры поиска `CAuctionRoom::stPlayerOptNode` из `auctionroom.h`.
 //!
 //! Default обнуляет player/page/name и low level, включает own-items, задаёт
 //! money type `1`, upper level `999` и wildcard weapon type `-1`. Wire хранит

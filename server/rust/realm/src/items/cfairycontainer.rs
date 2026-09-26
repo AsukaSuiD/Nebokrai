@@ -1,5 +1,4 @@
-//! `CFairyContainer` из `cfairycontainer.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! `CFairyContainer` из `cfairycontainer.cpp/.h`.
 //!
 //! Контейнер расширяет volume-owner пятью hatch-time. Serialize после каждого
 //! значения обнуляет его в live-state; decoder сначала разбирает volume-wire,

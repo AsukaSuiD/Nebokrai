@@ -1,6 +1,4 @@
-//! Country-war регион `WorldCountryWarRegion` из
-//! `worldcountrywarregion.cpp`, подтверждённый `worldserver.exe` и
-//! `worldserver.pdb`, перенесённый в Realm `regions/`.
+//! Country-war регион `WorldCountryWarRegion` из `worldcountrywarregion.cpp`.
 //!
 //! После base Load owner читает `regions/{id}.country`. Успешный open очищает
 //! и заполняет defend/attack gates, flags и areas; missing resource сохраняет

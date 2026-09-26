@@ -1,6 +1,4 @@
-//! Параметры `CCountryParam` из `countryparam.cpp/.h`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесены в Realm `content/`.
+//! Параметры `CCountryParam` из `countryparam.cpp/.h`.
 //!
 //! `Load` сначала очищает шесть start/main maps, сохраняя technology и exile,
 //! затем позиционно читает 39 scalars и записи `*`, `#`, `+`. Повторный ключ

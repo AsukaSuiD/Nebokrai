@@ -1,6 +1,6 @@
-//! Товар `CGoods` из `cgoods.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `content/`.
+//! Товар `CGoods` из `cgoods.cpp/.h`; источник контракта WorldServer — точная
+//! пара `Nworldserver.exe` + `WorldServer.pdb` (идентификаторы —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Constructor создаёт базовый `CShape`, type `700`, amount `1` и оставляет
 //! base-properties index неназначенным. Goods wire дописывает к Shape индекс,

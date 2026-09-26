@@ -1,7 +1,7 @@
-//! Владелец `CRsPlayerFillMgr` исторического BillingServer, перенесённый в Realm `billing/`.
+//! Владелец `CRsPlayerFillMgr` BillingServer.
 //!
 //! Реализованы `InitConn`, `GetPlayerDeleteSQL`, `DeletePlayerFillLog` и
-//! `GetPlayerFillLog`; контракт подтверждён точной парой BillingServer EXE/PDB.
+//! `GetPlayerFillLog`.
 //!
 //! `InitConn` выбирает основную Billing DB, а не отдельную cash-log DB.
 //! Каждый последующий вызов открывает собственное соединение. Fetch выполняет

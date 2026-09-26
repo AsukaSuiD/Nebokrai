@@ -1,12 +1,11 @@
-//! Billing-обработчики `appbilling/billingmessage.cpp`, подтверждённые
-//! `billingserver.exe` и `billingserver.pdb`. Они декодируют запрос баланса,
+//! Billing-обработчики `appbilling/billingmessage.cpp`. Они декодируют запрос
+//! баланса,
 //! покупку и обмен в общие FIFO `CBillingPlayerManager`.
 //!
 //! Пустая identity в запросе баланса остаётся no-op и не потребляет следующий
 //! `long`. Числа сохраняют общий fallback `GetLong == 0`, неполный GUID —
 //! предварительный `GUID_INVALID`; GameServer ID берётся из metadata сообщения.
 //! Owned-записи заменяют глубокие C++-копии, сохраняя порядок постановки в FIFO.
-//! Перенесены в Realm `billing/`.
 
 use super::billingplayermanager::{CBillingPlayerManager, TagAccInfo, TagTradeNode, TagTradeNodeParts};
 use crate::app::billing_message::CMessage;

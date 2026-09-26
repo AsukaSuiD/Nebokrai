@@ -1,5 +1,4 @@
-//! Расписание деревенских войн `CVillageWarSys` из `villagewarsys.cpp/.h`,
-//! подтверждённое `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `activities/`.
+//! Расписание деревенских войн `CVillageWarSys` из `villagewarsys.cpp/.h`.
 //!
 //! Loader дважды читает token stream: weekly `#`, затем single `*`. Weekly
 //! rollover, неполная overlap-проверка и порядок шести фазовых timers

@@ -1,5 +1,4 @@
-//! Участник команды `CTeamate` из WorldServer, перенесённый в Realm `sessions/`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Участник команды `CTeamate` из WorldServer.
 //!
 //! Constructor задаёт plug type 5, region/timestamp 0, existence 1 и пустое
 //! byte-name. `SetOwnerRegionID` сначала меняет поле, затем синхронно публикует

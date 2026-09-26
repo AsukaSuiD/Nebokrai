@@ -1,5 +1,4 @@
-//! Конфигурация `authserver/src/configreader.cpp`, подтверждённая
-//! `authserver.exe` и `authserver.pdb`, перенесённый в Realm `access/`.
+//! Конфигурация `authserver/src/configreader.cpp`.
 //!
 //! `setup.ini` — позиционная последовательность из двадцати пар: labels не
 //! проверяются, перестановка меняет назначение, хвост игнорируется. Поля

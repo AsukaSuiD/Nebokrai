@@ -1,8 +1,7 @@
-//! Безопасный fire-and-forget owner `CRsPlayer::ResetAllLeitingInDB`, перенесённые в Realm `activities/`.
-//!
+//! Безопасный fire-and-forget owner `CRsPlayer::ResetAllLeitingInDB` и его
 //! worker `DbLetTingUpdate`.
 //!
-//! выделяет payload из двух DWORD, передаёт его в один
+//! Оригинал выделяет payload из двух DWORD, передаёт его в один
 //! `_beginthreadex` и сразу возвращает success/failure создания. Ни retry, ни
 //! queue, ни merge двух daily reset-ов не происходят. Каждый удачный dispatch
 //! ниже так же запускает отдельный поток с собственным TDS-соединением.

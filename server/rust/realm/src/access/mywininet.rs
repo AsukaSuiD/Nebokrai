@@ -1,6 +1,4 @@
-//! HTTP-owner `loginserver/applogin/mywininet.cpp/.h`, подтверждённый
-//! `loginserver.exe` и `loginserver.pdb`.
-//! Перенесён в Realm `access/`.
+//! HTTP-owner `loginserver/applogin/mywininet.cpp/.h`.
 //!
 //! WinInet заменён blocking `reqwest`/rustls с теми же HTTP/1 POST headers,
 //! системным proxy и обходом проверки CA старого HTTPS-сервера; hostname всё

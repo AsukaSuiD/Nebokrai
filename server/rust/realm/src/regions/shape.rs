@@ -1,5 +1,4 @@
-//! Форма `CShape` из `shape.cpp/.h`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `regions/`.
+//! Форма `CShape` из `shape.cpp/.h`.
 //!
 //! Владелец расширяет `CBaseObject` region, position, direction, state/action
 //! и speed `2000.0`. Wire пишет base object, optional GUID, region, bit-exact

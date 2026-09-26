@@ -1,5 +1,4 @@
-//! Общая часть `CGoodsContainer` из `cgoodscontainer.cpp/.h`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `items/`.
+//! Общая часть `CGoodsContainer` из `cgoodscontainer.cpp/.h`.
 //!
 //! Stacking проверяет base index, particular attribute и max-stack именно в
 //! исходном порядке; amount и свободное место используют unsigned wrapping.

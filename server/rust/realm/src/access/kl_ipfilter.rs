@@ -1,5 +1,4 @@
-//! IPv4-фильтр `kl_net::ip_filter`, подтверждённый `authserver.exe` и
-//! `authserver.pdb` по owner-у `kl_ipfilter.cpp`. Перенесён в Realm `access/`.
+//! IPv4-фильтр `kl_net::ip_filter` из `kl_ipfilter.cpp`.
 //!
 //! Нулевой октет правила является wildcard; allow-list принимает найденное
 //! совпадение, deny-list — его отсутствие. Правила читаются как whitespace-

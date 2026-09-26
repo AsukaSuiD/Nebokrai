@@ -1,5 +1,4 @@
-//! Переменные `CVariableList` из `variablelist.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`, перенесённые в Realm `content/`.
+//! Переменные `CVariableList` из `variablelist.cpp`.
 //!
 //! Loader очищает список и читает scalar, array и quoted string definitions.
 //! DB load заменяет current/saved значения первого byte-sensitive имени и может

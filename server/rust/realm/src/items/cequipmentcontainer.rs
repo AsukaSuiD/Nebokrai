@@ -1,5 +1,4 @@
-//! Экипировка `CEquipmentContainer` из `cequipmentcontainer.cpp/.h`,
-//! подтверждённая `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `items/`.
+//! Экипировка `CEquipmentContainer` из `cequipmentcontainer.cpp/.h`.
 //!
 //! Товар принимается только в колонку, разрешённую его base-properties;
 //! ornaments последовательно пробуют slots 6 и 7. Numeric map-order определяет

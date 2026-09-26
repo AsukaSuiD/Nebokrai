@@ -1,5 +1,7 @@
-//! Расписание городских войн `CAttackCitySys` из `attackcitysys.cpp/.h`,
-//! подтверждённое `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `activities/`.
+//! Расписание городских войн `CAttackCitySys` из `attackcitysys.cpp/.h`;
+//! источник контракта WorldServer — точная пара `Nworldserver.exe` +
+//! `WorldServer.pdb` (идентификаторы —
+//! `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Loader дважды читает weekly `#` и single `*` записи. Он сохраняет rollover,
 //! endpoint-only overlap-проверку и порядок восьми фазовых timers. Event ID до
@@ -468,7 +470,7 @@ impl CAttackCitySys {
     ///
     /// Как bool-owner, сначала очищает registry, а отсутствующий resource
     /// возвращает false caller-у. Поэтому `CGame::Init` публикует свой
-    /// fail-log и завершает init вместо прежнего ошибочного Rust success-path.
+    /// fail-log и завершает init.
     pub fn initialize<Callback: Copy>(
         &mut self,
         source: Option<&[u8]>,

@@ -1,10 +1,8 @@
 //! DB-владелец `CRsPlayerAccount` BillingServer из `rsplayeraccount.cpp`.
-//! Владелец той же семьи перенесён в Realm `billing/`.
 //!
 //! Реализованы операции `GetUserPoint`, `PutCashLog`, `BuyPlayerItem` и
 //! `BuyItemCode`. Выходной `@TranCode` остаётся `adVarChar(500)`, а принимающий
-//! буфер сохраняет исходную ёмкость 512 байт. Контракт подтверждён точной
-//! парой BillingServer EXE/PDB.
+//! буфер сохраняет исходную ёмкость 512 байт.
 //!
 //! `tiberius` заменяет ADO/COM, но не SQL владельца. Каждая публичная операция
 //! по-прежнему открывает отдельное соединение; `PutCashLog` открывает одно

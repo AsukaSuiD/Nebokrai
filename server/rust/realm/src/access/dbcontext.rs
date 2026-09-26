@@ -1,4 +1,4 @@
-//! Db-context AuthServer (очереди требований/результатов и server info), перенесённый в Realm `access/`.
+//! Db-context AuthServer: очереди требований/результатов и server info.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

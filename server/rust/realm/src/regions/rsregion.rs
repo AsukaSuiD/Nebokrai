@@ -1,6 +1,4 @@
-//! World DB-владелец `CRsRegion` из `rsregion.cpp`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесена в Realm `regions/`.
+//! World DB-владелец `CRsRegion` из `rsregion.cpp`.
 //!
 //! Save копирует весь `tagRegionParam` до проверки caller connection, затем
 //! обновляет существующий `CSL_Region` либо вставляет новую строку и записывает

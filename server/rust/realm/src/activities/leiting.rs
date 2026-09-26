@@ -1,5 +1,4 @@
-//! Суточное обновление `CLeiTing` из WorldServer, перенесённое в Realm
-//! `activities/`, подтверждённое `worldserver.exe` и `worldserver.pdb`.
+//! Суточное обновление `CLeiTing` из WorldServer.
 //!
 //! `Run` сравнивает только `tm_yday`; при новом дне parameter равен 1 внутри
 //! месяца и 2 при смене месяца. Players обходятся в unsigned map order:
@@ -54,9 +53,9 @@ pub struct PlayerLeiTingUpdateReport {
 /// Узкая codec-точка игрока для fan-out daily update. Реализация живёт у
 /// владельца игрока (старый `CPlayer`), имя совпадает с inherent-методом
 /// специально (path-call на старой стороне резолвит inherent по приоритету,
-/// рекурсии нет). Конкретная ошибка codec-стены владельца — `PlayerCodecError`
-/// из ещё не перенесённой цепочки containers/goods/shape старого `player.rs` —
-/// проходит швом как associated `Block`.
+/// рекурсии нет). Конкретная ошибка codec-стены владельца —
+/// [`crate::characters::player::PlayerCodecError`] — проходит швом как
+/// associated `Block`.
 pub trait LeiTingPlayerCodec {
     type Block: Error + 'static;
 

@@ -1,6 +1,4 @@
-//! Конфигурация объединения battle fairy из `cbattlefairyproperty.cpp/.h`,
-//! подтверждённая `worldserver.exe` и `worldserver.pdb`.
-//! Перенесена в Realm `content/`.
+//! Конфигурация объединения battle fairy из `cbattlefairyproperty.cpp/.h`.
 //!
 //! После успешного открытия loader очищает список и возвращает true даже для
 //! повреждённого хвоста. Один временный record переиспользуется: неполная

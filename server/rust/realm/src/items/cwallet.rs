@@ -1,5 +1,4 @@
-//! Однослотовый `CWallet` из `cwallet.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! Однослотовый `CWallet` из `cwallet.cpp/.h`.
 //!
 //! Пустой wallet принимает первый товар без проверки currency index; занятый
 //! складывает только gold coins. `AddFromDB` может перезаписать занятый slot.

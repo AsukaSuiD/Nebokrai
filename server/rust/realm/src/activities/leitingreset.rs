@@ -1,7 +1,5 @@
 //! DB-владелец сброса LeiTing WorldServer (`CRsPlayer::ResetAllLeitingInDB`
-//! и его worker `DbLetTingUpdate`), извлечённый из мирового адаптера
-//! `rsplayer`. Источник контракта — точная пара `Nworldserver.exe` +
-//! `WorldServer.pdb`.
+//! и его worker `DbLetTingUpdate`) из мирового адаптера `rsplayer`.
 //!
 //! Каждый вызов строит собственное TDS-соединение, а каждый `UPDATE` остаётся
 //! отдельным statement в исходном порядке без rollback, как в оригинале.

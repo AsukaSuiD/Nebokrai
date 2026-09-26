@@ -1,6 +1,5 @@
-//! DB-формы `dbqueue.h`, подтверждённые `authserver.exe` и `authserver.pdb` по
-//! владельцам `message_func.cpp`, `cgame.cpp` и `authproc.cpp`; перенесены
-//! в Realm `access/`. SQL-исполнение находится в `dbaccess/authdb/authproc.rs`.
+//! DB-формы `dbqueue.h` AuthServer. SQL-исполнение находится в
+//! [`crate::access::authproc`].
 //!
 //! Типизированные enum заменяют integer tag и `void *`, не меняя payload;
 //! account и password остаются непротоколированными байтами. `ServerInfoQueue`

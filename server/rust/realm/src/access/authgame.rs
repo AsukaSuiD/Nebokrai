@@ -1,7 +1,8 @@
-//! Runtime-owner `authserver/src/cgame.cpp/.h`, подтверждённый `authserver.exe`
-//! и `authserver.pdb`, перенесённый в Realm `access/`. Он связывает конфигурацию,
-//! DB workers и очереди, message-обработку, server-info cadence и сетевой
-//! lifecycle `Init -> MainLoop -> Release`.
+//! Runtime-owner `authserver/src/cgame.cpp/.h`; источник контракта — точная
+//! пара `authserver.exe` + `authserver.pdb` (идентификаторы —
+//! `server/rust/src/manifest/_authserver_export_manifest.toml`). Он связывает
+//! конфигурацию, DB workers и очереди, message-обработку, server-info cadence
+//! и сетевой lifecycle `Init -> MainLoop -> Release`.
 //!
 //! Tokio сохраняет отдельную accept-задачу и управляемые read/send-задачи;
 //! короткие сетевые snapshots сериализованы внутри `CGame`. Shutdown отменяет

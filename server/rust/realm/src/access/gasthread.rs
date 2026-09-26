@@ -1,4 +1,4 @@
-//! `CGasThread`, подтверждённый `loginserver.exe` и `loginserver.pdb`, перенесённый в Realm `access/`.
+//! `CGasThread` LoginServer.
 //!
 //! Worker сохраняет одну FIFO GAS, 10-миллисекундную idle cadence, один
 //! `CMyWinInet` с исторически повторно используемым receive-буфером и точную

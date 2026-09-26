@@ -1,6 +1,4 @@
-//! Городской регион `CWorldCityRegion` из `worldcityregion.cpp/.h`,
-//! подтверждённый `worldserver.exe` и `worldserver.pdb`, перенесённый в
-//! Realm `regions/`.
+//! Городской регион `CWorldCityRegion` из `worldcityregion.cpp/.h`.
 //!
 //! `.city` после успешного открытия очищает gates, читает 0x2C scalar bytes,
 //! resolved name/script и первые пять полей defence setup. Missing resource

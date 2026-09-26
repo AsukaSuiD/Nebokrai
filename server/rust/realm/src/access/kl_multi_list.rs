@@ -1,5 +1,4 @@
-//! Очередь `kl_multi_list.h`, подтверждённая `authserver.exe` и
-//! `authserver.pdb`, перенесённая в Realm `access/`. `parking_lot::{Mutex,
+//! Очередь `kl_multi_list.h` AuthServer. `parking_lot::{Mutex,
 //! Condvar}` и `VecDeque` заменяют Win32-синхронизацию и `std::list` без
 //! изменения FIFO.
 //!

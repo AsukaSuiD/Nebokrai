@@ -1,5 +1,4 @@
-//! Базовая session `CSession`, перенесённая в Realm `sessions/`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Базовая session `CSession` WorldServer.
 //!
 //! Сохраняются full signed lifecycle-флаги, unsigned wrapping tick/lifetime,
 //! list-order plug-ов, wire header `[type,min,max,remaining_lifetime]` и

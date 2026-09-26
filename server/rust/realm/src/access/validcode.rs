@@ -1,6 +1,4 @@
-//! Генератор `validcode.cpp/.h`, подтверждённый `loginserver.exe` и
-//! `loginserver.pdb`.
-//! Перенесён в Realm `access/`.
+//! Генератор `validcode.cpp/.h` LoginServer.
 //!
 //! `ValidCode.ini` остаётся whitespace-последовательностью двухбайтовых GBK-пар,
 //! параметров шума и шрифтов. `encoding_rs` преобразует glyph в Unicode, но

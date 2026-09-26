@@ -1,5 +1,7 @@
-//! Владелец runtime из `loginserver/game.cpp/.h`, перенесённый в Realm
-//! `access/`, подтверждённый `loginserver.exe` и `loginserver.pdb`. Он связывает AuthServer, маршрутизацию
+//! Владелец runtime из `loginserver/game.cpp/.h`; источник контракта — точная
+//! пара `loginserver.exe` + `loginserver.pdb` (идентификаторы —
+//! `server/rust/src/manifest/_loginserver_export_manifest.toml`). Он связывает
+//! AuthServer, маршрутизацию
 //! World/client, CD-key, фоновые запросы к БД, setup и цикл
 //! `Init -> MainLoop -> Release`.
 //!

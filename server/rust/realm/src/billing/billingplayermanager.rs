@@ -1,5 +1,4 @@
-//! Общие FIFO и worker lifecycle `appbilling/billingplayermanager.{h,cpp}`,
-//! подтверждённые `billingserver.exe` и `billingserver.pdb`.
+//! Общие FIFO и worker lifecycle `appbilling/billingplayermanager.{h,cpp}`.
 //!
 //! Три process-static очереди представлены одним owner-ом с независимыми
 //! `Mutex<VecDeque<_>>`. `mem::take` атомарно снимает полный snapshot; новые
@@ -12,7 +11,6 @@
 //! итерации, успешный DB-проход завершается паузой 1 ms; cash-log выполняется
 //! хотя бы раз и останавливается общим exit после сна. Win32 threads/events и
 //! critical sections заменены owned `JoinHandle`, atomics и `parking_lot`.
-//! Перенесено в Realm `billing/`.
 
 use std::collections::VecDeque;
 use std::error::Error;

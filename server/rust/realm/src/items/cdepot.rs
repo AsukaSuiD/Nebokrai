@@ -1,5 +1,4 @@
-//! Запираемый `CDepot` из `cdepot.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! Запираемый `CDepot` из `cdepot.cpp/.h`.
 //!
 //! Lock проверяется до Add, Find и Remove. `Clear` и `Release` сначала снимают
 //! его; унаследованный volume decoder поэтому оставляет depot разблокированным

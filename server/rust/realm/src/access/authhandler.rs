@@ -1,7 +1,5 @@
-//! Embedded `AuthHandler` из `authhandler.cpp`, перенесённый в Realm `access/`,
-//! подтверждённый `loginserver.exe`
-//! и `loginserver.pdb`. Первый listener-slot остаётся no-op; второй синхронно
-//! передаётся stateless owner-у через адаптер `CGame`.
+//! Embedded `AuthHandler` из `authhandler.cpp`. Первый listener-slot остаётся
+//! no-op; второй синхронно передаётся stateless owner-у через адаптер `CGame`.
 //!
 //! Успех ставит `TagPwdChecked` с пустым world-name и `has_matrix = false`.
 //! Ошибка сначала отправляет клиентский код; только default-код `7` затем меняет

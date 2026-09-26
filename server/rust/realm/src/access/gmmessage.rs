@@ -1,5 +1,4 @@
-//! GM-обработчик `applogin/message/gmmessage.cpp`, подтверждённый
-//! `loginserver.exe` и `loginserver.pdb`, перенесённый в Realm `access/`.
+//! GM-обработчик `applogin/message/gmmessage.cpp`.
 //!
 //! Код `0x20001` читает имя учётной записи до 256 байт и знаковый Windows
 //! `long`, затем синхронно вызывает `CRsCDKey::CDKeyBan`. Остальные коды

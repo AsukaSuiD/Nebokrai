@@ -1,5 +1,4 @@
-//! Typed-записи журнала аккаунтов LoginServer, подтверждённые точной парой
-//! `loginserver.exe` и `loginserver.pdb` (RSDS match). Оригинальный
+//! Typed-записи журнала аккаунтов LoginServer. Оригинальный
 //! `AccLogQueue::push(char*)` принимал промежуточную C-строку; SQL строится
 //! consumer-ом в исходной producer-позиции времени, поэтому записи хранят
 //! owned-поля и момент `recorded_at`.

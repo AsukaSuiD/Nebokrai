@@ -1,7 +1,6 @@
-//! DB-reader журнала increment-shop WorldServer, перенесённый в Realm `billing/`.
-//!
-//! Источник контракта `CDbIncrementLog::LoadAll` —
-//! `worldserver.exe` и `worldserver.pdb`.
+//! DB-reader журнала increment-shop WorldServer: `CDbIncrementLog::LoadAll`;
+//! источник контракта — точная пара `Nworldserver.exe` + `WorldServer.pdb`
+//! (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //! Запрос сохраняет `DATEDIFF(day, log_time, GETDATE()) <= days` и обязательный
 //! порядок `player_id, log_time`. Каждая уже прочитанная строка публиковалась в
 //! `CIncrementLog` до перехода к следующей, поэтому typed результат отдельно

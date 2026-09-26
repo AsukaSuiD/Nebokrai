@@ -1,5 +1,4 @@
-//! Контейнер товаров с ячейками из `cvolumelimitgoodscontainer.cpp/.h`,
-//! подтверждённый `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! Контейнер товаров с ячейками из `cvolumelimitgoodscontainer.cpp/.h`.
 //!
 //! Размер контейнера определяет вектор GUID-ячеек и amount-limit. `Clear`
 //! сохраняет размер и заново создаёт пустые ячейки; `Release` обнуляет всё.

@@ -1,5 +1,4 @@
-//! Узкий process-global owner суточного номера копии ShengSiShiSu,
-//! перенесённый в Realm `activities/`.
+//! Узкий process-global owner суточного номера копии ShengSiShiSu.
 //!
 //! `GetCopyNum`, `AddCopyNum`,
 //! `ClearCopyNum` и

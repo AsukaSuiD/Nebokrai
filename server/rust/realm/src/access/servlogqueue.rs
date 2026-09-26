@@ -1,5 +1,4 @@
-//! FIFO `ServLogQueue`, подтверждённый `loginserver.exe` и `loginserver.pdb`,
-//! перенесённый в Realm `access/`.
+//! FIFO `ServLogQueue` LoginServer.
 //!
 //! `push`, `pop`, `size` и `clear` работали с одним `std::deque` под общей
 //! critical section. `Mutex<VecDeque>` сохраняет порядок и единицу блокировки;

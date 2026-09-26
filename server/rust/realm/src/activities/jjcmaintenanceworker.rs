@@ -1,7 +1,5 @@
-//! Безопасный detached owner недельного DB-сброса `CRsJJcSys::JJcWeekClear`,
-//! перенесённый в Realm `activities/`.
-//!
-//! caller `CJJcSystem::ResetJJc`, `JJcWeekClear`, worker
+//! Безопасный detached owner недельного DB-сброса `CRsJJcSys::JJcWeekClear`:
+//! цепочка caller `CJJcSystem::ResetJJc` -> DB-метод `JJcWeekClear` -> worker
 //! `DbJJC`. Исходный bool отражает только результат
 //! `_beginthreadex`; BAKE и Clear исполняются позднее и не меняют этот bool.
 //! Rust отделяет DB settings от mutable World owner-а, освобождает thread

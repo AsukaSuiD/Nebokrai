@@ -1,6 +1,4 @@
-//! Фабрика `CGoodsFactory` из `cgoodsfactory.cpp/.h`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесена в Realm `content/`.
+//! Фабрика `CGoodsFactory` из `cgoodsfactory.cpp/.h`.
 //!
 //! Реестры по ID и original-name сохраняют числовой/byte-exact порядок и
 //! допускают отсутствующее значение properties. Load очищает их до разбора;
@@ -374,7 +372,7 @@ const fn upgrade_destination_gap_type(gap_type: i32) -> Option<i32> {
 /// `delta = random(v2 − v1) + v1` (`0x455f54-0x455f65`), иначе `delta = v1`
 /// (`0x455f6b`). Signed sub/add — обычный x86 wrapping. Мутация destination
 /// вынесена в `adjust_first_addon_modifier` (first-match скан с головы
-/// вектора, `_Myfirst` без проверки, clamp-формы — MATCH). Машина вызывает
+/// вектора, `_Myfirst` без проверки и clamp-формы). Машина вызывает
 /// `0x453560` с сырым signed bound, включая ноль и отрицательный; bound
 /// поступает в callback без коррекции. Результат потребляется только
 /// вызывающим `UpgradeEquipment` — и он его игнорирует.

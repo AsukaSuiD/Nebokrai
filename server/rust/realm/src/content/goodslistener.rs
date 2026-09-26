@@ -1,5 +1,4 @@
-//! Listener `CGoodsListener` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`. Перенесён в Realm `content/`.
+//! Listener `CGoodsListener` из WorldServer.
 //!
 //! Перед каждым обходом `SaveGoodsFiled` назначает byte place. Callback
 //! запрашивает позицию товара, игнорирует bool и передаёт младший byte вместе

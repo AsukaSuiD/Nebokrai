@@ -1,5 +1,4 @@
-//! `CBattleFairyContainer` из `cbattlefairycontainer.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! `CBattleFairyContainer` из `cbattlefairycontainer.cpp/.h`.
 //!
 //! Класс не добавляет полей и делегирует wire, Add/find/remove и lifecycle
 //! volume-owner-у. Ранний `Clear`, cursor и частично добавленные товары

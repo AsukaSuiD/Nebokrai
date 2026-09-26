@@ -1,10 +1,7 @@
-//! Базовый listener обхода контейнера исторического `WorldServer`,
-//! перенесённый в Realm `items/`.
+//! Базовый listener обхода контейнера `CContainer` WorldServer.
 //!
-//! Callback входит в контракт owner-а. Источник контракта — `worldserver.exe` и `worldserver.pdb`.
-//!
-//! безусловно возвращает `1` и не читает ни
-//! `CContainer*`, ни `CBaseObject*`. Rust сохраняет точный `int` callback-а,
+//! Его callback безусловно возвращает `1` и не читает ни `CContainer*`, ни
+//! `CBaseObject*`. Rust сохраняет точный `int` callback-а,
 //! но не переносит C++-иерархию и RTTI: объект представлен узким enum только
 //! с различием, которое уже наблюдает `CSeekGoodsListener` — товар либо иной
 //! `CBaseObject`. Неиспользуемый container-параметр не вводится до owner-а,

@@ -1,6 +1,5 @@
 //! Контейнер товаров с ограничением количества из
-//! `camountlimitgoodscontainer.cpp/.h`, подтверждённый `worldserver.exe` и
-//! `worldserver.pdb`, перенесённый в Realm `items/`.
+//! `camountlimitgoodscontainer.cpp/.h`.
 //!
 //! `BTreeMap<CGuid, Box<CGoods>>` заменяет MSVC hash-map и ручное владение.
 //! Порядок хранения не влияет на подтверждённые суммы и callbacks; повторная

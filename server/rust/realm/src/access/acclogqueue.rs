@@ -1,5 +1,4 @@
-//! FIFO и сигнализация `AccLogQueue`, подтверждённые `loginserver.exe` и
-//! `loginserver.pdb`.
+//! FIFO и сигнализация `AccLogQueue` LoginServer.
 //!
 //! Сохранена наблюдаемая странность: `push` сначала добавляет запись и
 //! игнорирует отказ `ReleaseSemaphore`, поэтому после 10000 накопленных

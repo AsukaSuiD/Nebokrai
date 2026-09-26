@@ -1,6 +1,4 @@
-//! Базовые свойства `CGoodsBaseProperties` из `cgoodsbaseproperties.cpp/.h`,
-//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
-//! Перенесены в Realm `content/`.
+//! Базовые свойства `CGoodsBaseProperties` из `cgoodsbaseproperties.cpp/.h`.
 //!
 //! Владелец хранит byte-exact имена и описание, цену, вес, goods/equipment type,
 //! icons и дерево addon properties. Serialize намеренно не включает description:

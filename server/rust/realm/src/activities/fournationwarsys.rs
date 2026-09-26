@@ -1,5 +1,4 @@
-//! Война четырёх стран `CFourNationWarSys` из `fournationwarsys.cpp/.h`,
-//! подтверждённая `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `activities/`.
+//! Война четырёх стран `CFourNationWarSys` из `fournationwarsys.cpp/.h`.
 //!
 //! Wire содержит signed count, 196-байтные setup records и пять `tagRECT`.
 //! Поля записываются явно little-endian; незарегистрированные timer IDs идут

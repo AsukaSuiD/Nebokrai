@@ -1,7 +1,5 @@
-//! Менеджер `authmanager.cpp/.h`, подтверждённый точной парой
-//! `loginserver.exe` и `loginserver.pdb` (RSDS match); реализация перенесена
-//! в Realm `access/`. Он хранит pending Auth-запросы и синхронные listener-
-//! callbacks; `CLOCK_BOOTTIME` сохраняет wrapping ticks `timeGetTime`.
+//! Менеджер `authmanager.cpp/.h`. Он хранит pending Auth-запросы и синхронные
+//! listener-callbacks; `CLOCK_BOOTTIME` сохраняет wrapping ticks `timeGetTime`.
 //!
 //! Точный duplicate account отбрасывается. Новая запись сначала попадает в
 //! хвост, затем отправляется `0xCF501`, после чего вызывается первый listener-

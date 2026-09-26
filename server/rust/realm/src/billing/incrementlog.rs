@@ -1,11 +1,10 @@
-//! Increment-shop журнал, подтверждённый `worldserver.exe` и
-//! `worldserver.pdb`.
-//! DB-владелец находится в [`super::dbincrementlog`].
+//! Increment-shop журнал WorldServer; DB-владелец находится в
+//! [`super::dbincrementlog`].
 //!
 //! Registry остаётся player-keyed, записи внутри игрока сохраняют insertion/
 //! DB cursor order. Страница содержит максимум `17` записей, считается от
-//! newest к oldest и внутри страницы также идёт в обратном порядке.
-//! сбрасывает страницу только при `begin > size`, поэтому
+//! newest к oldest и внутри страницы также идёт в обратном порядке. Кодировщик
+//! сбрасывает начало страницы только при `begin > size`, поэтому
 //! `begin == size` успешно кодирует нулевую страницу. Отрицательная страница
 //! становится нулевой; `page * 17` использует x86 wrapping arithmetic.
 //!

@@ -1,6 +1,4 @@
-//! Мировой регион `CWorldRegion` из `worldregion.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесён в Realm `regions/`.
+//! Мировой регион `CWorldRegion` из `worldregion.cpp/.h`.
 //!
 //! Владелец объединяет базовый `CRegion`, девять полей `tagRegionParam`, setup,
 //! NPC, monsters, weather и tax. Save snapshot копирует только параметры;
@@ -18,9 +16,8 @@
 //!
 //! `InitOwnerRelation` последовательно проверяет faction и union, очищая только
 //! несуществующие связи. Owned snapshots и стандартные коллекции заменяют
-//! object slicing, STL и ручное владение без изменения wire или порядка загрузки.
-//! Ошибки загрузки и сериализации этой семьи были вынесены сюда заранее
-//! и остаются в том же файле.
+//! object slicing, STL и ручное владение без изменения wire или порядка
+//! загрузки. Ошибки загрузки и сериализации этой семьи живут здесь же.
 
 use crate::content::countryparam::CCountryParam;
 use crate::organizations::faction::{
@@ -195,8 +192,7 @@ struct WorldRegionNpc {
 }
 
 impl WorldRegionNpc {
- /// Сохраняет исходные три padding bytes после old `bool` нулевыми,
- /// как прежняя safe Rust-реконструкция.
+ /// Сохраняет исходные три padding bytes после old `bool` нулевыми.
     fn wire_header(&self) -> [u8; 0x24] {
         let mut bytes = [0; 0x24];
         bytes[0] = u8::from(self.show_list);

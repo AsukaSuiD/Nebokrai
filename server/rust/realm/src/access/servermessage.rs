@@ -1,6 +1,5 @@
 //! World lifecycle, CD-key snapshots, telemetry и server-log обработчики
-//! `applogin/message/servermessage.cpp`, подтверждённые `loginserver.exe` и
-//! `loginserver.pdb`, перенесённые в Realm `access/`.
+//! `applogin/message/servermessage.cpp`.
 //!
 //! Connect назначает socket identity до `AddWorld`, а ack и журнал выполняются
 //! даже после отказа добавления; disconnect всегда завершает `DelWorld`.

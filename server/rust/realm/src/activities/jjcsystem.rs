@@ -1,5 +1,4 @@
-//! Арена `CJJcSystem` из WorldServer, перенесённая в Realm `activities/`,
-//! подтверждённая `worldserver.exe` и `worldserver.pdb`.
+//! Арена `CJJcSystem` из WorldServer.
 //!
 //! Signed maps сохраняют числовой порядок; available regions выбираются по
 //! возрастанию. `Run` снимает время до gate, обновляет rank timestamp до DB
@@ -1538,11 +1537,8 @@ struct JjcFightSnapshot {
 }
 
 /// World-адаптер JJC-конфигурации поверх `GlobeSetupSnapshot`: собирает
-/// исходный кортеж `jjc_run_config_fields` в [`JjcRunConfig`]. До волны C5-C
-/// трейт жил в старом пакете (`setup/globesetup.rs`) рядом с реэкспортом
-/// snapshot; с переносом `CGame` единственные потребители (`world_main_loop`,
-/// `world_dispatch`) в Realm, поэтому расширение переехало к владельцу
-/// `JjcRunConfig`.
+/// исходный кортеж `jjc_run_config_fields` в [`JjcRunConfig`]; единственные
+/// потребители — `world_main_loop` и `world_dispatch` Realm.
 pub trait GlobeSetupJjcWorldConfig {
     fn jjc_run_config_world(&self) -> JjcRunConfig;
 }

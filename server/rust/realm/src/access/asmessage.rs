@@ -1,5 +1,4 @@
-//! AuthServer/GMA-обработчики `asmessage.cpp`, подтверждённые `loginserver.exe`
-//! и `loginserver.pdb`, перенесённые в Realm `access/`.
+//! AuthServer/GMA-обработчики `asmessage.cpp`.
 //!
 //! Закрытие Auth-соединения предшествует запуску управляемого reconnect; успешная
 //! замена возвращается в ту же FIFO-позицию. `0xCF302` остаётся только

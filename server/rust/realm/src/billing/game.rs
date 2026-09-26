@@ -1,5 +1,7 @@
-//! Runtime-owner `billingserver/game.cpp`, подтверждённый `billingserver.exe`
-//! и `billingserver.pdb`. Он владеет setup, Billing/PlayerFill workers, сетью и
+//! Runtime-owner `billingserver/game.cpp`; источник контракта — точная пара
+//! `billingserver.exe` + `billingserver.pdb` (идентификаторы —
+//! `server/rust/src/manifest/_billingserver_export_manifest.toml`). Он владеет
+//! setup, Billing/PlayerFill workers, сетью и
 //! lifecycle `Init -> MainLoop -> Release`; exclusive bind заменяет GUI-проверку
 //! единственного экземпляра.
 //!
@@ -17,7 +19,6 @@
 //! пропускает уже завершённую сетевую стадию. Локальный `CGame`, process signal
 //! и managed Tokio tasks заменяют глобальный owner, Win32 events и detached I/O,
 //! сохраняя cleanup после любого результата частичного `Init`.
-//! Перенесён в Realm `billing/`.
 
 use std::collections::VecDeque;
 use std::fs;

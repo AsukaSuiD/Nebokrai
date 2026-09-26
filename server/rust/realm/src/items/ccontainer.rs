@@ -1,8 +1,8 @@
-//! Владелец базового контейнера исторического `WorldServer`, перенесённый в
-//! Realm `items/`.
+//! Владелец базового контейнера `CContainer` WorldServer.
 //!
 //! Owner реализует listener registration, virtual GUID forwarders и cleanup;
-//! источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! источник контракта — точная пара `Nworldserver.exe` + `WorldServer.pdb`
+//! (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Original vector хранит не владеющие `CContainerListener*`, отвергает null
 //! и повторный pointer, а destructor/`Release` освобождает только сам vector.

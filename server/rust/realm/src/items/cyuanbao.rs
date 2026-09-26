@@ -1,5 +1,4 @@
-//! Однослотовый `CYuanBao` из `cyuanbao.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`. Перенесён в Realm `items/`.
+//! Однослотовый `CYuanBao` из `cyuanbao.cpp/.h`.
 //!
 //! Это отдельный nominal-класс с тем же состоянием и marker-wire, что `CWallet`.
 //! Пустой slot принимает товар без проверки, занятый складывает только YuanBao;

@@ -1,9 +1,7 @@
-//! Владелец Auth MSSQL-команд из `dbaccess/authdb/authproc.cpp`,
-//! перенесённый в Realm `access/`.
+//! Владелец Auth MSSQL-команд из `dbaccess/authdb/authproc.cpp`.
 //!
 //! Файл реализует `do_auth`, `do_auth_ex`, `do_lock`, `do_write_log`,
-//! построение ответов, обработку команд и lifecycle DB workers. Контракты
-//! восстановлены по точной паре AuthServer EXE/PDB.
+//! построение ответов, обработку команд и lifecycle DB workers.
 //!
 //! `tiberius` заменяет ADO/COM и выполняет те же именованные MSSQL-процедуры.
 //! Каждый вызов по-прежнему открывает отдельное соединение; параметры account,

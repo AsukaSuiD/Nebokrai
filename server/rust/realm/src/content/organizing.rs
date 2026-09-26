@@ -1,6 +1,4 @@
-//! Общие структуры организаций из `organizing.cpp/.h`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
-//! Перенесены в Realm `content/`.
+//! Общие структуры организаций из `organizing.cpp/.h`.
 //!
 //! `tagMemInfo` сохраняет 0xF0-байтную проекцию: fixed byte-имена, level/job,
 //! title, 11 permission states, region, `tagTime` и contribution flag.

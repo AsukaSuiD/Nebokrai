@@ -1,11 +1,9 @@
-//! GameServer lifecycle-ветви `appbilling/servermessage.cpp`, подтверждённые
-//! `billingserver.exe` и `billingserver.pdb`.
+//! GameServer lifecycle-ветви `appbilling/servermessage.cpp`.
 //!
 //! Connect сначала назначает socket как map ID, затем публикует событие.
 //! Disconnect всегда проверяет переданный адрес и `port as u16`, независимо от
 //! admission-флага allow-list; signed payload сохраняется, хотя старый журнал
 //! показывал те же биты как unsigned. Nullable server-owner выражен `Option`.
-//! Перенесены в Realm `billing/`.
 
 use std::net::Ipv4Addr;
 

@@ -1,5 +1,4 @@
-//! Listener поиска товаров `CSeekGoodsListener` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! Listener поиска товаров `CSeekGoodsListener` из WorldServer.
 //!
 //! `SetTarget(null)` сохраняет прежний target; непустое имя разрешается через
 //! goods factory и не очищает уже найденные GUID. Traversal добавляет GUID

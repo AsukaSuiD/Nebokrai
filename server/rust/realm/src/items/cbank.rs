@@ -1,5 +1,4 @@
-//! Запираемый `CBank` из `cbank.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
+//! Запираемый `CBank` из `cbank.cpp/.h`.
 //!
 //! Lock проверяется до wallet Add, Find и Remove. `Clear` и `Release` сначала
 //! снимают его; wallet decoder поэтому оставляет bank разблокированным даже

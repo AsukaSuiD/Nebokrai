@@ -1,5 +1,4 @@
-//! Войны фракций `CFactionWarSys` из `factionwarsys.cpp/.h`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`, перенесённые в Realm `activities/`.
+//! Войны фракций `CFactionWarSys` из `factionwarsys.cpp/.h`.
 //!
 //! Реестр war types и список enemy pairs сохраняют числовой и insertion order.
 //! `Run` использует strict gate `elapsed > 59999`, уменьшает оставшееся время,

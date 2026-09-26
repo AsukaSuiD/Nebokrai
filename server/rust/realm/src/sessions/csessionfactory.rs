@@ -1,5 +1,6 @@
-//! Фабрика сессий `CSessionFactory` из WorldServer, перенесённая в Realm
-//! `sessions/`; подтверждённая `worldserver.exe` и `worldserver.pdb`.
+//! Фабрика сессий `CSessionFactory` из WorldServer; источник контракта —
+//! точная пара `Nworldserver.exe` (SHA-256 `F3AC454D…`) + `WorldServer.pdb`
+//! (идентификаторы — `server/rust/src/manifest/_worldserver_export_manifest.toml`).
 //!
 //! Registry хранит sessions/plugs по signed ID и создаёт `CSession`, `CTeam`,
 //! `CTeamate` и шесть plug types. `AI` удаляет null, abort-ит недоступную,
@@ -15,8 +16,6 @@
 //! В командном plug-цикле отказ любого plug-а валит unserialize всей сессии:
 //! созданная сессия уничтожается GC, а запись `team_id → session_id` в карте
 //! CGame не откатывается (зомби-запись оригинала, см. `unserialize_session`).
-//! Машинное основание таких особенностей — точная пара `Nworldserver.exe`
-//! (`F3AC454D…`) + `WorldServer.pdb` (RSDS match).
 
 use std::error::Error;
 use std::fmt;
@@ -355,7 +354,7 @@ impl CSessionFactory {
     // в машине arm `0x60008` диспетчера игнорирует результат virtual Serialize
     // (`0x4AB25A`, eax не тестируется) и отправляет `0x7FD08` даже с частично
     // заполненным буфером; Rust при plug-miss / serialize == 0 не шлёт вовсе.
-    // Отказ здесь недостижим в перенесённых потоках — GC всегда идёт с unlink,
+    // Отказ здесь недостижим: GC всегда идёт с unlink,
     // поэтому plug-список сессии не содержит висячих ID; расхождение оставлено.
     pub fn serialize_team(&mut self, session_id: i32) -> Option<Vec<u8>> {
         let (mut output, plug_ids) = {

@@ -1,7 +1,5 @@
-//! Комнаты аукциона MiscServer и GameServer.
-//! Источник контракта — точные пары MiscServer/GameServer EXE/PDB;
-//! общий goods wire согласован с WorldServer owner-ом.
-//! Владелец реализации — Realm `auction/`; внешние пакеты пользуются re-export.
+//! Комнаты аукциона MiscServer и GameServer; общий goods wire согласован с
+//! WorldServer owner-ом.
 //!
 //! Misc owner хранит основные и вторичные ordered списки, player search state,
 //! opt/del/success/back queues и выполняет `AI` в исходном порядке. Add/delete
