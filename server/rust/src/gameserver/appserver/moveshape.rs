@@ -262,19 +262,20 @@
 //! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
-// Арена состояний, её enum-каталог и codec/интервалы перенесены в Zone
-// `skills::state`; путь `super::moveshape` сохраняет прежние имена.
+// Арена состояний, её enum-каталог, codec/интервалы и DB Save/Load-кодек
+// перенесены в Zone `skills::state` (`serialization` принимает codec и арену
+// заимствованными ссылками); путь `super::moveshape` сохраняет прежние имена.
 pub(crate) use nebokrai_zone::skills::state::{
     AppliedState, StateBatch, StateData, StateKey,
 };
-use nebokrai_zone::skills::state::{CanonicalStateStorage, LegacyStateCodec, StateSerialization};
+use nebokrai_zone::skills::state::{CanonicalStateStorage, read_u32, write_u32};
 
 use std::ops::{Deref, DerefMut};
 
 use super::ai::baseai::CBaseAI;
 use super::chbystate::ChangeBodyState;
 use super::exstate::{ExtendedState, ExtendedStateKind};
-use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::LegacyWriter;
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::RideState;
@@ -315,7 +316,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory};
-use crate::gameserver::appserver::skills::statefactory::{decode_state_record_into_cache, known_state_record_offsets, known_state_record_spans};
+use crate::gameserver::appserver::skills::statefactory::{known_state_record_offsets, known_state_record_spans};
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
@@ -765,15 +766,12 @@ impl CMoveShape {
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
-        let _ = self.compact_state_slots();
-        let payload = Self::serialize_state_records_with_entries(
-            self.ex_states.to_vec(),
-            StateSerialization::Save(&mut self.state_entries),
+        nebokrai_zone::skills::state::serialize_ex_states_for_save(
+            &mut self.state_storage.ex_states,
+            &mut self.state_storage.state_entries,
             now_ms,
             timed_state_now_milliseconds,
-            true,
-        );
-        self.ex_states.with_opaque_tail(payload)
+        )
     }
 
     pub(crate) fn serialized_ex_states(
@@ -781,244 +779,34 @@ impl CMoveShape {
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
-        self.ex_states.with_opaque_tail(
-            self.serialize_state_records(now_ms, timed_state_now_milliseconds, false),
-        )
-    }
-
-    fn serialize_state_records(
-        &self,
-        now_ms: u32,
-        timed_state_now_milliseconds: impl FnMut() -> u32,
-        canonical_order: bool,
-    ) -> Vec<u8> {
-        Self::serialize_state_records_with_entries(
-            self.ex_states.to_vec(),
-            StateSerialization::ReadOnly(&self.state_entries),
+        nebokrai_zone::skills::state::serialized_ex_states(
+            &self.state_storage.ex_states,
+            &self.state_storage.state_entries,
             now_ms,
             timed_state_now_milliseconds,
-            canonical_order,
         )
-    }
-
-    fn serialize_state_records_with_entries(
-        mut payload: Vec<u8>,
-        mut states: StateSerialization<'_>,
-        now_ms: u32,
-        mut timed_state_now_milliseconds: impl FnMut() -> u32,
-        canonical_order: bool,
-    ) -> Vec<u8> {
-        let spans = known_state_record_spans(&payload);
-        let declared_count = read_u32(&payload, 0).map(|count| count as usize);
-        let parsed_end = spans.last().map_or(4, |(offset, amount)| offset + amount);
-        let mut complete = declared_count == Some(spans.len()) && parsed_end == payload.len();
-        let mut used = vec![false; spans.len()];
-        let mut ordered_records = Vec::with_capacity(spans.len());
-
-        for index in 0..states.entries().len() {
-            let Some(key) = states.entries().address(index) else { continue };
-            let Some(state) = states.entries().get(key) else {
-                complete = false;
-                continue;
-            };
-            let state_id = state.state_id();
-            let exact_span = states.entries().serialized_span(key).map(Some).or_else(|| match state {
-                StateData::ChangeBody(state) => Some(state.serialized_span()),
-                StateData::Extended(state) => Some(state.serialized_span()),
-                StateData::Undead(state) => Some(state.serialized_span()),
-                StateData::Ride(state) => Some(state.serialized_span()),
-                _ => None,
-            });
-            let record_index = if let Some(span) = exact_span {
-                span.and_then(|span| spans.iter().enumerate().position(|(index, candidate)| {
-                    !used[index] && *candidate == span
-                        && read_u32(&payload, candidate.0) == Some(state_id)
-                }))
-            } else if let StateData::Swordship(state) = state {
-                // Replace сохраняет runtime-позицию, но DB remove+append может
-                // поменять порядок повторных ID. Все поля этой записи известны.
-                let record = state.encoded();
-                spans.iter().enumerate().position(|(index, (offset, amount))| {
-                    !used[index] && payload.get(*offset..offset + amount) == Some(record.as_slice())
-                })
-            } else {
-                let runtime_count = states.entries().iter_data()
-                    .filter(|state| state.state_id() == state_id).count();
-                let wire_count = spans.iter()
-                    .filter(|(offset, _)| read_u32(&payload, *offset) == Some(state_id)).count();
-                (runtime_count == wire_count).then(|| {
-                    spans.iter().enumerate().position(|(index, (offset, _))| {
-                        !used[index] && read_u32(&payload, *offset) == Some(state_id)
-                    })
-                }).flatten()
-            };
-            if let Some(record_index) = record_index {
-                used[record_index] = true;
-            } else {
-                complete = false;
-            }
-
-            // Часы вызываются здесь, в едином порядке m_vStates. Отсутствие
-            // однозначной DB-пары запрещает запись, но не добавляет type-pass.
-            let mut commit_time: Option<(u32, fn(&mut StateData, u32))> = None;
-            let encoded = match state {
-                StateData::ChangeBody(state) => {
-                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
-                    if let Some(record_index) = record_index {
-                        state.update_serialized_record(
-                            &mut payload, spans[record_index].0, remaining,
-                        );
-                    }
-                    commit_time = Some((remaining, |data, remaining| {
-                        if let Some(state) = ChangeBodyState::as_data_mut(data) {
-                            state.commit_serialized_time(remaining);
-                        }
-                    }));
-                    None
-                }
-                StateData::Extended(state) => {
-                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
-                    if let Some(record_index) = record_index {
-                        state.update_serialized_record(&mut payload, spans[record_index].0, remaining);
-                    }
-                    commit_time = Some((remaining, |data, remaining| {
-                        if let Some(state) = ExtendedState::as_data_mut(data) {
-                            state.commit_serialized_time(remaining);
-                        }
-                    }));
-                    None
-                }
-                StateData::Undead(state) => {
-                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
-                    if let Some(record_index) = record_index {
-                        state.update_serialized_record(&mut payload, spans[record_index].0, remaining);
-                    }
-                    commit_time = Some((remaining, |data, remaining| {
-                        if let Some(state) = UndeadState::as_data_mut(data) {
-                            state.commit_serialized_time(remaining);
-                        }
-                    }));
-                    None
-                }
-                StateData::LeafCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::LeafCut3(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Kerosene(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::PoisonFog(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::MeteorArrow(state) => Some(state.encoded().to_vec()),
-                StateData::Script(state) => Some(state.encoded(&mut timed_state_now_milliseconds)),
-                StateData::ConsumableRestore(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Blind(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Seal(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Strike(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::KnockOut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::SpiderWeb(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::GodBless(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Cure(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Weak(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::SoulCollect(state) => Some(state.encoded().to_vec()),
-                StateData::SpriteBurn(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::SpiderPoison(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::DaubPoison(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BossBlueQuake(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::KnightCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BoaLock(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Rush(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Roar(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Pillar(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::RageBreak(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Hearten(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Heal(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Fury(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::TianShenXiaFan(state) => Some(state.encoded().to_vec()),
-                StateData::Wangsheng(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::DefenseShield(state) => Some(match state {
-                    DefenseShieldState::Mana(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
-                    DefenseShieldState::Machine(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
-                    DefenseShieldState::Life(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
-                    DefenseShieldState::Promotion(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
-                }),
-                StateData::LeafCut2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Rush2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Agility2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
-                StateData::Callosity(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
-                StateData::PoisonArrow(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BattleFairyAttribute(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                // Эти неизменяемые записи уже синхронизированы при установке.
-                // В частности, не обнуляем сохранённый padding tagWuXingState.
-                StateData::PersistentAgility(_) | StateData::TaiJi(_)
-                | StateData::EnlargeFullMiss(_) | StateData::EnlargeMaxHp(_)
-                | StateData::EnlargeMaxMp(_) | StateData::Origin(_)
-                | StateData::Swordship(_) | StateData::WuXing(_)
-                | StateData::AutomaticRestore(_) | StateData::Particular(_)
-                | StateData::Team(_) | StateData::Ride(_) => None,
-            };
-            if let Some((remaining, commit)) = commit_time
-                && let Some(state) = states.get_mut(key)
-            {
-                // Serialize сохраняет тот же остаток без повторного getter/clock
-                // и без сброса started/item timestamp. ReadOnly не даёт &mut.
-                commit(state, remaining);
-            }
-            if let Some(record_index) = record_index {
-                let (offset, amount) = spans[record_index];
-                if let Some(record) = encoded {
-                    if record.len() == amount {
-                        payload[offset..offset + amount].copy_from_slice(&record);
-                    } else {
-                        complete = false;
-                    }
-                }
-                ordered_records.push(record_index);
-            }
-        }
-
-        if !canonical_order || !complete || used.iter().any(|used| !used) {
-            return payload;
-        }
-        let mut ordered = Vec::with_capacity(payload.len());
-        ordered.extend_from_slice(&payload[..4]);
-        for record_index in ordered_records {
-            let (offset, amount) = spans[record_index];
-            ordered.extend_from_slice(&payload[offset..offset + amount]);
-        }
-        ordered
     }
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory, now: &mut dyn FnMut() -> u32) {
         let state_owner = self.shape.identity();
-        self.state_entries.clear();
-        let declared_count = read_u32(&states, 0);
-        let mut payload = 0u32.to_le_bytes().to_vec();
-        let mut cursor = if declared_count.is_some() { 4 } else { 0 };
-        let mut decoded_count = 0u32;
-        for _ in 0..declared_count.unwrap_or(0) {
-            let cache_offset = payload.len();
-            let Some((state, consumed)) = decode_state_record_into_cache(
-                &states, cursor, &mut payload, state_owner, skill_factory, now,
-            ) else { break };
-            let cache_size = payload.len() - cache_offset;
-            self.state_entries.append_loaded_data(state, (cache_offset, cache_size));
-            cursor += consumed;
-            decoded_count += 1;
-        }
-        write_u32(&mut payload, 0, decoded_count);
-        self.ex_states = LegacyStateCodec {
-            payload,
-            opaque_tail: states[cursor..].to_vec(),
-            opaque_count: declared_count.unwrap_or(0) - decoded_count,
-            header_was_present: declared_count.is_some(),
-        };
+        nebokrai_zone::skills::state::replace_ex_states(
+            &mut self.state_storage.ex_states,
+            &mut self.state_storage.state_entries,
+            state_owner,
+            states,
+            skill_factory,
+            now,
+        );
     }
 
     pub(crate) fn clear_persisted_runtime_state(&mut self) {
-        self.skills.clear();
-        self.ex_states.clear();
-        self.state_entries.clear();
-        self.can_fight_count = 0;
-        self.can_fight = true;
+        nebokrai_zone::skills::state::clear_persisted_runtime_state(
+            &mut self.skills,
+            &mut self.state_storage.ex_states,
+            &mut self.state_storage.state_entries,
+            &mut self.can_fight_count,
+            &mut self.can_fight,
+        );
     }
 
     pub(crate) fn ride_state(&self) -> Option<&RideState> {
@@ -2173,53 +1961,6 @@ impl CMoveShape {
             .map_err(MoveShapeCommandBlock::Position)?;
         Ok(true)
     }
-}
-
-fn update_known_state_record(payload: &mut [u8], state_id: u32, record: &[u8]) {
-    update_nth_known_state_record(payload, state_id, 0, record);
-}
-
-fn update_nth_known_state_record(payload: &mut [u8], state_id: u32, occurrence: usize, record: &[u8]) {
-    if let Some(offset) = known_state_record_offsets(payload)
-        .into_iter()
-        .filter(|offset| read_u32(payload, *offset) == Some(state_id))
-        .nth(occurrence)
-        && let Some(destination) = payload.get_mut(offset..offset + record.len())
-    {
-        destination.copy_from_slice(record);
-    }
-}
-
-fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
-    LegacyReader::at(source, offset).ok()?.read_u16().ok()
-}
-
-fn read_i16(source: &[u8], offset: usize) -> Option<i16> {
-    LegacyReader::at(source, offset).ok()?.read_i16().ok()
-}
-
-fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
-    LegacyReader::at(source, offset).ok()?.read_u32().ok()
-}
-
-fn read_i32(source: &[u8], offset: usize) -> Option<i32> {
-    LegacyReader::at(source, offset).ok()?.read_i32().ok()
-}
-
-fn write_u16(destination: &mut [u8], offset: usize, value: u16) {
-    LegacyWriter::write_u16_at(destination, offset, value).expect("проверенное поле состояния");
-}
-
-fn write_i16(destination: &mut [u8], offset: usize, value: i16) {
-    LegacyWriter::write_i16_at(destination, offset, value).expect("проверенное поле состояния");
-}
-
-fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
-    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле состояния");
-}
-
-fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
-    LegacyWriter::write_i32_at(destination, offset, value).expect("проверенное поле состояния");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
