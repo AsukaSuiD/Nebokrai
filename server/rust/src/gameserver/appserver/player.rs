@@ -434,8 +434,8 @@ use super::container::camountlimitgoodsshadowcontainer::{
 use super::container::cbank::{BankGoodsAddOutcome, CBank};
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyContainerAddOutcome,
-    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
-    BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
+    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill, BattleFairyUpgradeConsumedGem,
+    CBattleFairyContainer,
 };
 use super::container::ccontainer::ContainerListenerHandle;
 use super::container::ccontainer::PreviousContainer;
@@ -464,24 +464,22 @@ use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HEADGEAR, GAP_AGILITY_CORRECTION, GAP_ANIMA_BIND, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID,
     GAP_ATTACK_SPEED_CORRECTION, GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON,
-    GAP_BF_AGILITY_BASE, GAP_BF_AGILITY_POTENTIAL, GAP_BF_ALL_SKILL, GAP_BF_ATTACK,
-    GAP_BF_ATTACK_ADDON,
+    GAP_BF_AGILITY_BASE, GAP_BF_AGILITY_POTENTIAL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON,
     GAP_BF_ATTACK_BASE, GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST,
     GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_BASE,
     GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON,
-    GAP_BF_CUT_HURT_SCALE, GAP_BF_EARTH, GAP_BF_EARTH_SKILL, GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL,
-    GAP_BF_LEVEL, GAP_BF_LIFE_ADDON, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL,
-    GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL,
-    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON,
+    GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LEVEL, GAP_BF_LIFE_ADDON,
+    GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON,
+    GAP_BF_PULLULATERATE, GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON,
     GAP_BF_SPRITE_BASE, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON,
     GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE, GAP_BF_SPRITUALISM_POTENTIAL,
     GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_POTENTIAL,
-    GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
+    GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
     GAP_BREAK_ARMOUR, GAP_BREAK_BOUND, GAP_BREAK_ELEMENT, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
     GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
-    GAP_EQUIP_ACTIVE, GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL,
+    GAP_EQUIP_ACTIVE, GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY,
     GAP_GOODS_BIND,
     GAP_FAIRY_AGILITY, GAP_FAIRY_HP, GAP_FAIRY_STRENGTH, GAP_FAIRY_WAKAN,
     GAP_GOODS_EQUIMENT_FLASH, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY,
@@ -508,15 +506,14 @@ use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use nebokrai_zone::skills::{
-    BattleFairyResetItemChange, BattleFairyResetItemLookup, BattleFairyResetPreflight,
-    BattleFairySkillProperty,
-    EQUIPPED_SKILL_PROPERTIES, battle_fairy_reset_item, battle_fairy_reset_item_change,
-    battle_fairy_reset_preflight, battle_fairy_skill_entry, battle_fairy_reset_slot,
+    BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
     battle_fairy_skill_id, battle_fairy_skill_level,
-    select_battle_fairy_reset_skill,
-    write_battle_fairy_reset_skill,
 };
 use nebokrai_zone::skills::battlefairysummon::{BattleFairyHeadgearOperation, BattleFairyWarSoul};
+use nebokrai_zone::skills::battlefairygear::{
+    self, BattleFairyGearAddons, BattleFairyGearHost, BattleFairyMoneyChange,
+    battle_fairy_skill_property_key,
+};
 use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
@@ -538,6 +535,12 @@ use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress, append
 use nebokrai_zone::trade::auction::{
     AuctionBuyGate, AuctionListingGate, AuctionMoneyMoveCapacity, PlayerAuction,
     check_auction_money_move, legacy_ipv4_text,
+};
+use nebokrai_zone::trade::ctrader::{
+    TradeSourceContainer, trade_rollback_merge_reversible,
+};
+use nebokrai_zone::trade::currency::{
+    BalanceSetDirection, BankCurrencyContainer, GroundCurrencyContainer, balance_set_direction,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -629,11 +632,8 @@ const BASE_GODS_BATTLE_FACTION_OFFSET: usize = 0x190;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
 const CONTRIBUTION_MINIMUM: i32 = -2_000_000_000;
 const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
-const BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE: u32 = 0x0b_f71d;
 const BATTLE_FAIRY_FETCH_POWER_MESSAGE_TYPE: u32 = 0x0b_f80c;
 const BATTLE_FAIRY_CONTAINER_EXTEND_ID: u32 = 0x0c;
-const BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE: u32 = 0x0b_f71e;
-const BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING: &str = "ZHGS0022";
 const SKILL_EFFECT_MESSAGE_TYPE: u32 = 0x0b_fe01;
 const SKILL_REJECT_REASON: u32 = 0;
 const SKILL_REJECT_WAR_SOUL_REASON: u32 = 4;
@@ -654,16 +654,6 @@ pub(crate) struct BattleFairyObjectMove {
     pub(crate) position: u32,
     pub(crate) amount: u32,
     pub(crate) old_client_payload: Option<Vec<u8>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairySkillAdded {
-    pub(crate) message_type: u32,
-    pub(crate) player_id: i32,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_level: i32,
-    pub(crate) skill_type: u32,
-    pub(crate) skill_name: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -822,18 +812,42 @@ pub(crate) struct PlayerEquipmentAddReport {
     pub(crate) outcome: EquipmentAddOutcome,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyEquipmentMutationOutcome {
-    Added(BattleFairyContainerAddOutcome),
-    Removed(VolumeGoodsRemoveOutcome),
-    MissingGoods,
-}
+// Порция №7b: типы эффектов/исходов BF gear/property/upgrade/reset перенесены
+// буквально в Zone `skills/battlefairygear.rs`; zone-перечисления
+// параметризованы связанными типами hub-шва, подстановка прежних типов —
+// alias-ами без изменения имён/полей (потребители без правок). Report-
+// структуры с журнальным полем остаются здесь, потому что журнал — прежний
+// `GameEffectJournal`.
+pub(crate) type BattleFairyEquipmentMutationOutcome =
+    battlefairygear::BattleFairyEquipmentMutationOutcome<
+        BattleFairyContainerAddOutcome,
+        VolumeGoodsRemoveOutcome,
+    >;
+pub(crate) type BattleFairyEquipmentMutationEffect =
+    battlefairygear::BattleFairyEquipmentMutationEffect<BattleFairyDefaultGoodsUpdate>;
+pub(crate) type BattleFairyPotentialAllocationEffect =
+    battlefairygear::BattleFairyPotentialAllocationEffect<BattleFairyDefaultGoodsUpdate>;
+pub(crate) type BattleFairyUpgradeEffect = battlefairygear::BattleFairyUpgradeEffect<
+    BattleFairyDefaultGoodsUpdate,
+    CurrencyDecreaseOutcome,
+    BattleFairyUpgradeConsumedGem,
+    VolumeGoodsRemoveOutcome,
+>;
+pub(crate) type BattleFairyPotentialResetEffect = battlefairygear::BattleFairyPotentialResetEffect<
+    BattleFairyDefaultGoodsUpdate,
+    VolumeGoodsRemoveOutcome,
+>;
+pub(crate) type BattleFairySkillResetEffect = battlefairygear::BattleFairySkillResetEffect<
+    BattleFairyDefaultGoodsUpdate,
+    VolumeGoodsRemoveOutcome,
+>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyEquipmentMutationEffect {
-    PropertiesChanged { player_id: i32 },
-    BattleFairyUpdated(BattleFairyDefaultGoodsUpdate),
-}
+pub(crate) use nebokrai_zone::skills::battlefairygear::{
+    BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE, BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
+    BattleFairyPotentialAllocationOutcome, BattleFairyPotentialResetOutcome, BattleFairySkillAdded,
+    BattleFairySkillRemoved, BattleFairySkillResetOutcome, BattleFairyUpgradeGoodsSnapshot,
+    BattleFairyUpgradeLogGates, BattleFairyUpgradeOutcome, BattleFairyUpgradePlayerSnapshot,
+};
 
 #[must_use = "equipment report сохраняет container ownership и ранние property effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -845,121 +859,12 @@ pub(crate) struct BattleFairyEquipmentMutationReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialAllocationOutcome {
-    MissingHeadgear,
-    InvalidHeadgear,
-    AggregateInsufficient,
-    Processed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialAllocationEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-    },
-    PropertiesChanged {
-        player_id: i32,
-    },
-    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
-}
-
 #[must_use = "allocation report сохраняет ordered player и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialAllocationReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyPotentialAllocationOutcome,
     pub(crate) effects: GameEffectJournal,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BattleFairyUpgradeLogGates {
-    pub(crate) success: bool,
-    pub(crate) failure: bool,
-    pub(crate) lost_target: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyUpgradeOutcome {
-    MissingRegion,
-    InsufficientMoney,
-    InvalidEquipment,
-    MissingBaseGem,
-    GemLevelMismatch,
-    MaximumLevel,
-    Succeeded,
-    FailedKept,
-    FailedDowngraded,
-    FailedReset,
-    FailedDestroyed,
-    ConsumptionStopped,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyUpgradeGoodsSnapshot {
-    pub(crate) identity: super::shape::ShapeIdentity,
-    pub(crate) name: Vec<u8>,
-    pub(crate) price: u32,
-    pub(crate) amount: u32,
-}
-
-impl BattleFairyUpgradeGoodsSnapshot {
-    fn capture(goods: &CGoods) -> Self {
-        Self {
-            identity: goods.identity(),
-            name: goods.name().to_vec(),
-            price: goods.price(),
-            amount: goods.amount(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyUpgradePlayerSnapshot {
-    pub(crate) pk_count: u16,
-    pub(crate) money: u32,
-    pub(crate) depot_money: u32,
-    pub(crate) region_id: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) client_ip: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyUpgradeEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-        format_value: Option<u32>,
-    },
-    MoneyChanged {
-        player_id: i32,
-        previous: u32,
-        current: u32,
-        outcome: CurrencyDecreaseOutcome,
-    },
-    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
-    GemConsumed {
-        player_id: i32,
-        consumed: BattleFairyUpgradeConsumedGem,
-    },
-    TargetDeleted {
-        player_id: i32,
-        goods: BattleFairyUpgradeGoodsSnapshot,
-        position: u32,
-        removal: VolumeGoodsRemoveOutcome,
-    },
-    Audit {
-        message_type: u32,
-        event: u8,
-        player_id: i32,
-        player: BattleFairyUpgradePlayerSnapshot,
-        target: BattleFairyUpgradeGoodsSnapshot,
-        gems: [Option<BattleFairyUpgradeGoodsSnapshot>; 4],
-    },
 }
 
 #[must_use = "upgrade report содержит wallet, ownership и network effects"]
@@ -970,84 +875,12 @@ pub(crate) struct BattleFairyUpgradeReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialResetOutcome {
-    FeatureDisabled,
-    MissingHeadgear,
-    InvalidHeadgear,
-    MissingResetItem,
-    Reset,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialResetEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-    },
-    PacketItemConsumed {
-        player_id: i32,
-        goods: super::shape::ShapeIdentity,
-        position: Option<u32>,
-        previous_amount: u32,
-        remaining_amount: u32,
-        consumed: bool,
-        removal: Option<VolumeGoodsRemoveOutcome>,
-    },
-    PropertiesChanged {
-        player_id: i32,
-    },
-    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
-}
-
 #[must_use = "reset report содержит packet ownership и player/network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialResetReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyPotentialResetOutcome,
     pub(crate) effects: GameEffectJournal,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillResetOutcome {
-    FeatureDisabled,
-    MissingHeadgear,
-    InvalidHeadgear,
-    MissingResetItem,
-    InvalidPosition,
-    SelectedSkillUnavailable,
-    Reset,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairySkillRemoved {
-    pub(crate) message_type: u32,
-    pub(crate) player_id: i32,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_name: Option<Vec<u8>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillResetEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-    },
-    PacketItemConsumed {
-        player_id: i32,
-        goods: super::shape::ShapeIdentity,
-        position: Option<u32>,
-        previous_amount: u32,
-        remaining_amount: u32,
-        consumed: bool,
-        removal: Option<VolumeGoodsRemoveOutcome>,
-    },
-    SkillRemoved(BattleFairySkillRemoved),
-    SkillAdded(BattleFairySkillAdded),
-    SelectedSkillLearned(BattleFairySkillAdded),
-    GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
 #[must_use = "skill reset report содержит packet, skill-state и network effects"]
@@ -1059,45 +892,10 @@ pub(crate) struct BattleFairySkillResetReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-
 pub(crate) use nebokrai_zone::skills::{
     BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, SkillTarget, SkillTargetForm,
 };
-
-
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct BattleFairyGearAddons {
-    attack: i32,
-    sprite: i32,
-    strength: i32,
-    brave: i32,
-    agility: i32,
-    spiritualism: i32,
-    blast: i32,
-    cut_hurt: i32,
-    life: i32,
-    mana: i32,
-}
-
-impl BattleFairyGearAddons {
-    fn read(goods: &CGoods, factory: &CGoodsFactory) -> Self {
-        let value = |property_type| goods.addon_property_value(factory, property_type, 1);
-        Self {
-            attack: value(GAP_BF_ATTACK_ADDON),
-            sprite: value(GAP_BF_SPRITE_ADDON),
-            strength: value(GAP_BF_STRENGH_ADDON),
-            brave: value(GAP_BF_ABRAVE_ADDON),
-            agility: value(GAP_BF_AGILITY_ADDON),
-            spiritualism: value(GAP_BF_SPRITUALISE_ADDON),
-            blast: value(GAP_BF_BLAST_ADDON),
-            cut_hurt: value(GAP_BF_CUT_HURT_ADDON),
-            life: value(GAP_BF_LIFE_ADDON),
-            mana: value(GAP_BF_MP_ADDON),
-        }
-    }
-}
 
 bitflags! {
     /// Подтверждённые LeiTing/FY-флаги в `u32` legacy-формата игрока.
@@ -7603,6 +7401,10 @@ impl CPlayer {
     /// Обратная половина `CTrader::RollBack`: отменяет уже выполненный
     /// contrary packet add, включая direct stack merge, и возвращает client
     /// consumption fact. Сам исходный goods caller хранит отдельно до commit.
+    /// Машинный rollback commit `0x1B9470` обращает только ПОЛНЫЙ merge
+    /// (`merged amount == original`); неслитый частичный merge не обращается —
+    /// guard принадлежит Zone `trade/ctrader` (`trade_rollback_merge_reversible`,
+    /// risk-note: как release-форма оригинала, возврат `None`).
     pub(crate) fn rollback_traded_packet_addition(
         &mut self,
         addition: &CiQingPacketAddition,
@@ -7634,7 +7436,7 @@ impl CPlayer {
                     target,
                     amount,
                 },
-            ) if *amount == original_amount => {
+            ) if trade_rollback_merge_reversible(*amount, original_amount) => {
                 let goods = self.packet.get_goods_mut(position)?;
                 if goods.identity() != *target || goods.amount() < original_amount {
                     return None;
@@ -8283,12 +8085,14 @@ impl CPlayer {
         self.money
     }
 
+    /// Маршрут живых контейнеров перевода банковской валюты; таблица
+    /// extend-id принадлежит Zone `trade/currency`.
     pub(crate) fn bank_transfer_currency_goods(&self, extend_id: i32) -> Option<&CGoods> {
-        match extend_id {
-            4 => self.wallet.get_goods(0),
-            8 => self.bank.get_goods(0),
-            15 => self.auction_wallet.get_goods(0),
-            _ => None,
+        match BankCurrencyContainer::from_extend_id(extend_id) {
+            Some(BankCurrencyContainer::Wallet) => self.wallet.get_goods(0),
+            Some(BankCurrencyContainer::Bank) => self.bank.get_goods(0),
+            Some(BankCurrencyContainer::AuctionWallet) => self.auction_wallet.get_goods(0),
+            None => None,
         }
     }
 
@@ -8302,19 +8106,20 @@ impl CPlayer {
     where
         Create: FnMut(u32) -> Option<CGoods>,
     {
-        let taken = match extend_id {
-            4 => self
+        let container = BankCurrencyContainer::from_extend_id(extend_id);
+        let taken = match container {
+            Some(BankCurrencyContainer::Wallet) => self
                 .wallet
                 .take_goods(0, requested, factory, &mut create_goods),
-            8 => self
+            Some(BankCurrencyContainer::Bank) => self
                 .bank
                 .take_goods(0, requested, factory, &mut create_goods),
-            15 => self
+            Some(BankCurrencyContainer::AuctionWallet) => self
                 .auction_wallet
                 .take_goods(0, requested, factory, &mut create_goods),
-            _ => None,
+            None => None,
         };
-        if extend_id == 4 {
+        if matches!(container, Some(BankCurrencyContainer::Wallet)) {
             self.money = self.wallet.currency_amount();
         }
         taken
@@ -8330,38 +8135,39 @@ impl CPlayer {
             self.current_progress,
             PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
         );
-        let outcome = match extend_id {
-            4 => PlayerBankCurrencyAddOutcome::Wallet(self.wallet.add_goods(
-                0,
-                incoming,
-                factory,
-                owner_progress_allows,
-            )),
-            8 => PlayerBankCurrencyAddOutcome::Bank(self.bank.add_goods(
-                0,
-                incoming,
-                factory,
-                owner_progress_allows,
-            )),
-            15 => PlayerBankCurrencyAddOutcome::AuctionWallet(self.auction_wallet.add_goods(
-                0,
-                incoming,
-                factory,
-                owner_progress_allows,
-            )),
-            _ => return None,
+        let container = BankCurrencyContainer::from_extend_id(extend_id);
+        let outcome = match container {
+            Some(BankCurrencyContainer::Wallet) => PlayerBankCurrencyAddOutcome::Wallet(
+                self.wallet
+                    .add_goods(0, incoming, factory, owner_progress_allows),
+            ),
+            Some(BankCurrencyContainer::Bank) => PlayerBankCurrencyAddOutcome::Bank(
+                self.bank
+                    .add_goods(0, incoming, factory, owner_progress_allows),
+            ),
+            Some(BankCurrencyContainer::AuctionWallet) => {
+                PlayerBankCurrencyAddOutcome::AuctionWallet(self.auction_wallet.add_goods(
+                    0,
+                    incoming,
+                    factory,
+                    owner_progress_allows,
+                ))
+            }
+            None => return None,
         };
-        if extend_id == 4 {
+        if matches!(container, Some(BankCurrencyContainer::Wallet)) {
             self.money = self.wallet.currency_amount();
         }
         Some(outcome)
     }
 
+    /// Маршрут живых контейнеров наземной валюты; таблица extend-id
+    /// принадлежит Zone `trade/currency`.
     pub(crate) fn ground_currency_goods(&self, extend_id: i32) -> Option<&CGoods> {
-        match extend_id {
-            4 => self.wallet.get_goods(0),
-            5 => self.yuan_bao.get_goods(0),
-            _ => None,
+        match GroundCurrencyContainer::from_extend_id(extend_id) {
+            Some(GroundCurrencyContainer::Wallet) => self.wallet.get_goods(0),
+            Some(GroundCurrencyContainer::YuanBao) => self.yuan_bao.get_goods(0),
+            None => None,
         }
     }
 
@@ -8375,16 +8181,17 @@ impl CPlayer {
     where
         Create: FnMut(u32) -> Option<CGoods>,
     {
-        let taken = match extend_id {
-            4 => self
+        let container = GroundCurrencyContainer::from_extend_id(extend_id);
+        let taken = match container {
+            Some(GroundCurrencyContainer::Wallet) => self
                 .wallet
                 .take_goods(0, requested, factory, &mut create_goods),
-            5 => self
+            Some(GroundCurrencyContainer::YuanBao) => self
                 .yuan_bao
                 .take_goods(0, requested, factory, &mut create_goods),
-            _ => None,
+            None => None,
         };
-        if extend_id == 4 {
+        if matches!(container, Some(GroundCurrencyContainer::Wallet)) {
             self.money = self.wallet.currency_amount();
         }
         taken
@@ -8397,16 +8204,17 @@ impl CPlayer {
         factory: &CGoodsFactory,
         owner_progress_allows: bool,
     ) -> Option<CurrencyGoodsAddOutcome> {
-        let outcome = match extend_id {
-            4 => self
+        let container = GroundCurrencyContainer::from_extend_id(extend_id);
+        let outcome = match container {
+            Some(GroundCurrencyContainer::Wallet) => self
                 .wallet
                 .add_goods(0, incoming, factory, owner_progress_allows),
-            5 => self
+            Some(GroundCurrencyContainer::YuanBao) => self
                 .yuan_bao
                 .add_goods(0, incoming, factory, owner_progress_allows),
-            _ => return None,
+            None => return None,
         };
-        if extend_id == 4 {
+        if matches!(container, Some(GroundCurrencyContainer::Wallet)) {
             self.money = self.wallet.currency_amount();
         }
         Some(outcome)
@@ -8448,7 +8256,8 @@ impl CPlayer {
     }
 
     /// State-owner exact `SetYuanBao`: однослотовый currency container
-    /// сохраняет create/increase/decrease/delete outcome для сетевого caller-а.
+    /// сохраняет create/increase/decrease/delete outcome для сетевого
+    /// caller-а; развилка направления принадлежит Zone `trade/currency`.
     pub(crate) fn set_yuan_bao(
         &mut self,
         current: u32,
@@ -8456,20 +8265,19 @@ impl CPlayer {
         created_currency: Vec<CGoods>,
     ) -> PlayerYuanBaoChange {
         let previous = self.yuan_bao.currency_amount();
-        let outcome = if previous < current {
-            let mut created_currency = Some(created_currency);
-            PlayerYuanBaoChangeOutcome::Increased(self.yuan_bao.increase_currency(
-                current.wrapping_sub(previous),
-                factory,
-                move |_, _| created_currency.take().unwrap_or_default(),
-            ))
-        } else if current < previous {
-            PlayerYuanBaoChangeOutcome::Decreased(
-                self.yuan_bao
-                    .decrease_currency(previous.wrapping_sub(current), factory),
-            )
-        } else {
-            PlayerYuanBaoChangeOutcome::Unchanged
+        let outcome = match balance_set_direction(previous, current) {
+            BalanceSetDirection::Increase(delta) => {
+                let mut created_currency = Some(created_currency);
+                PlayerYuanBaoChangeOutcome::Increased(self.yuan_bao.increase_currency(
+                    delta,
+                    factory,
+                    move |_, _| created_currency.take().unwrap_or_default(),
+                ))
+            }
+            BalanceSetDirection::Decrease(delta) => PlayerYuanBaoChangeOutcome::Decreased(
+                self.yuan_bao.decrease_currency(delta, factory),
+            ),
+            BalanceSetDirection::Unchanged => PlayerYuanBaoChangeOutcome::Unchanged,
         };
         PlayerYuanBaoChange {
             player_id: self.player_id(),
@@ -8765,18 +8573,20 @@ impl CPlayer {
         &mut self.depot
     }
 
+    /// Маршрут живых контейнеров источника предложения обмена; таблица
+    /// extend-id принадлежит Zone `trade/ctrader`.
     pub(crate) fn trade_source_goods(
         &self,
         extend_id: i32,
         position: u32,
         goods_id: CGuid,
     ) -> Option<&CGoods> {
-        let goods = match extend_id {
-            1 => self.packet.get_goods(position),
-            2 => self.equipment.get_goods(position),
-            4 => self.wallet.get_goods(position),
-            5 => self.yuan_bao.get_goods(position),
-            _ => None,
+        let goods = match TradeSourceContainer::from_extend_id(extend_id) {
+            Some(TradeSourceContainer::Packet) => self.packet.get_goods(position),
+            Some(TradeSourceContainer::Equipment) => self.equipment.get_goods(position),
+            Some(TradeSourceContainer::Wallet) => self.wallet.get_goods(position),
+            Some(TradeSourceContainer::YuanBao) => self.yuan_bao.get_goods(position),
+            None => None,
         }?;
         (goods.identity().ex_id == goods_id).then_some(goods)
     }
@@ -9310,7 +9120,8 @@ impl CPlayer {
     }
 
     /// State-часть exact `SetAuctionMoney`; аргумент является новым абсолютным
-    /// балансом, а caller создаёт недостающий MONEY и публикует extend-id 15.
+    /// балансом, а caller создаёт недостающий MONEY и публикует extend-id 15;
+    /// развилка направления принадлежит Zone `trade/currency`.
     pub(crate) fn set_auction_money(
         &mut self,
         current: u32,
@@ -9318,22 +9129,21 @@ impl CPlayer {
         created_currency: Vec<CGoods>,
     ) -> PlayerAuctionMoneyChange {
         let previous = self.auction_wallet.currency_amount();
-        let outcome = if previous < current {
-            let mut created_currency = Some(created_currency);
-            PlayerAuctionMoneyChangeOutcome::Increased(
-                self.auction_wallet.increase_currency(
-                    current.wrapping_sub(previous),
-                    factory,
-                    move |_, _| created_currency.take().unwrap_or_default(),
-                ),
-            )
-        } else if current < previous {
-            PlayerAuctionMoneyChangeOutcome::Decreased(
-                self.auction_wallet
-                    .decrease_currency(previous.wrapping_sub(current), factory),
-            )
-        } else {
-            PlayerAuctionMoneyChangeOutcome::Unchanged
+        let outcome = match balance_set_direction(previous, current) {
+            BalanceSetDirection::Increase(delta) => {
+                let mut created_currency = Some(created_currency);
+                PlayerAuctionMoneyChangeOutcome::Increased(
+                    self.auction_wallet.increase_currency(
+                        delta,
+                        factory,
+                        move |_, _| created_currency.take().unwrap_or_default(),
+                    ),
+                )
+            }
+            BalanceSetDirection::Decrease(delta) => PlayerAuctionMoneyChangeOutcome::Decreased(
+                self.auction_wallet.decrease_currency(delta, factory),
+            ),
+            BalanceSetDirection::Unchanged => PlayerAuctionMoneyChangeOutcome::Unchanged,
         };
         PlayerAuctionMoneyChange {
             player_id: self.player_id(),
@@ -10720,114 +10530,10 @@ impl CPlayer {
         )
     }
 
-    fn apply_battle_fairy_property(
-        &mut self,
-        cell: BattleFairyCell,
-        addons: BattleFairyGearAddons,
-        delta: i32,
-        factory: &CGoodsFactory,
-        coefficients: GlobePlayerPropertyCoefficients,
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> Option<BattleFairyDefaultGoodsUpdate> {
-        if delta == 0 || !is_battle_fairy_property_cell(cell) {
-            return None;
-        }
-        let occupation = usize::from(self.base_properties.occupation).min(2);
-        let player_id = self.player_id();
-        let battle_fairy = self.equipment.get_goods_mut(10)?;
-        if battle_fairy.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            return None;
-        }
-
-        for (source, target) in [
-            (addons.attack, GAP_BF_ATTACK),
-            (addons.sprite, GAP_BF_SPRITE),
-            (addons.strength, GAP_BF_STRENGH),
-            (addons.brave, GAP_BF_BRAVE),
-            (addons.agility, GAP_BF_AGILITY),
-            (addons.spiritualism, GAP_BF_SPRITUALISM),
-            (addons.blast, GAP_BF_BLAST),
-            (addons.cut_hurt, GAP_BF_CUT_HURT_SCALE),
-        ] {
-            add_battle_fairy_addon(battle_fairy, factory, target, source.wrapping_mul(delta));
-        }
-        add_battle_fairy_addon(
-            battle_fairy,
-            factory,
-            GAP_BF_MAX_HP,
-            addons
-                .strength
-                .wrapping_add(addons.life)
-                .wrapping_mul(delta),
-        );
-        add_battle_fairy_addon(
-            battle_fairy,
-            factory,
-            GAP_BF_MAX_MP,
-            addons
-                .spiritualism
-                .wrapping_add(addons.mana)
-                .wrapping_mul(delta),
-        );
-        clamp_battle_fairy_current(battle_fairy, factory, GAP_BF_HP, GAP_BF_MAX_HP);
-        clamp_battle_fairy_current(battle_fairy, factory, GAP_BF_MP, GAP_BF_MAX_MP);
-
-        let strength = f64::from(addons.strength) * f64::from(delta) * 0.00001;
-        let brave = f64::from(addons.brave) * f64::from(delta) * 0.00001;
-        let agility = f64::from(addons.agility) * f64::from(delta) * 0.00001;
-        let spiritualism = f64::from(addons.spiritualism) * f64::from(delta) * 0.00001;
-        let combat = &mut self.combat_properties;
-        combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, strength);
-        combat.strength = add_battle_fairy_u32(combat.strength, brave);
-        combat.maximum_attack = add_battle_fairy_u32(
-            combat.maximum_attack,
-            brave * f64::from(coefficients.str_to_max_attack[occupation]),
-        );
-        combat.burden = add_battle_fairy_u16(
-            combat.burden,
-            brave * f64::from(coefficients.str_to_burden[occupation]),
-        );
-        combat.dexterity = add_battle_fairy_u32(combat.dexterity, agility);
-        combat.minimum_attack = add_battle_fairy_u32(
-            combat.minimum_attack,
-            agility * f64::from(coefficients.dex_to_min_attack[occupation]),
-        );
-        combat.reank = add_battle_fairy_u16(
-            combat.reank,
-            agility * f64::from(coefficients.dex_to_stiff[occupation]),
-        );
-        combat.intelligence = add_battle_fairy_u32(combat.intelligence, spiritualism);
-        combat.element_modify = add_battle_fairy_i32(
-            combat.element_modify,
-            spiritualism * f64::from(coefficients.int_to_element[occupation]),
-        );
-        combat.maximum_mp = add_battle_fairy_u32(
-            combat.maximum_mp,
-            spiritualism * f64::from(coefficients.int_to_max_mp[occupation]),
-        );
-        combat.element_resistance = add_battle_fairy_u32(
-            combat.element_resistance,
-            spiritualism * f64::from(coefficients.int_to_resistant[occupation]),
-        );
-
-        // Подтверждённый RU quirk: четыре основных значения применяются
-        // повторно после производных коэффициентов.
-        combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, strength);
-        combat.strength = add_battle_fairy_u32(combat.strength, brave);
-        combat.intelligence = add_battle_fairy_u32(combat.intelligence, spiritualism);
-        combat.dexterity = add_battle_fairy_u32(combat.dexterity, agility);
-
-        Some(BattleFairyDefaultGoodsUpdate {
-            message_type: 0x0b_f918,
-            player_id,
-            goods: battle_fairy.identity(),
-            old_client_payload: encode_old_client(battle_fairy),
-        })
-    }
-
     /// Exact positional `CBattleFairyContainer::Add`: для gear-ячеек
     /// `BFPropertyAdd(+1)` является ранним partial effect и сохраняется даже
-    /// если base storage затем отвергнет товар.
+    /// если base storage затем отвергнет товар. Правило перенесено буквально
+    /// в Zone `skills/battlefairygear.rs` (порция №7b).
     pub(crate) fn add_battle_fairy_goods(
         &mut self,
         cell: BattleFairyCell,
@@ -10838,44 +10544,37 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyEquipmentMutationReport {
         let player_id = self.player_id();
-        let early_property = incoming.as_ref().and_then(|goods| {
-            self.battle_fairy_container
-                .property_effect_before_add(cell, goods, factory)
-                .map(|effect| (effect, BattleFairyGearAddons::read(goods, factory)))
-        });
-        let mut property_applied = false;
-        let mut effects = Vec::new();
-        if let Some((BattleFairyPropertyAddEffect { cell, delta }, addons)) = early_property
-            && let Some(update) = self.apply_battle_fairy_property(
-                cell,
-                addons,
-                delta,
+        let occupation = self.base_properties.occupation;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
                 factory,
-                coefficients,
+                skill_factory: None,
                 encode_old_client,
+            };
+            battlefairygear::add_battle_fairy_goods(
+                &mut adapter,
+                player_id,
+                cell.position(),
+                incoming,
+                occupation,
+                coefficients,
+                owner_progress_allows,
             )
-        {
-            property_applied = true;
-            effects.push(BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id });
-            effects.push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
-                update,
-            ));
-        }
-        let outcome =
-            self.battle_fairy_container
-                .add_at(cell, incoming, factory, owner_progress_allows);
+        };
         BattleFairyEquipmentMutationReport {
             player_id,
             cell: Some(cell),
-            property_applied,
-            outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
-            effects: effects.into_iter().collect(),
+            property_applied: resolution.property_applied,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
     }
 
     /// Безпозиционный overload сначала читает catalog BF equip-place. Только
     /// валидная колонка достигает player property-tail; все typed reject-и
-    /// остаются у container owner-а без выдуманного размещения.
+    /// остаются у container owner-а без выдуманного размещения. Правило
+    /// перенесено буквально в Zone `skills/battlefairygear.rs` (порция №7b).
     pub(crate) fn add_battle_fairy_goods_auto(
         &mut self,
         incoming: &mut Option<CGoods>,
@@ -10884,37 +10583,39 @@ impl CPlayer {
         owner_progress_allows: bool,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyEquipmentMutationReport {
-        let cell = incoming
-            .as_ref()
-            .and_then(|goods| factory.query_goods_base_properties(goods.base_properties_index()))
-            .and_then(|properties| properties.battle_fairy_equip_place())
-            .and_then(|position| BattleFairyCell::from_position(position as u32));
-        if let Some(cell) = cell {
-            return self.add_battle_fairy_goods(
-                cell,
-                incoming,
+        let player_id = self.player_id();
+        let occupation = self.base_properties.occupation;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
                 factory,
+                skill_factory: None,
+                encode_old_client,
+            };
+            battlefairygear::add_battle_fairy_goods_auto(
+                &mut adapter,
+                player_id,
+                incoming,
+                occupation,
                 coefficients,
                 owner_progress_allows,
-                encode_old_client,
-            );
-        }
-        let player_id = self.player_id();
-        let outcome = self
-            .battle_fairy_container
-            .add(incoming, factory, owner_progress_allows);
+            )
+        };
         BattleFairyEquipmentMutationReport {
             player_id,
-            cell: None,
-            property_applied: false,
-            outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
-            effects: GameEffectJournal::default(),
+            cell: resolution
+                .cell_position
+                .and_then(BattleFairyCell::from_position),
+            property_applied: resolution.property_applied,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
     }
 
     /// Exact `Remove`: base container отделяет goods до `BFPropertyAdd(-1)`;
     /// успешный property path сериализует battle fairy дважды — один раз в
-    /// `BFPropertyAdd`, затем ещё раз в override `Remove`.
+    /// `BFPropertyAdd`, затем ещё раз в override `Remove`. Правило перенесено
+    /// буквально в Zone `skills/battlefairygear.rs` (порция №7b).
     pub(crate) fn remove_battle_fairy_goods(
         &mut self,
         ex_id: CGuid,
@@ -10923,117 +10624,78 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyEquipmentMutationReport {
         let player_id = self.player_id();
-        let position = self
-            .battle_fairy_container
-            .base()
-            .query_goods_position(ex_id);
-        let cell = position.and_then(BattleFairyCell::from_position);
-        let addons = position
-            .and_then(|position| self.battle_fairy_container.base().get_goods(position))
-            .map(|goods| BattleFairyGearAddons::read(goods, factory));
-        let Some(outcome) = self.battle_fairy_container.base_mut().remove_goods(ex_id) else {
-            return BattleFairyEquipmentMutationReport {
-                player_id,
-                cell,
-                property_applied: false,
-                outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
-                effects: GameEffectJournal::default(),
-            };
-        };
-        let mut report = BattleFairyEquipmentMutationReport {
-            player_id,
-            cell,
-            property_applied: false,
-            outcome: BattleFairyEquipmentMutationOutcome::Removed(outcome),
-            effects: GameEffectJournal::default(),
-        };
-        if let (Some(cell), Some(addons)) = (cell, addons)
-            && let Some(first_update) = self.apply_battle_fairy_property(
-                cell,
-                addons,
-                -1,
+        let occupation = self.base_properties.occupation;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
                 factory,
-                coefficients,
+                skill_factory: None,
                 encode_old_client,
+            };
+            battlefairygear::remove_battle_fairy_goods(
+                &mut adapter,
+                player_id,
+                ex_id,
+                occupation,
+                coefficients,
             )
-        {
-            report.property_applied = true;
-            report
-                .effects
-                .push(BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id });
-            report
-                .effects
-                .push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
-                    first_update,
-                ));
-            if let Some(battle_fairy) = self.war_soul_goods(factory) {
-                report
-                    .effects
-                    .push(BattleFairyEquipmentMutationEffect::BattleFairyUpdated(
-                        BattleFairyDefaultGoodsUpdate {
-                            message_type: 0x0b_f918,
-                            player_id,
-                            goods: battle_fairy.identity(),
-                            old_client_payload: encode_old_client(battle_fairy),
-                        },
-                    ));
-            }
+        };
+        BattleFairyEquipmentMutationReport {
+            player_id,
+            cell: resolution
+                .cell_position
+                .and_then(BattleFairyCell::from_position),
+            property_applied: resolution.property_applied,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
-        report
     }
 
     /// Positional `Remove(position, amount)` использует полный player-tail
     /// для whole goods. Partial stack remove относится к material/gem cells и
     /// не запускает `BFPropertyAdd(-1)`, пока исходный slot остаётся занят.
+    /// Правило перенесено буквально в Zone `skills/battlefairygear.rs`
+    /// (порция №7b).
     pub(crate) fn take_battle_fairy_goods<Create>(
         &mut self,
         cell: BattleFairyCell,
         amount: u32,
         factory: &CGoodsFactory,
         coefficients: GlobePlayerPropertyCoefficients,
-        create_goods: Create,
+        mut create_goods: Create,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyEquipmentMutationReport
     where
         Create: FnMut(u32) -> Option<CGoods>,
     {
         let player_id = self.player_id();
-        let Some(goods) = self
-            .battle_fairy_container
-            .base()
-            .get_goods(cell.position())
-        else {
-            return BattleFairyEquipmentMutationReport {
-                player_id,
-                cell: Some(cell),
-                property_applied: false,
-                outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
-                effects: GameEffectJournal::default(),
-            };
-        };
-        if goods.amount() == amount {
-            return self.remove_battle_fairy_goods(
-                goods.identity().ex_id,
+        let occupation = self.base_properties.occupation;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
                 factory,
-                coefficients,
+                skill_factory: None,
                 encode_old_client,
-            );
-        }
-        let outcome = self.battle_fairy_container.base_mut().take_goods(
-            cell.position(),
-            amount,
-            factory,
-            create_goods,
-        );
+            };
+            battlefairygear::take_battle_fairy_goods(
+                &mut adapter,
+                player_id,
+                cell.position(),
+                amount,
+                occupation,
+                coefficients,
+                &mut create_goods,
+            )
+        };
         BattleFairyEquipmentMutationReport {
             player_id,
-            cell: Some(cell),
-            property_applied: false,
-            outcome: outcome.map_or(
-                BattleFairyEquipmentMutationOutcome::MissingGoods,
-                BattleFairyEquipmentMutationOutcome::Removed,
-            ),
-            effects: GameEffectJournal::default(),
+            cell: resolution
+                .cell_position
+                .and_then(BattleFairyCell::from_position)
+                .or(Some(cell)),
+            property_applied: resolution.property_applied,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
     }
 
@@ -11041,6 +10703,8 @@ impl CPlayer {
     /// property/client-points прямо из packet-а: legacy outer caller суммирует
     /// unscaled points, но передаёт каждому `AllocatePotential` wrapping
     /// `points * 10000`. `std::map::insert` сохраняет первую запись ключа.
+    /// Правило перенесено буквально в Zone `skills/battlefairygear.rs`
+    /// (порция №7b).
     pub(crate) fn allocate_battle_fairy_potential(
         &mut self,
         battle_fairy_enabled: bool,
@@ -11050,197 +10714,33 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyPotentialAllocationReport {
         let player_id = self.player_id();
-        let aggregate_client_points = allocations
-            .iter()
-            .fold(0i32, |total, (_, points)| total.wrapping_add(*points));
-        let mut report = BattleFairyPotentialAllocationReport {
-            player_id,
-            outcome: BattleFairyPotentialAllocationOutcome::MissingHeadgear,
-            effects: GameEffectJournal::default(),
-        };
-        let Some(goods) = self.equipment.get_goods(10) else {
-            return report;
-        };
-        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            report.outcome = BattleFairyPotentialAllocationOutcome::InvalidHeadgear;
-            report
-                .effects
-                .push(BattleFairyPotentialAllocationEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0009",
-                    color: 0xffff_ffff,
-                });
-            return report;
-        }
-        if goods
-            .addon_property_value(factory, GAP_BF_POTENTIAL, 1)
-            .wrapping_sub(aggregate_client_points)
-            < 0
-        {
-            report.outcome = BattleFairyPotentialAllocationOutcome::AggregateInsufficient;
-            return report;
-        }
-
-        let mut ordered = BTreeMap::new();
-        for &(property, points) in allocations {
-            ordered.entry(property).or_insert(points);
-        }
-        for (property, points) in ordered {
-            if !battle_fairy_enabled {
-                report
-                    .effects
-                    .push(BattleFairyPotentialAllocationEffect::Notification {
-                        player_id,
-                        string_id: "ZHGS0008",
-                        color: 0xffff_0000,
-                    });
-                continue;
-            }
-            let amount = points.wrapping_mul(10_000);
-            self.allocate_one_battle_fairy_potential(property, amount, factory, coefficients);
-            tracing::trace!(
+        let occupation = self.base_properties.occupation;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
+                factory,
+                skill_factory: None,
+                encode_old_client,
+            };
+            battlefairygear::allocate_battle_fairy_potential(
+                &mut adapter,
                 player_id,
-                property,
-                points,
-                "свойство потенциала боевой феи обработано"
-            );
-            report
-                .effects
-                .push(BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id });
-            if let Some(goods) = self.war_soul_goods(factory) {
-                report
-                    .effects
-                    .push(BattleFairyPotentialAllocationEffect::GoodsUpdated(
-                        BattleFairyDefaultGoodsUpdate {
-                            message_type: 0x0b_f918,
-                            player_id,
-                            goods: goods.identity(),
-                            old_client_payload: encode_old_client(goods),
-                        },
-                    ));
-            }
-        }
-
-        // Outer goods-message сериализует headgear ещё раз независимо от
-        // feature-disabled/unknown-property результата внутренних вызовов.
-        if let Some(goods) = self.war_soul_goods(factory) {
-            report
-                .effects
-                .push(BattleFairyPotentialAllocationEffect::GoodsUpdated(
-                    BattleFairyDefaultGoodsUpdate {
-                        message_type: 0x0b_f918,
-                        player_id,
-                        goods: goods.identity(),
-                        old_client_payload: encode_old_client(goods),
-                    },
-                ));
-        }
-        report.outcome = BattleFairyPotentialAllocationOutcome::Processed;
-        report
-    }
-
-    fn allocate_one_battle_fairy_potential(
-        &mut self,
-        property: i32,
-        amount: i32,
-        factory: &CGoodsFactory,
-        coefficients: GlobePlayerPropertyCoefficients,
-    ) {
-        let occupation = usize::from(self.base_properties.occupation).min(2);
-        let mut player_delta = None;
-        {
-            let Some(goods) = self.equipment.get_goods_mut(10) else {
-                return;
-            };
-            let potential = goods.addon_property_value(factory, GAP_BF_POTENTIAL, 1);
-            if potential.wrapping_sub(amount) < 0 {
-                return;
-            }
-            let (tracked_property, applied_amount) = match property {
-                GAP_BF_ATTACK => (
-                    GAP_BF_ATTACK_POTENTIAL,
-                    (f64::from(amount) * 1.5).trunc() as i32,
-                ),
-                GAP_BF_SPRITE => (
-                    GAP_BF_SPRITE_POTENTIAL,
-                    (f64::from(amount) * 1.5).trunc() as i32,
-                ),
-                GAP_BF_BLAST => (GAP_BF_BLAST_POTENTIAL, amount),
-                GAP_BF_BRAVE => (GAP_BF_BRAVE_POTENTIAL, amount),
-                GAP_BF_AGILITY => (GAP_BF_AGILITY_POTENTIAL, amount),
-                GAP_BF_SPRITUALISM => (GAP_BF_SPRITUALISM_POTENTIAL, amount),
-                GAP_BF_STRENGH => (GAP_BF_STRENGH_POTENTIAL, amount),
-                _ => return,
-            };
-            add_battle_fairy_addon(goods, factory, property, applied_amount);
-            add_battle_fairy_addon(goods, factory, tracked_property, applied_amount);
-            let _stored = goods.set_addon_property_value_core(
-                GAP_BF_POTENTIAL,
-                1,
-                potential.wrapping_sub(amount),
-            );
-            if property == GAP_BF_SPRITUALISM {
-                add_battle_fairy_addon(goods, factory, GAP_BF_MAX_MP, amount);
-            } else if property == GAP_BF_STRENGH {
-                add_battle_fairy_addon(goods, factory, GAP_BF_MAX_HP, amount);
-            }
-            if matches!(
-                property,
-                GAP_BF_BRAVE | GAP_BF_AGILITY | GAP_BF_SPRITUALISM | GAP_BF_STRENGH
-            ) {
-                player_delta = Some((property, f64::from(amount) * 0.00001));
-            }
-        }
-
-        let Some((property, delta)) = player_delta else {
-            return;
+                battle_fairy_enabled,
+                allocations,
+                occupation,
+                coefficients,
+            )
         };
-        let combat = &mut self.combat_properties;
-        match property {
-            GAP_BF_BRAVE => {
-                combat.strength = add_battle_fairy_u32(combat.strength, delta);
-                combat.maximum_attack = add_battle_fairy_u32(
-                    combat.maximum_attack,
-                    delta * f64::from(coefficients.str_to_max_attack[occupation]),
-                );
-                combat.burden = add_battle_fairy_u16(
-                    combat.burden,
-                    delta * f64::from(coefficients.str_to_burden[occupation]),
-                );
-            }
-            GAP_BF_AGILITY => {
-                combat.dexterity = add_battle_fairy_u32(combat.dexterity, delta);
-                combat.minimum_attack = add_battle_fairy_u32(
-                    combat.minimum_attack,
-                    delta * f64::from(coefficients.dex_to_min_attack[occupation]),
-                );
-                combat.reank = add_battle_fairy_u16(
-                    combat.reank,
-                    delta * f64::from(coefficients.dex_to_stiff[occupation]),
-                );
-            }
-            GAP_BF_SPRITUALISM => {
-                combat.intelligence = add_battle_fairy_u32(combat.intelligence, delta);
-                combat.element_modify = add_battle_fairy_i32(
-                    combat.element_modify,
-                    delta * f64::from(coefficients.int_to_element[occupation]),
-                );
-                combat.maximum_mp = add_battle_fairy_u32(
-                    combat.maximum_mp,
-                    delta * f64::from(coefficients.int_to_max_mp[occupation]),
-                );
-                combat.element_resistance = add_battle_fairy_u32(
-                    combat.element_resistance,
-                    delta * f64::from(coefficients.int_to_resistant[occupation]),
-                );
-            }
-            GAP_BF_STRENGH => {
-                combat.maximum_hp = add_battle_fairy_u32(combat.maximum_hp, delta);
-            }
-            _ => {}
+        BattleFairyPotentialAllocationReport {
+            player_id,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
     }
 
+    /// Полный player-side путь улучшения экипировки боевой феи с аудитом
+    /// `0x60202/0x60203`. Правило перенесено буквально в Zone
+    /// `skills/battlefairygear.rs` (порция №7b).
     pub(crate) fn upgrade_battle_fairy_equipment(
         &mut self,
         factory: &CGoodsFactory,
@@ -11249,256 +10749,30 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyUpgradeReport {
         let player_id = self.player_id();
-        let price = self.battle_fairy_container.upgrade_price(factory);
-        let mut report = BattleFairyUpgradeReport {
-            player_id,
-            outcome: BattleFairyUpgradeOutcome::MissingRegion,
-            effects: GameEffectJournal::default(),
-        };
-        if self.server_region_id.is_none() {
-            return report;
-        }
-        if self.wallet.currency_amount() < price {
-            report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0015", Some(price));
-            return report;
-        }
-        let Some(equipment) = self
-            .battle_fairy_container
-            .base()
-            .get_goods(BattleFairyCell::Equipment.position())
-        else {
-            report.outcome = BattleFairyUpgradeOutcome::InvalidEquipment;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0014", None);
-            return report;
-        };
-        if !equipment.can_battle_fairy_equipment_upgrade(factory) {
-            report.outcome = BattleFairyUpgradeOutcome::InvalidEquipment;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0014", None);
-            return report;
-        }
-        let current_level = equipment.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1);
-        let target = BattleFairyUpgradeGoodsSnapshot::capture(equipment);
-        let Some(base_gem) = self
-            .battle_fairy_container
-            .base()
-            .get_goods(BattleFairyCell::GemBase.position())
-        else {
-            report.outcome = BattleFairyUpgradeOutcome::MissingBaseGem;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0013", None);
-            return report;
-        };
-        let minimum = base_gem.addon_property_value(factory, GAP_GEM_LEVEL, 1);
-        let maximum = base_gem
-            .addon_property_value(factory, GAP_GEM_LEVEL, 2)
-            .max(minimum);
-        if current_level < minimum || maximum < current_level {
-            report.outcome = BattleFairyUpgradeOutcome::GemLevelMismatch;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0012", None);
-            return report;
-        }
-        if 98 < current_level as u32 {
-            report.outcome = BattleFairyUpgradeOutcome::MaximumLevel;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0021", None);
-            return report;
-        }
-        let probability = self.battle_fairy_container.probability(factory);
-        tracing::trace!(
-            player_id,
-            price,
-            probability,
-            current_level,
-            "параметры улучшения боевой феи рассчитаны"
-        );
-        if self.wallet.currency_amount() < price {
-            report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0020", None);
-            return report;
-        }
-        let gems = [
-            BattleFairyCell::GemBase,
-            BattleFairyCell::GemOne,
-            BattleFairyCell::GemTwo,
-            BattleFairyCell::GemThree,
-        ]
-        .map(|cell| {
-            self.battle_fairy_container
-                .base()
-                .get_goods(cell.position())
-                .map(BattleFairyUpgradeGoodsSnapshot::capture)
-        });
-        let money = self.decrease_money(price, factory);
-        report.effects.push(BattleFairyUpgradeEffect::MoneyChanged {
-            player_id,
-            previous: money.previous,
-            current: money.current,
-            outcome: money.outcome,
-        });
-
-        let audit_player = BattleFairyUpgradePlayerSnapshot {
-            pk_count: self.base_properties.pk_count,
-            money: self.money,
-            depot_money: self.depot_money(),
-            region_id: self.server_region_id.unwrap_or_default(),
-            tile_x: self.shape().get_tile_x().unwrap_or_default(),
-            tile_y: self.shape().get_tile_y().unwrap_or_default(),
-            client_ip: self.client_ip,
-        };
-
-        let success = (random(100) as u32).wrapping_add(1) <= probability;
-        let mut target_present = true;
-        if success {
-            let increase = self.battle_fairy_container.success_result(factory, random);
-            let target_level = (current_level as u32).wrapping_add(increase).min(99) as i32;
-            if let Some(goods) = self
-                .battle_fairy_container
-                .base_mut()
-                .get_goods_mut(BattleFairyCell::Equipment.position())
-            {
-                let _upgraded = factory.upgrade_battle_fairy_equipment(goods, target_level);
-            }
-            report.outcome = BattleFairyUpgradeOutcome::Succeeded;
-            push_battle_fairy_upgrade_notification(&mut report, "ZHGS0002", None);
-            if log_gates.success {
-                report.effects.push(BattleFairyUpgradeEffect::Audit {
-                    message_type: 0x0006_0203,
-                    event: 1,
-                    player_id,
-                    player: audit_player,
-                    target: target.clone(),
-                    gems: gems.clone(),
-                });
-            }
-        } else {
-            if log_gates.failure {
-                report.effects.push(BattleFairyUpgradeEffect::Audit {
-                    message_type: 0x0006_0203,
-                    event: 2,
-                    player_id,
-                    player: audit_player,
-                    target: target.clone(),
-                    gems: gems.clone(),
-                });
-            }
-            match self.battle_fairy_container.fail_result(factory) {
-                1 => {
-                    report.outcome = BattleFairyUpgradeOutcome::FailedKept;
-                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0016", None);
-                }
-                2 => {
-                    report.outcome = BattleFairyUpgradeOutcome::FailedDowngraded;
-                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0017", None);
-                    if current_level != 0
-                        && let Some(goods) = self
-                            .battle_fairy_container
-                            .base_mut()
-                            .get_goods_mut(BattleFairyCell::Equipment.position())
-                    {
-                        let _upgraded = factory
-                            .upgrade_battle_fairy_equipment(goods, current_level.wrapping_sub(1));
-                    }
-                }
-                3 => {
-                    report.outcome = BattleFairyUpgradeOutcome::FailedReset;
-                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0018", None);
-                    if let Some(goods) = self
-                        .battle_fairy_container
-                        .base_mut()
-                        .get_goods_mut(BattleFairyCell::Equipment.position())
-                    {
-                        let _upgraded = factory.upgrade_battle_fairy_equipment(goods, 0);
-                    }
-                }
-                4 => {
-                    report.outcome = BattleFairyUpgradeOutcome::FailedDestroyed;
-                    push_battle_fairy_upgrade_notification(&mut report, "ZHGS0019", None);
-                    if log_gates.lost_target {
-                        report.effects.push(BattleFairyUpgradeEffect::Audit {
-                            message_type: 0x0006_0202,
-                            event: 5,
-                            player_id,
-                            player: audit_player,
-                            target: target.clone(),
-                            gems: gems.clone(),
-                        });
-                    }
-                    if let Some((_goods, removal)) =
-                        self.battle_fairy_container.delete_upgrade_target()
-                    {
-                        target_present = false;
-                        report
-                            .effects
-                            .push(BattleFairyUpgradeEffect::TargetDeleted {
-                                player_id,
-                                goods: target.clone(),
-                                position: BattleFairyCell::Equipment.position(),
-                                removal,
-                            });
-                    }
-                }
-                _ => {
-                    report.outcome = BattleFairyUpgradeOutcome::FailedKept;
-                }
-            }
-        }
-        if target_present
-            && let Some(goods) = self
-                .battle_fairy_container
-                .base()
-                .get_goods(BattleFairyCell::Equipment.position())
-        {
-            report.effects.push(BattleFairyUpgradeEffect::GoodsUpdated(
-                BattleFairyDefaultGoodsUpdate {
-                    message_type: 0x0b_f918,
-                    player_id,
-                    goods: goods.identity(),
-                    old_client_payload: encode_old_client(goods),
-                },
-            ));
-        }
-
-        for cell in [
-            BattleFairyCell::GemBase,
-            BattleFairyCell::GemOne,
-            BattleFairyCell::GemTwo,
-            BattleFairyCell::GemThree,
-        ] {
-            let was_present = self
-                .battle_fairy_container
-                .base()
-                .get_goods(cell.position())
-                .is_some();
-            let Some(consumed) = self.battle_fairy_container.consume_upgrade_gem(cell) else {
-                if was_present || cell == BattleFairyCell::GemBase {
-                    report.outcome = BattleFairyUpgradeOutcome::ConsumptionStopped;
-                    break;
-                }
-                continue;
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
+                factory,
+                skill_factory: None,
+                encode_old_client,
             };
-            tracing::trace!(player_id, cell = ?cell, removed = consumed.removed, previous_amount = consumed.previous_amount, remaining_amount = consumed.remaining_amount, "камень улучшения боевой феи израсходован");
-            report.effects.push(BattleFairyUpgradeEffect::GemConsumed {
+            battlefairygear::upgrade_battle_fairy_equipment(
+                &mut adapter,
                 player_id,
-                consumed: consumed.clone(),
-            });
-            if !consumed.removed
-                && let Some(goods) = self
-                    .battle_fairy_container
-                    .base()
-                    .get_goods(cell.position())
-            {
-                report.effects.push(BattleFairyUpgradeEffect::GoodsUpdated(
-                    BattleFairyDefaultGoodsUpdate {
-                        message_type: 0x0b_f918,
-                        player_id,
-                        goods: goods.identity(),
-                        old_client_payload: encode_old_client(goods),
-                    },
-                ));
-            }
+                log_gates,
+                random,
+            )
+        };
+        BattleFairyUpgradeReport {
+            player_id,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
         }
-        report
     }
 
+    /// Полный player-side сброс потенциала боевой феи предметом `ZHQLS01`.
+    /// Правило перенесено буквально в Zone `skills/battlefairygear.rs`
+    /// (порция №7b).
     pub(crate) fn reset_battle_fairy_potential(
         &mut self,
         battle_fairy_enabled: bool,
@@ -11506,176 +10780,30 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairyPotentialResetReport {
         let player_id = self.player_id();
-        let mut report = BattleFairyPotentialResetReport {
-            player_id,
-            outcome: BattleFairyPotentialResetOutcome::MissingHeadgear,
-            effects: GameEffectJournal::default(),
-        };
-        if !battle_fairy_enabled {
-            report.outcome = BattleFairyPotentialResetOutcome::FeatureDisabled;
-            report
-                .effects
-                .push(BattleFairyPotentialResetEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0008",
-                    color: 0xffff_0000,
-                });
-            return report;
-        }
-        let Some(headgear) = self.equipment.get_goods(10) else {
-            return report;
-        };
-        if headgear.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            report.outcome = BattleFairyPotentialResetOutcome::InvalidHeadgear;
-            report
-                .effects
-                .push(BattleFairyPotentialResetEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0009",
-                    color: 0xffff_ffff,
-                });
-            return report;
-        }
-
-        let reset_index = factory.query_goods_id_by_original_name(Some(b"ZHQLS01"));
-        let reset_item = self
-            .packet
-            .base()
-            .traversing_goods()
-            .find(|goods| goods.base_properties_index() == reset_index)
-            .map(|goods| (goods.identity(), goods.amount()));
-        let Some((reset_identity, reset_amount)) = reset_item else {
-            report.outcome = BattleFairyPotentialResetOutcome::MissingResetItem;
-            report
-                .effects
-                .push(BattleFairyPotentialResetEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0010",
-                    color: 0xffff_ffff,
-                });
-            return report;
-        };
-        let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
-        let (remaining_amount, consumed, removal) = if reset_amount == 0 {
-            (0, false, None)
-        } else if reset_amount == 1 {
-            let removal = self.packet.remove_goods(reset_identity.ex_id);
-            (
-                if removal.is_some() { 0 } else { reset_amount },
-                removal.is_some(),
-                removal,
-            )
-        } else {
-            let remaining = reset_amount.wrapping_sub(1);
-            let mut consumed = false;
-            if let Some(position) = reset_position
-                && let Some(goods) = self.packet.get_goods_mut(position)
-            {
-                goods.set_amount(remaining);
-                consumed = true;
-            }
-            (
-                if consumed { remaining } else { reset_amount },
-                consumed,
-                None,
-            )
-        };
-        report
-            .effects
-            .push(BattleFairyPotentialResetEffect::PacketItemConsumed {
-                player_id,
-                goods: reset_identity,
-                position: reset_position,
-                previous_amount: reset_amount,
-                remaining_amount,
-                consumed,
-                removal,
-            });
-
-        let recovered = {
-            let goods = self
-                .equipment
-                .get_goods_mut(10)
-                .expect("headgear проверен до packet consumption");
-            let mut take = |tracked, property| {
-                let value = goods.addon_property_value(factory, tracked, 1);
-                let _tracked_stored = goods.set_addon_property_value_core(tracked, 1, 0);
-                let current = goods.addon_property_value(factory, property, 1);
-                let _property_stored =
-                    goods.set_addon_property_value_core(property, 1, current.wrapping_sub(value));
-                value
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
+                factory,
+                skill_factory: None,
+                encode_old_client,
             };
-            let attack = take(GAP_BF_ATTACK_POTENTIAL, GAP_BF_ATTACK);
-            let sprite = take(GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITE);
-            let blast = take(GAP_BF_BLAST_POTENTIAL, GAP_BF_BLAST);
-            let brave = take(GAP_BF_BRAVE_POTENTIAL, GAP_BF_BRAVE);
-            let agility = take(GAP_BF_AGILITY_POTENTIAL, GAP_BF_AGILITY);
-            let spiritualism = take(GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_SPRITUALISM);
-            let strength = take(GAP_BF_STRENGH_POTENTIAL, GAP_BF_STRENGH);
-            let recovered = ((f64::from(sprite) + f64::from(attack)) * (2.0 / 3.0)
-                + f64::from(blast)
-                + f64::from(brave)
-                + f64::from(agility)
-                + f64::from(spiritualism)
-                + f64::from(strength))
-            .trunc() as i32;
-            let potential = goods.addon_property_value(factory, GAP_BF_POTENTIAL, 1);
-            let _stored = goods.set_addon_property_value_core(
-                GAP_BF_POTENTIAL,
-                1,
-                potential.wrapping_add(recovered),
-            );
-            (recovered, brave, agility, spiritualism, strength)
+            battlefairygear::reset_battle_fairy_potential(
+                &mut adapter,
+                player_id,
+                battle_fairy_enabled,
+            )
         };
-        tracing::trace!(
+        BattleFairyPotentialResetReport {
             player_id,
-            recovered_potential = recovered.0,
-            "потенциал боевой феи восстановлен"
-        );
-        self.set_strength(
-            self.combat_properties
-                .strength
-                .wrapping_sub((f64::from(recovered.1) * 0.00001).trunc() as u32),
-        );
-        self.set_dexterity(
-            self.combat_properties
-                .dexterity
-                .wrapping_sub((f64::from(recovered.2) * 0.00001).trunc() as u32),
-        );
-        self.set_maximum_hp(
-            self.combat_properties
-                .maximum_hp
-                .wrapping_sub((f64::from(recovered.4) * 0.00001).trunc() as u32),
-        );
-        self.set_intelligence(
-            self.combat_properties
-                .intelligence
-                .wrapping_sub((f64::from(recovered.3) * 0.00001).trunc() as u32),
-        );
-        report
-            .effects
-            .push(BattleFairyPotentialResetEffect::PropertiesChanged { player_id });
-        let headgear = self
-            .equipment
-            .get_goods(10)
-            .expect("reset не отделяет equipped headgear");
-        report
-            .effects
-            .push(BattleFairyPotentialResetEffect::GoodsUpdated(
-                BattleFairyDefaultGoodsUpdate {
-                    message_type: 0x0b_f918,
-                    player_id,
-                    goods: headgear.identity(),
-                    old_client_payload: encode_old_client(headgear),
-                },
-            ));
-        report.outcome = BattleFairyPotentialResetOutcome::Reset;
-        report
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
+        }
     }
 
     /// Полный player-side `CBattleFairyContainer::ResetSkill`. `consume_item`
     /// соответствует третьему native аргументу: script allocation передаёт
-    /// ноль, прямой gameplay caller может потребовать `ZHJNS01/02`.
+    /// ноль, прямой gameplay caller может потребовать `ZHJNS01/02`. Правило
+    /// перенесено буквально в Zone `skills/battlefairygear.rs` (порция №7b).
     pub(crate) fn reset_battle_fairy_skill(
         &mut self,
         battle_fairy_enabled: bool,
@@ -11687,228 +10815,28 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> BattleFairySkillResetReport {
         let player_id = self.player_id();
-        let mut report = BattleFairySkillResetReport {
-            player_id,
-            position,
-            outcome: BattleFairySkillResetOutcome::MissingHeadgear,
-            effects: GameEffectJournal::default(),
-        };
-        match battle_fairy_reset_preflight(battle_fairy_enabled, || {
-            self.equipment
-                .get_goods(10)
-                .map(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1))
-        }) {
-            BattleFairyResetPreflight::FeatureDisabled => {
-                report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
-                report
-                    .effects
-                    .push(BattleFairySkillResetEffect::Notification {
-                        player_id,
-                        string_id: "ZHGS0008",
-                        color: 0xffff_0000,
-                    });
-                return report;
-            }
-            BattleFairyResetPreflight::MissingHeadgear => return report,
-            BattleFairyResetPreflight::InvalidHeadgear => {
-                report.outcome = BattleFairySkillResetOutcome::InvalidHeadgear;
-                return report;
-            }
-            BattleFairyResetPreflight::Ready => {}
-        }
-
-        if consume_item {
-            let reset_item = battle_fairy_reset_item(position, |name| {
-                let reset_index = factory.query_goods_id_by_original_name(Some(name));
-                self
-                    .packet
-                    .base()
-                    .traversing_goods()
-                    .find(|goods| goods.base_properties_index() == reset_index)
-                    .map(|goods| (goods.identity(), goods.amount()))
-            });
-            let reset_item = match reset_item {
-                BattleFairyResetItemLookup::InvalidPosition => None,
-                BattleFairyResetItemLookup::MissingItem => {
-                    report.outcome = BattleFairySkillResetOutcome::MissingResetItem;
-                    report
-                        .effects
-                        .push(BattleFairySkillResetEffect::Notification {
-                            player_id,
-                            string_id: BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING,
-                            color: 0xffff_ffff,
-                        });
-                    return report;
-                }
-                BattleFairyResetItemLookup::Found(item) => Some(item),
+        let resolution = {
+            let mut adapter = BattleFairyGearPlayerAdapter {
+                player: self,
+                factory,
+                skill_factory: Some(skill_factory),
+                encode_old_client,
             };
-            if let Some((reset_identity, reset_amount)) = reset_item {
-                let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
-                let change = battle_fairy_reset_item_change(reset_amount);
-                let (remaining_amount, consumed, removal) = match change {
-                    BattleFairyResetItemChange::Remove => {
-                        let removal = self.packet.remove_goods(reset_identity.ex_id);
-                        (
-                            if removal.is_some() { 0 } else { reset_amount },
-                            removal.is_some(),
-                            removal,
-                        )
-                    }
-                    BattleFairyResetItemChange::SetAmount(remaining) => {
-                        let mut consumed = false;
-                        if let Some(reset_position) = reset_position
-                            && let Some(goods) = self.packet.get_goods_mut(reset_position)
-                        {
-                            goods.set_amount(remaining);
-                            consumed = true;
-                        }
-                        (
-                            if consumed { remaining } else { reset_amount },
-                            consumed,
-                            None,
-                        )
-                    }
-                };
-                report
-                    .effects
-                    .push(BattleFairySkillResetEffect::PacketItemConsumed {
-                        player_id,
-                        goods: reset_identity,
-                        position: reset_position,
-                        previous_amount: reset_amount,
-                        remaining_amount,
-                        consumed,
-                        removal,
-                    });
-            }
-        }
-
-        let reset_slot = {
-            let goods = self
-                .equipment
-                .get_goods(10)
-                .expect("headgear остаётся equipped после reset-item consumption");
-            battle_fairy_reset_slot(position, |property, index| {
-                battle_fairy_skill_property_value(goods, factory, property, index)
-            })
-        };
-        let Some(reset_slot) = reset_slot else {
-            report.outcome = BattleFairySkillResetOutcome::InvalidPosition;
-            return report;
-        };
-        let previous_skill = reset_slot.previous_skill();
-        let property = battle_fairy_skill_property_key(reset_slot.property);
-        tracing::trace!(
-            player_id,
-            position,
-            previous_skill,
-            "прежний навык боевой феи выбран для сброса"
-        );
-
-        // В каждом native switch-case полный detach расположен перед первым
-        // random(), а не только перед addon mutation.
-        for property in EQUIPPED_SKILL_PROPERTIES {
-            let skill_id = {
-                let goods = self
-                    .equipment
-                    .get_goods(10)
-                    .expect("снятие навыка не отделяет головной предмет");
-                war_soul_skill_id_from_goods(goods, factory, property)
-            };
-            if skill_id == 0 {
-                continue;
-            }
-            let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
-            tracing::trace!(
+            battlefairygear::reset_battle_fairy_skill(
+                &mut adapter,
                 player_id,
-                skill_id,
-                "навык боевой феи отсоединён при сбросе"
-            );
-            // Native `DelWarSoulSkillInPlayer` вызывает TellClient после
-            // DelSkill. Поэтому packet удаления существует лишь если skill
-            // пережил отказ category lookup.
-            if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
-                report
-                    .effects
-                    .push(BattleFairySkillResetEffect::SkillRemoved(
-                        BattleFairySkillRemoved {
-                            message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
-                            player_id,
-                            skill_id,
-                            skill_name: skill.name(skill_factory).map(<[u8]>::to_vec),
-                        },
-                    ));
-            }
-        }
-
-        let selected_skill = select_battle_fairy_reset_skill(
-            reset_slot.replaced,
-            reset_slot.current_skills,
-            reset_slot.current_all_skill,
-            random,
-        );
-        tracing::trace!(
-            player_id,
-            selected_skill,
-            "новый навык боевой феи выбран при сбросе"
-        );
-
-        {
-            let goods = self
-                .equipment
-                .get_goods_mut(10)
-                .expect("skill detach не отделяет equipped headgear");
-            write_battle_fairy_reset_skill(selected_skill, |index, value| {
-                let _ = goods.set_addon_property_value_core(property, index, value);
-            });
-        }
-
-        for property in EQUIPPED_SKILL_PROPERTIES {
-            let (skill_id, level) = {
-                let goods = self
-                    .equipment
-                    .get_goods(10)
-                    .expect("установка навыка не отделяет головной предмет");
-                war_soul_skill_entry_from_goods(goods, factory, property)
-            };
-            let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
-            if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
-                tracing::trace!(
-                    player_id,
-                    skill_id,
-                    "навык боевой феи присоединён после сброса"
-                );
-                report.effects.push(BattleFairySkillResetEffect::SkillAdded(
-                    battle_fairy_skill_snapshot(player_id, skill, skill_factory),
-                ));
-            }
-        }
-
-        let Some(selected) = self.move_shape.skill(selected_skill, skill_factory) else {
-            report.outcome = BattleFairySkillResetOutcome::SelectedSkillUnavailable;
-            return report;
+                battle_fairy_enabled,
+                position,
+                consume_item,
+                random,
+            )
         };
-        report
-            .effects
-            .push(BattleFairySkillResetEffect::SelectedSkillLearned(
-                battle_fairy_skill_snapshot(player_id, selected, skill_factory),
-            ));
-        let headgear = self
-            .equipment
-            .get_goods(10)
-            .expect("ResetSkill не отделяет equipped headgear");
-        report
-            .effects
-            .push(BattleFairySkillResetEffect::GoodsUpdated(
-                BattleFairyDefaultGoodsUpdate {
-                    message_type: 0x0b_f918,
-                    player_id,
-                    goods: headgear.identity(),
-                    old_client_payload: encode_old_client(headgear),
-                },
-            ));
-        report.outcome = BattleFairySkillResetOutcome::Reset;
-        report
+        BattleFairySkillResetReport {
+            player_id,
+            position,
+            outcome: resolution.outcome,
+            effects: resolution.effects.into_iter().collect(),
+        }
     }
 
     /// Player-owned `DelWarSoulSkillInPlayer` перед запуском reset-script.
@@ -13250,17 +12178,379 @@ impl CPlayer {
     }
 }
 
-fn push_battle_fairy_upgrade_notification(
-    report: &mut BattleFairyUpgradeReport,
-    string_id: &'static str,
-    format_value: Option<u32>,
-) {
-    report.effects.push(BattleFairyUpgradeEffect::Notification {
-        player_id: report.player_id,
-        string_id,
-        color: 0xffff_ffff,
-        format_value,
-    });
+/// Переходный адаптер hub-шва Zone `skills/battlefairygear::BattleFairyGearHost`
+/// для прежнего `CPlayer` (порция №7b): typed-чтения и мутации живых
+/// контейнеров (экипировка/пакет/контейнер боевой феи + base), головного
+/// предмета ячейки 10, кошелька и навыков `CMoveShape`. Сборка кадра `0xBF918`
+/// (identity + old-client payload одним доступом) остаётся здесь как
+/// сериализационный шов прежнего владельца; literal `0x0b_f918` повторяет
+/// перенесённые тела.
+struct BattleFairyGearPlayerAdapter<'a> {
+    player: &'a mut CPlayer,
+    factory: &'a CGoodsFactory,
+    skill_factory: Option<&'a CSkillFactory>,
+    encode_old_client: &'a mut dyn FnMut(&CGoods) -> Vec<u8>,
+}
+
+impl<'a> BattleFairyGearPlayerAdapter<'a> {
+    fn skill_factory(&self) -> &'a CSkillFactory {
+        self.skill_factory
+            .expect("шов reset-skill требует skill factory")
+    }
+}
+
+impl BattleFairyGearHost for BattleFairyGearPlayerAdapter<'_> {
+    type Goods = CGoods;
+    type GoodsUpdate = BattleFairyDefaultGoodsUpdate;
+    type AddOutcome = BattleFairyContainerAddOutcome;
+    type Removal = VolumeGoodsRemoveOutcome;
+    type CurrencyOutcome = CurrencyDecreaseOutcome;
+    type ConsumedGem = BattleFairyUpgradeConsumedGem;
+
+    fn headgear_addon(&self, property: i32, index: u32) -> Option<i32> {
+        self.player
+            .equipment
+            .get_goods(10)
+            .map(|goods| goods.addon_property_value(self.factory, property, index))
+    }
+
+    fn add_headgear_addon(&mut self, property: i32, delta: i32) {
+        if let Some(goods) = self.player.equipment.get_goods_mut(10) {
+            add_battle_fairy_addon(goods, self.factory, property, delta);
+        }
+    }
+
+    fn set_headgear_addon(&mut self, property: i32, index: u32, value: i32) {
+        if let Some(goods) = self.player.equipment.get_goods_mut(10) {
+            let _stored = goods.set_addon_property_value_core(property, index, value);
+        }
+    }
+
+    fn clamp_headgear_current(&mut self, current_property: i32, maximum_property: i32) {
+        if let Some(goods) = self.player.equipment.get_goods_mut(10) {
+            clamp_battle_fairy_current(goods, self.factory, current_property, maximum_property);
+        }
+    }
+
+    fn headgear_goods_update(&mut self) -> Option<BattleFairyDefaultGoodsUpdate> {
+        let player_id = self.player.player_id();
+        let goods = self.player.equipment.get_goods(10)?;
+        Some(BattleFairyDefaultGoodsUpdate {
+            message_type: 0x0b_f918,
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: (self.encode_old_client)(goods),
+        })
+    }
+
+    fn combat_properties(&mut self) -> &mut PlayerCombatProperties {
+        &mut self.player.combat_properties
+    }
+
+    fn server_region_present(&self) -> bool {
+        self.player.server_region_id.is_some()
+    }
+
+    fn gear_addons(&self, goods: &CGoods) -> BattleFairyGearAddons {
+        let value = |property_type| goods.addon_property_value(self.factory, property_type, 1);
+        BattleFairyGearAddons {
+            attack: value(GAP_BF_ATTACK_ADDON),
+            sprite: value(GAP_BF_SPRITE_ADDON),
+            strength: value(GAP_BF_STRENGH_ADDON),
+            brave: value(GAP_BF_ABRAVE_ADDON),
+            agility: value(GAP_BF_AGILITY_ADDON),
+            spiritualism: value(GAP_BF_SPRITUALISE_ADDON),
+            blast: value(GAP_BF_BLAST_ADDON),
+            cut_hurt: value(GAP_BF_CUT_HURT_ADDON),
+            life: value(GAP_BF_LIFE_ADDON),
+            mana: value(GAP_BF_MP_ADDON),
+        }
+    }
+
+    fn battle_fairy_equip_cell(&self, goods: &CGoods) -> Option<u32> {
+        self.factory
+            .query_goods_base_properties(goods.base_properties_index())
+            .and_then(|properties| properties.battle_fairy_equip_place())
+            .and_then(|position| BattleFairyCell::from_position(position as u32))
+            .map(BattleFairyCell::position)
+    }
+
+    fn property_effect_before_add(&self, cell_position: u32, goods: &CGoods) -> Option<(u32, i32)> {
+        let cell = BattleFairyCell::from_position(cell_position)?;
+        self.player
+            .battle_fairy_container
+            .property_effect_before_add(cell, goods, self.factory)
+            .map(|effect| (effect.cell.position(), effect.delta))
+    }
+
+    fn battle_fairy_add_at(
+        &mut self,
+        cell_position: u32,
+        incoming: &mut Option<CGoods>,
+        owner_progress_allows: bool,
+    ) -> BattleFairyContainerAddOutcome {
+        let cell = BattleFairyCell::from_position(cell_position)
+            .expect("positional add передаёт валидную ячейку боевой феи");
+        self.player.battle_fairy_container.add_at(
+            cell,
+            incoming,
+            self.factory,
+            owner_progress_allows,
+        )
+    }
+
+    fn battle_fairy_add(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        owner_progress_allows: bool,
+    ) -> BattleFairyContainerAddOutcome {
+        self.player
+            .battle_fairy_container
+            .add(incoming, self.factory, owner_progress_allows)
+    }
+
+    fn battle_fairy_goods_position(&self, ex_id: CGuid) -> Option<u32> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .query_goods_position(ex_id)
+    }
+
+    fn battle_fairy_cell_addons(&self, position: u32) -> Option<BattleFairyGearAddons> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .map(|goods| self.gear_addons(goods))
+    }
+
+    fn battle_fairy_remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
+        self.player
+            .battle_fairy_container
+            .base_mut()
+            .remove_goods(ex_id)
+    }
+
+    fn battle_fairy_cell_amount(&self, position: u32) -> Option<u32> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .map(|goods| goods.amount())
+    }
+
+    fn battle_fairy_cell_ex_id(&self, position: u32) -> Option<CGuid> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .map(|goods| goods.identity().ex_id)
+    }
+
+    fn battle_fairy_take_goods(
+        &mut self,
+        position: u32,
+        amount: u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+    ) -> Option<VolumeGoodsRemoveOutcome> {
+        self.player.battle_fairy_container.base_mut().take_goods(
+            position,
+            amount,
+            self.factory,
+            create_goods,
+        )
+    }
+
+    fn battle_fairy_cell_goods_update(
+        &mut self,
+        position: u32,
+    ) -> Option<BattleFairyDefaultGoodsUpdate> {
+        let player_id = self.player.player_id();
+        let goods = self
+            .player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)?;
+        Some(BattleFairyDefaultGoodsUpdate {
+            message_type: 0x0b_f918,
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: (self.encode_old_client)(goods),
+        })
+    }
+
+    fn battle_fairy_upgrade_price(&mut self) -> u32 {
+        self.player
+            .battle_fairy_container
+            .upgrade_price(self.factory)
+    }
+
+    fn currency_amount(&self) -> u32 {
+        self.player.wallet.currency_amount()
+    }
+
+    fn battle_fairy_cell_present(&self, position: u32) -> bool {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .is_some()
+    }
+
+    fn battle_fairy_equipment_can_upgrade(&self) -> bool {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(BattleFairyCell::Equipment.position())
+            .is_some_and(|goods| goods.can_battle_fairy_equipment_upgrade(self.factory))
+    }
+
+    fn battle_fairy_cell_addon(&self, position: u32, property: i32, index: u32) -> Option<i32> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .map(|goods| goods.addon_property_value(self.factory, property, index))
+    }
+
+    fn battle_fairy_cell_snapshot(&self, position: u32) -> Option<BattleFairyUpgradeGoodsSnapshot> {
+        self.player
+            .battle_fairy_container
+            .base()
+            .get_goods(position)
+            .map(|goods| BattleFairyUpgradeGoodsSnapshot {
+                identity: goods.identity(),
+                name: goods.name().to_vec(),
+                price: goods.price(),
+                amount: goods.amount(),
+            })
+    }
+
+    fn battle_fairy_probability(&self) -> u32 {
+        self.player.battle_fairy_container.probability(self.factory)
+    }
+
+    fn decrease_money(&mut self, amount: u32) -> BattleFairyMoneyChange<CurrencyDecreaseOutcome> {
+        let money = self.player.decrease_money(amount, self.factory);
+        BattleFairyMoneyChange {
+            previous: money.previous,
+            current: money.current,
+            outcome: money.outcome,
+        }
+    }
+
+    fn audit_player_snapshot(&self) -> BattleFairyUpgradePlayerSnapshot {
+        BattleFairyUpgradePlayerSnapshot {
+            pk_count: self.player.base_properties.pk_count,
+            money: self.player.money,
+            depot_money: self.player.depot_money(),
+            region_id: self.player.server_region_id.unwrap_or_default(),
+            tile_x: self.player.shape().get_tile_x().unwrap_or_default(),
+            tile_y: self.player.shape().get_tile_y().unwrap_or_default(),
+            client_ip: self.player.client_ip,
+        }
+    }
+
+    fn battle_fairy_success_result(&self, random: &mut dyn FnMut(i32) -> i32) -> u32 {
+        self.player
+            .battle_fairy_container
+            .success_result(self.factory, random)
+    }
+
+    fn set_battle_fairy_cell_goods_level(&mut self, position: u32, level: i32) {
+        if let Some(goods) = self
+            .player
+            .battle_fairy_container
+            .base_mut()
+            .get_goods_mut(position)
+        {
+            let _upgraded = self.factory.upgrade_battle_fairy_equipment(goods, level);
+        }
+    }
+
+    fn battle_fairy_fail_result(&self) -> u32 {
+        self.player.battle_fairy_container.fail_result(self.factory)
+    }
+
+    fn battle_fairy_delete_upgrade_target(&mut self) -> Option<VolumeGoodsRemoveOutcome> {
+        self.player
+            .battle_fairy_container
+            .delete_upgrade_target()
+            .map(|(_identity, removal)| removal)
+    }
+
+    fn battle_fairy_consume_upgrade_gem(
+        &mut self,
+        cell_position: u32,
+    ) -> Option<BattleFairyUpgradeConsumedGem> {
+        let cell = BattleFairyCell::from_position(cell_position)?;
+        self.player.battle_fairy_container.consume_upgrade_gem(cell)
+    }
+
+    fn consumed_gem_facts(gem: &BattleFairyUpgradeConsumedGem) -> (bool, u32, u32) {
+        (gem.removed, gem.previous_amount, gem.remaining_amount)
+    }
+
+    fn find_reset_goods(&self, name: &[u8]) -> Option<(ShapeIdentity, u32)> {
+        let reset_index = self.factory.query_goods_id_by_original_name(Some(name));
+        self.player
+            .packet
+            .base()
+            .traversing_goods()
+            .find(|goods| goods.base_properties_index() == reset_index)
+            .map(|goods| (goods.identity(), goods.amount()))
+    }
+
+    fn packet_goods_position(&self, ex_id: CGuid) -> Option<u32> {
+        self.player.packet.query_goods_position(ex_id)
+    }
+
+    fn packet_remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
+        self.player.packet.remove_goods(ex_id)
+    }
+
+    fn packet_set_goods_amount(&mut self, position: u32, remaining: u32) -> bool {
+        let Some(goods) = self.player.packet.get_goods_mut(position) else {
+            return false;
+        };
+        goods.set_amount(remaining);
+        true
+    }
+
+    fn delete_war_soul_skill(&mut self, skill_id: u32) {
+        let skill_factory = self.skill_factory();
+        let _deleted = self.player.move_shape.delete_skill(skill_id, skill_factory);
+    }
+
+    fn war_soul_removed_skill_name(&self, skill_id: u32) -> Option<Option<Vec<u8>>> {
+        let skill_factory = self.skill_factory();
+        self.player
+            .move_shape
+            .skill(skill_id, skill_factory)
+            .map(|skill| skill.name(skill_factory).map(<[u8]>::to_vec))
+    }
+
+    fn add_war_soul_skill(&mut self, skill_id: u32, level: i32) {
+        let skill_factory = self.skill_factory();
+        let _added = self
+            .player
+            .move_shape
+            .add_skill(skill_id, level, skill_factory);
+    }
+
+    fn war_soul_added_skill_facts(&self, skill_id: u32) -> Option<(i32, u32, Option<Vec<u8>>)> {
+        let skill_factory = self.skill_factory();
+        self.player
+            .move_shape
+            .skill(skill_id, skill_factory)
+            .map(|skill| {
+                (
+                    skill.level(),
+                    skill.skill_type(),
+                    skill.name(skill_factory).map(<[u8]>::to_vec),
+                )
+            })
+    }
 }
 
 fn battle_fairy_skill_snapshot(
@@ -13307,21 +12597,6 @@ fn battle_fairy_skill_property_value(
     goods.addon_property_value(factory, battle_fairy_skill_property_key(property), index)
 }
 
-fn battle_fairy_skill_property_key(property: BattleFairySkillProperty) -> i32 {
-    match property {
-        BattleFairySkillProperty::RequestedOffset(offset) => GAP_BF_MAN.wrapping_add(offset),
-        BattleFairySkillProperty::Sky => GAP_BF_SKY,
-        BattleFairySkillProperty::Earth => GAP_BF_EARTH,
-        BattleFairySkillProperty::Man => GAP_BF_MAN,
-        BattleFairySkillProperty::SkySkill => GAP_BF_SKY_SKILL,
-        BattleFairySkillProperty::EarthSkill => GAP_BF_EARTH_SKILL,
-        BattleFairySkillProperty::ManSkill => GAP_BF_MAN_SKILL,
-        BattleFairySkillProperty::AllSkill => GAP_BF_ALL_SKILL,
-        BattleFairySkillProperty::Huoxieshu => GAP_BF_HUOXIESHU_SKILL,
-        BattleFairySkillProperty::Lingzhishu => GAP_BF_LINGZHISHU_SKILL,
-    }
-}
-
 fn push_battle_fairy_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
     journal.push(GameEffect::SkillSocketReject {
         socket_id,
@@ -13338,20 +12613,6 @@ fn push_player_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
         reason: SKILL_REJECT_REASON,
         code: SKILL_REJECT_CODE,
     });
-}
-
-const fn is_battle_fairy_property_cell(cell: BattleFairyCell) -> bool {
-    matches!(
-        cell,
-        BattleFairyCell::Weapon
-            | BattleFairyCell::Body
-            | BattleFairyCell::Huxinjing
-            | BattleFairyCell::Jewelry
-            | BattleFairyCell::Glove
-            | BattleFairyCell::Pifeng
-            | BattleFairyCell::Yaodai
-            | BattleFairyCell::Xiezi
-    )
 }
 
 fn add_battle_fairy_addon(
@@ -13376,27 +12637,6 @@ fn clamp_battle_fairy_current(
     if maximum < goods.addon_property_value(factory, current_property, 1) {
         let _stored = goods.set_addon_property_value_core(current_property, 1, maximum);
     }
-}
-
-fn add_battle_fairy_u32(current: u32, delta: f64) -> u32 {
-    // `BFPropertyAdd/AllocatePotential` сначала FISTP-усекают delta, затем
-    // выполняют целочисленное сложение/вычитание с текущим свойством.
-    let next = i64::from(current) + delta.trunc() as i64;
-    if next < 0 {
-        0
-    } else {
-        clamp_combat_scalar(next as u32)
-    }
-}
-
-fn add_battle_fairy_u16(current: u16, delta: f64) -> u16 {
-    let next = i64::from(current) + delta.trunc() as i64;
-    if next < 0 { 0 } else { next as u16 }
-}
-
-fn add_battle_fairy_i32(current: i32, delta: f64) -> i32 {
-    let next = i64::from(current) + delta.trunc() as i64;
-    if next < 0 { 0 } else { next as i32 }
 }
 
 const fn clamp_combat_scalar(value: u32) -> u32 {

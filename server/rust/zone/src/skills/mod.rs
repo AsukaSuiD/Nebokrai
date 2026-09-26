@@ -5,6 +5,7 @@ mod battlefairy; // правила навыков боевого духа (сб�
 mod battlefairyattribute; // Check/AI атрибутного октета Po/Yu (0x212..0x219) над hub-швами `battlefairyskill` (порция №6b).
 mod battlefairybasemagic; // Check/AI и Summon BFBaseAttack (0x224) над hub-швами (порция №6b).
 mod battlefairybasemagicphalanx; // снаряд CBFBaseAttackPhalanx: форма, тики, клиентский снимок и формула (порция №6b).
+pub mod battlefairygear; // экипировка, потенциал (0x8FC2A), улучшение (аудит 0x60202/0x60203) и сброс ZHQLS01/ZHJNS01-02 боевой феи у CPlayer: BFPropertyAdd double-apply quirk и полные resolution-оркестрации (порция №7b; hub-трейт `BattleFairyGearHost` прежнего CPlayer).
 pub mod battlefairyskill; // координатор BF-семейства: общий вход, End-контракт, visual-таблица 19 тел и hub-трейты (порция №6b).
 mod battlefairytransfer; // Check/AI CHuoxieshu/CLingzhishu (порция №6b; точечная BF918 — решение C).
 pub mod battlefairysummon; // призыв, следование и гибель/воскрешение боевого духа у CPlayer: SetWarSoulStaus, SummonBF±1, ComputeWarSoulXY, spatial tails и death/revive (порция №7a; view/closure-швы прежнего hub CPlayer).
@@ -40,6 +41,7 @@ pub mod healstate; // живые Begin/restart/AI/End состояний пер�
 pub mod hearten; // Check/AI CHearten и параметры нового состояния (порция №6a).
 pub mod heartenstate; // живые Begin/restart/AI/End CHeartenState (порция №6a).
 mod immediate; // правила цикла immediate-состояний: ID-карта, ветка установки, End-политика и payload.
+mod leiming2; // CLeiming2 (0x21B): семейные с CThunder Check/AI и Summon с AddElementAtk-слагаемым (порция T1).
 mod lifecycle; // база и стадии живого навыка.
 mod lifeshield; // Check/AI CLifeShield (0x220) над hub-швами `battlefairyskill` (порция №6b).
 pub mod littleflash; // CLittleFlash/CLittleFlash2 (0x71/0x7F): Check/AI и visual малых рывков.
@@ -67,6 +69,8 @@ pub mod state; // клиентские контракты состояний: п
 pub mod statefactory; // декодирование последовательности состояний из GameSave.
 pub mod summoncreatureskill; // семья CSummonSkill (0x19A/0x19B/0x19C/0x1F9): Begin/AI/Summon буквально + hub-швы SummonSkill семьи; поворот внешний (кластер C Monster 0x19x).
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
+mod thunder; // CThunder (0x21F): семейные Check/AI громовых облаков, круг BF918 (fix №2) и hub-трейт `SummonCloudGame` (порция T1).
+mod tianhuo; // CTianhuo (0x21A): часы до reuse, equipment[10] даже при нулевой цене, точечная BF918, поворот U, свёртка старой области (порция T1).
 mod visualeffect; // visual-ресурс зарегистрированного навыка.
 mod wangsheng; // прямое восстановление HP навыком CWangsheng, без создания WangshengState.
 mod weak; // правила области ослабления CWeakPhalanx и срока призыва CWeak.
@@ -132,6 +136,12 @@ pub use battlefairybasemagicphalanx::{BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, BattleFa
     CBattleFairyBaseMagicPhalanx, calculate_battle_fairy_base_magic_attack,
     calculate_owned_battle_fairy_base_magic_attack};
 pub use lifeshield::{LIFE_SHIELD_SKILL_ID, execute_battle_fairy_life_shield};
+pub use thunder::{SummonCloudGame, THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY,
+    ThunderSummon, execute_battle_fairy_thunder, thunder_base_damage};
+pub use leiming2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY, Leiming2Summon,
+    execute_battle_fairy_leiming2};
+pub use tianhuo::{TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY, TianhuoSummon,
+    execute_battle_fairy_tianhuo};
 pub use masked_area::{MaskedArea, MaskedAreaPulse, MaskedElementPhalanx};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};
