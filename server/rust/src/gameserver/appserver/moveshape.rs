@@ -8,7 +8,7 @@
 //! сбрасываются перед возвратом движения. GetMinDistance общий для клиента
 //! и ИИ, с конкретным usage владельца и signed-положительной границей 1.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
-//! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
+//! dispatcher-ом states/state.rs. Zone-агрегат хранит одну PDB-структуру
 //! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
 //! Снимки PlayerPropertyState/MonsterPropertyState больше не дублируют арену.
 //! Первичная замена GodBless/Fog/BF использует общий поиск живой позиции и
@@ -189,7 +189,7 @@
 //! волной Z-M4 (`skills/execution/monster.rs` + alias в `mod.rs`) и здесь лишь
 //! реэкспортирован прежним именем. Exact
 //! `Stiffen` (RVA 0x000CD2F0) идёт общей операцией Zone `regions/moveshape.rs`
-//! над скалярами этого владельца с setup value-формой.
+//! над скалярами Zone-агрегата с setup value-формой.
 //! AutoStartPassiveSkill (0x004CDBB0) обходит state-категорию в порядке
 //! вставки, получает concrete GetAI и только при его наличии вызывает
 //! Begin(self, self), затем WhenAddBackStageSkill этого же AI. Сам background-
@@ -264,6 +264,18 @@
 //! Старый GetSkill сохранился в отключённом OtherMessage; world factory
 //! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
+//!
+//! Волна Z-M5 перенесла сам агрегат `CMoveShape` (пространственную базу,
+//! реестр навыков, каноническую арену состояний и скалярные колонки) в Zone
+//! `regions/moveshape::MoveShapeState` вместе с `Default`, Deref-швом в арену
+//! и accessor-ами чтения/записи колонок (moveable/can_fight/stiffen/
+//! killed_by/pets, god, property modifiers, сброс входа в регион). Здесь
+//! остаётся тонкая оболочка старого пакета: делегаты навыков и типизированных
+//! состояний, клиентские snapshot-фасады, `auto_start_passive_skills` и
+//! dispatcher-оркестрация wire-команд `0xBF603/604/605` (её перенос
+//! зарезервирован волной Z-M6). `Deref` оболочки ведёт в `MoveShapeState`,
+//! тот — в `CanonicalStateStorage`: прежний двойной шов потребителей,
+//! включая прямой доступ к полям `ex_states`/`state_entries`, не меняется.
 
 // Арена состояний, её enum-каталог, codec/интервалы, читающие проекции
 // семейств (`accessors`), мутирующие операции и RAW-записи (`mutations`),
@@ -273,7 +285,7 @@
 pub(crate) use nebokrai_zone::skills::state::{
     AppliedState, StateBatch, StateData, StateKey,
 };
-use nebokrai_zone::skills::state::{CanonicalStateStorage, read_u32};
+use nebokrai_zone::skills::state::read_u32;
 
 use std::ops::{Deref, DerefMut};
 
@@ -322,10 +334,9 @@ use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreStat
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::nets::netserver::message::GameMessageDomainOps;
 use nebokrai_zone::regions::moveshape::{
-    MoveShapeSetPositionOutcome, RegionSpanView, force_move_wire, on_move_wire,
+    MoveShapeSetPositionOutcome, MoveShapeState, RegionSpanView, force_move_wire, on_move_wire,
     on_set_position_wire, set_pos_xy_core,
 };
-use nebokrai_zone::regions::skillregistry::SkillRegistry;
 pub(crate) use nebokrai_zone::regions::moveshape::{
     KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePet, MoveShapePositionBlock,
     MoveShapePositionFacts, MoveShapePropertyModifiers,
@@ -389,84 +400,66 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
     fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool>;
 }
 
+/// Тонкая оболочка старого пакета над Zone-агрегатом
+/// `regions/moveshape::MoveShapeState` (волна Z-M5): колонки и их accessor-ы
+/// перенесены туда, а здесь остаются делегаты навыков и типизированных
+/// состояний, клиентские snapshot-фасады, `auto_start_passive_skills` (её
+/// фоновый список принадлежит hub-владельцу `CBaseAI`, и оба caller-а
+/// находятся в старом пакете) и dispatcher-оркестрация wire-команд
+/// `0xBF603/604/605` — её перенос зарезервирован волной Z-M6.
+/// `Deref` ведёт в Zone-агрегат, который сам разворачивает
+/// `CanonicalStateStorage` — прежний двойной шов потребителей не меняется.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
-    shape: CShape,
-    skills: SkillRegistry<MoveShapeSkill>,
-    state_storage: CanonicalStateStorage,
-    property_modifiers: MoveShapePropertyModifiers,
-    moveable_count: i32,
-    moveable: bool,
-    can_fight_count: i32,
-    can_fight: bool,
-    is_god: bool,
-    pets: Vec<MoveShapePet>,
-    current_pets_mode: i32,
-    stiffen_started_ms: u32,
-    stiffen_count: i32,
-    killed_by: Option<KillingAttackIdentity>,
+    inner: MoveShapeState,
 }
 
 impl Deref for CMoveShape {
-    type Target = CanonicalStateStorage;
+    type Target = MoveShapeState;
 
     fn deref(&self) -> &Self::Target {
-        &self.state_storage
+        &self.inner
     }
 }
 
 impl DerefMut for CMoveShape {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state_storage
+        &mut self.inner
     }
 }
-
 
 impl Default for CMoveShape {
     fn default() -> Self {
         Self {
-            shape: CShape::default(),
-            skills: Default::default(),
-            state_storage: CanonicalStateStorage::default(),
-            property_modifiers: MoveShapePropertyModifiers::default(),
-            moveable_count: 0,
-            moveable: true,
-            can_fight_count: 0,
-            can_fight: true,
-            is_god: false,
-            pets: Vec::new(),
-            current_pets_mode: 1,
-            stiffen_started_ms: 0,
-            stiffen_count: 0,
-            killed_by: None,
+            inner: MoveShapeState::default(),
         }
     }
 }
 
 impl CMoveShape {
     pub(crate) const fn property_modifiers(&self) -> &MoveShapePropertyModifiers {
-        &self.property_modifiers
+        self.inner.property_modifiers()
     }
 
     pub(crate) const fn property_modifiers_mut(&mut self) -> &mut MoveShapePropertyModifiers {
-        &mut self.property_modifiers
+        self.inner.property_modifiers_mut()
     }
 
     pub(crate) fn reset_property_modifiers(&mut self) {
-        self.property_modifiers = MoveShapePropertyModifiers::default();
+        self.inner.reset_property_modifiers();
     }
 
     pub(crate) fn set_killed_by(&mut self, attack: KillingAttackIdentity) {
-        self.killed_by = Some(attack);
+        self.inner.set_killed_by(attack);
     }
 
     pub(crate) const fn killed_by(&self) -> Option<KillingAttackIdentity> {
-        self.killed_by
+        self.inner.killed_by()
     }
 
     /// Exact `CMoveShape::Stiffen` (`RVA 0x000CD2F0`) идёт общей операцией Zone
-    /// `regions/moveshape`: скаляры окна/live-limitа остаются полями этого
-    /// владельца, setup передаётся туда value-формой (`GlobeStiffenSetup` —
+    /// `regions/moveshape`: скаляры окна/live-limitа остаются полями Zone-
+    /// агрегата, setup передаётся туда value-формой (`GlobeStiffenSetup` —
     /// POD проекция Shared resources, а не ссылка на setup-владельца).
     pub(crate) fn stiffen(
         &mut self,
@@ -477,48 +470,39 @@ impl CMoveShape {
         now_ms: impl FnMut() -> u32,
         random: impl FnMut(i32) -> i32,
     ) -> u32 {
-        nebokrai_zone::regions::moveshape::stiffen(
-            &mut self.stiffen_started_ms,
-            &mut self.stiffen_count,
-            damage,
-            maximum_hp,
-            reank,
-            setup,
-            now_ms,
-            random,
-        )
+        self.inner.stiffen(damage, maximum_hp, reank, setup, now_ms, random)
     }
 
     pub(crate) const fn current_pets_mode(&self) -> i32 {
-        self.current_pets_mode
+        self.inner.current_pets_mode()
     }
 
     pub(crate) fn set_current_pets_mode(&mut self, mode: i32) -> bool {
-        nebokrai_zone::regions::moveshape::set_current_pets_mode(&mut self.current_pets_mode, mode)
+        self.inner.set_current_pets_mode(mode)
     }
 
     pub(crate) fn add_pet(&mut self, object_type: i32, id: i32, figure: i32) {
-        nebokrai_zone::regions::moveshape::add_pet(&mut self.pets, object_type, id, figure);
+        self.inner.add_pet(object_type, id, figure);
     }
 
     pub(crate) fn remove_pet(&mut self, object_type: i32, id: i32) -> bool {
-        nebokrai_zone::regions::moveshape::remove_pet(&mut self.pets, object_type, id)
+        self.inner.remove_pet(object_type, id)
     }
 
     pub(crate) fn pets(&self) -> &[MoveShapePet] {
-        &self.pets
+        self.inner.pets()
+    }
+
+    pub(crate) const fn shape(&self) -> &CShape {
+        self.inner.shape()
+    }
+
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
+        self.inner.shape_mut()
     }
 
     pub(crate) fn skill_level(&self, skill_id: u32, factory: &CSkillFactory) -> i32 {
         self.skill(skill_id, factory).map_or(0, MoveShapeSkill::level)
-    }
-
-    pub(crate) const fn shape(&self) -> &CShape {
-        &self.shape
-    }
-
-    pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
-        &mut self.shape
     }
 
     /// Точный fresh-object prefix `CMoveShape::AddToByteArray_ForClient`
@@ -577,24 +561,20 @@ impl CMoveShape {
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
     /// сериализуется и проверяется ordinary `OnBeenAttacked` owner-ом.
     pub(crate) const fn set_god(&mut self, enabled: bool) {
-        self.is_god = enabled;
+        self.inner.set_god(enabled);
     }
 
     pub(crate) const fn is_god(&self) -> bool {
-        self.is_god
+        self.inner.is_god()
     }
 
     /// Счётчик запретов боя идёт общей операцией Zone moveshape.
     pub(crate) const fn set_fightable(&mut self, fightable: bool) {
-        nebokrai_zone::regions::moveshape::set_fightable(
-            &mut self.can_fight_count,
-            &mut self.can_fight,
-            fightable,
-        );
+        self.inner.set_fightable(fightable);
     }
 
     pub(crate) const fn can_fight(&self) -> bool {
-        self.can_fight
+        self.inner.can_fight()
     }
 
     pub(crate) fn skills(&self) -> impl Iterator<Item = &MoveShapeSkill> {
@@ -628,9 +608,10 @@ impl CMoveShape {
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
+        let storage = &mut self.inner.state_storage;
         nebokrai_zone::skills::state::serialize_ex_states_for_save(
-            &mut self.state_storage.ex_states,
-            &mut self.state_storage.state_entries,
+            &mut storage.ex_states,
+            &mut storage.state_entries,
             now_ms,
             timed_state_now_milliseconds,
         )
@@ -651,9 +632,10 @@ impl CMoveShape {
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory, now: &mut dyn FnMut() -> u32) {
         let state_owner = self.shape.identity();
+        let storage = &mut self.inner.state_storage;
         nebokrai_zone::skills::state::replace_ex_states(
-            &mut self.state_storage.ex_states,
-            &mut self.state_storage.state_entries,
+            &mut storage.ex_states,
+            &mut storage.state_entries,
             state_owner,
             states,
             skill_factory,
@@ -662,12 +644,13 @@ impl CMoveShape {
     }
 
     pub(crate) fn clear_persisted_runtime_state(&mut self) {
+        let state = &mut self.inner;
         nebokrai_zone::skills::state::clear_persisted_runtime_state(
-            &mut self.skills,
-            &mut self.state_storage.ex_states,
-            &mut self.state_storage.state_entries,
-            &mut self.can_fight_count,
-            &mut self.can_fight,
+            &mut state.skills,
+            &mut state.state_storage.ex_states,
+            &mut state.state_storage.state_entries,
+            &mut state.can_fight_count,
+            &mut state.can_fight,
         );
     }
 
@@ -679,12 +662,7 @@ impl CMoveShape {
     /// moveshape; конкретные Begin заново устанавливают свои запреты после
     /// этого сброса в общем живом проходе.
     pub(crate) const fn reset_region_entry_control(&mut self) {
-        nebokrai_zone::regions::moveshape::reset_region_entry_control(
-            &mut self.moveable,
-            &mut self.can_fight,
-            &mut self.moveable_count,
-            &mut self.can_fight_count,
-        );
+        self.inner.reset_region_entry_control();
     }
 
     pub(crate) fn has_ride_state(&self) -> bool {
@@ -698,19 +676,21 @@ impl CMoveShape {
         &mut self,
         properties: super::player::PlayerCombatProperties,
     ) {
+        let region_id = self.shape.get_region_id();
         nebokrai_zone::skills::state::append_automatic_hp_mp_states(
-            &mut self.state_storage,
+            &mut self.inner.state_storage,
             properties,
-            self.shape.get_region_id(),
+            region_id,
         );
     }
 
     /// Общий NULL-user Begin свежего restore: без clock и пакета, visual loop=1.
     pub(crate) fn append_automatic_restore_state(&mut self, state: AutomaticRestoreState) -> StateKey {
+        let region_id = self.shape.get_region_id();
         nebokrai_zone::skills::state::append_automatic_restore_state(
-            &mut self.state_storage,
+            &mut self.inner.state_storage,
             state,
-            self.shape.get_region_id(),
+            region_id,
         )
     }
 
@@ -1428,7 +1408,7 @@ impl CMoveShape {
 
     /// Выбранный ID независимо от наличия зарегистрированного навыка.
     pub(crate) const fn current_skill_id(&self) -> Option<u32> {
-        self.skills.current_skill_id()
+        self.inner.skills.current_skill_id()
     }
 
     /// Проекция GetCurrentSkill в реестр; execution и End остаются у skill-owner.
@@ -1445,7 +1425,7 @@ impl CMoveShape {
     /// `SetCurrentSkill` (завершение прежнего concrete skill) не подменяется
     /// записью ID и остаётся у соответствующего owner-а.
     pub(crate) const fn set_current_skill_id(&mut self, skill_id: Option<u32>) {
-        self.skills.set_current_skill_id(skill_id);
+        self.inner.skills.set_current_skill_id(skill_id);
     }
 
     /// Exact `SetItemSkill`: native owner только добавляет ID в ordered vector
@@ -1455,20 +1435,16 @@ impl CMoveShape {
     }
 
     pub(crate) const fn is_moveable(&self) -> bool {
-        self.moveable
+        self.inner.is_moveable()
     }
 
     pub(crate) const fn moveable_count(&self) -> i32 {
-        self.moveable_count
+        self.inner.moveable_count()
     }
 
     /// Счётчик запретов движения идёт общей операцией Zone moveshape.
     pub(crate) const fn set_moveable(&mut self, moveable: bool) {
-        nebokrai_zone::regions::moveshape::set_moveable(
-            &mut self.moveable_count,
-            &mut self.moveable,
-            moveable,
-        );
+        self.inner.set_moveable(moveable);
     }
 
     /// AddSkill (0x004D1C70): ненулевой уровень не понижается, повышение

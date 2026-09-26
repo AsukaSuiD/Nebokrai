@@ -6,7 +6,7 @@ pub mod build; // CBuild: data-семья и скалярные правила �
 pub mod citygate; // CCityGate: data-семья и скалярные правила городских ворот.
 mod identity; // ShapeIdentity: локальная игровая ссылка type/ID/GUID.
 pub mod monster; // CMonster: скалярная база и правила монстра (script/tame/pet, защита первого удара).
-pub mod moveshape; // CMoveShape: пространственное ядро и скалярные колонки (запреты, направления, питомцы).
+pub mod moveshape; // MoveShapeState (CMoveShape): агрегат фигуры — пространство, реестр навыков, арена состояний и скалярные колонки.
 pub mod npc; // CNpc: data-профиль и скалярные правила NPC.
 pub mod proxyserverregion; // CProxyServerRegion: proxy-регион GameServer.
 pub mod region; // CRegion: spatial/persistence поверхность региона.

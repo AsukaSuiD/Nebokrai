@@ -1,15 +1,18 @@
-//! Пространственное ядро, поведение скалярных колонок и общая основа
-//! wire-команд движения `CMoveShape` исторического GameServer, перенесённые
-//! в Zone `regions/` волной moveshape. Исходный владелец —
-//! `appserver/moveshape.h/.cpp`. Переходный агрегат `CMoveShape` остаётся в
-//! старом пакете, хранит те же колонки и делегирует сюда их поведение без
-//! изменения сигнатур; нематериальные accessor-ы чтения/записи полей остаются
-//! у этого переходного владельца. Основа wire-команд `0xBF603/604/605`
-//! (порция 2) возвращает решение и готовый пакет типизированным результатом;
-//! around-доставку и запись пространственного членства по-прежнему выполняет
-//! dispatcher-обвязка старого пакета, а чтение span и запрета клетки региона
-//! основа получает узким швом `RegionSpanView`, реализованным переходным
-//! владельцем хранилищ у себя.
+//! Агрегат `CMoveShape` исторического GameServer со скалярными колонками и
+//! общая основа wire-команд движения, перенесённые в Zone `regions/` волной
+//! moveshape. Исходный владелец — `appserver/moveshape.h/.cpp`. Сам агрегат
+//! (пространственная база `CShape`, реестр навыков, каноническая арена
+//! состояний и скалярные колонки) материализован здесь типом `MoveShapeState`
+//! волной Z-M5 вместе с `Default`, Deref-швом в арену состояний и accessor-ами
+//! чтения/записи колонок. Старый пакет хранит тонкую оболочку `CMoveShape`
+//! над этим типом: делегаты навыков и арены состояний, клиентские
+//! snapshot-фасады и dispatcher-оркестрация wire-команд своей волны Z-M6.
+//! Основа wire-команд `0xBF603/604/605` (порция 2) возвращает решение и
+//! готовый пакет типизированным результатом; around-доставку и запись
+//! пространственного членства по-прежнему выполняет dispatcher-обвязка
+//! старого пакета, а чтение span и запрета клетки региона основа получает
+//! узким швом `RegionSpanView`, реализованным переходным владельцем хранилищ
+//! у себя.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
@@ -37,6 +40,8 @@
 //! unsigned HP, скан таблицы thresholds/probabilities сверху вниз, вычитание
 //! `GetReAnk` перед signed-сравнением с `random(100)` и возврат delay.
 
+use std::ops::{Deref, DerefMut};
+
 use nebokrai_shared::resources::GlobeStiffenSetup;
 use nebokrai_shared::runtime::get_line_direction;
 
@@ -46,8 +51,11 @@ use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapePositionDispatch,
 };
+use super::skillregistry::SkillRegistry;
 use crate::app::game_message::CMessage;
 use crate::combat::AttackInformation;
+use crate::skills::execution::MoveShapeSkill;
+use crate::skills::state::CanonicalStateStorage;
 
 const NPC_TYPE: i32 = 500;
 const SET_POSITION_MESSAGE: i32 = 0xBF603;
@@ -152,6 +160,191 @@ impl ShapePositionDispatch for MoveShapePositionDispatch {
         y: f32,
     ) -> Result<(), Self::Error> {
         set_pos_xy_core(Some(region), shape, x, y, self.facts)
+    }
+}
+
+/// Агрегат `CMoveShape` исторического GameServer, перенесённый из
+/// `appserver/moveshape.rs` волной Z-M5: пространственная база `CShape`,
+/// реестр навыков `SkillRegistry<MoveShapeSkill>`, каноническая арена
+/// состояний и скалярные колонки — property modifiers, счётчики запретов
+/// движения и боя, god-флаг, список питомцев с режимом, stiffen-окно и
+/// потребляемая поздним OnDied запись убийцы. Поля открыты по прецеденту
+/// `skills::state::CanonicalStateStorage`: dispatcher-обвязка и делегаты
+/// старого пакета обращаются к хранилищам напрямую, а поведение колонок
+/// инкапсулируют методы ниже и свободные операции этого модуля.
+/// `Deref` ведёт в арену состояний — прежний шов старого пакета.
+/// Старый пакет хранит тонкую оболочку `CMoveShape` над этим типом с
+/// делегатами навыков/состояний, клиентскими snapshot-фасадами и
+/// dispatcher-оркестрацией wire-команд своей волны Z-M6.
+#[derive(Debug, Eq, PartialEq)]
+pub struct MoveShapeState {
+    pub shape: CShape,
+    pub skills: SkillRegistry<MoveShapeSkill>,
+    pub state_storage: CanonicalStateStorage,
+    pub property_modifiers: MoveShapePropertyModifiers,
+    pub moveable_count: i32,
+    pub moveable: bool,
+    pub can_fight_count: i32,
+    pub can_fight: bool,
+    pub is_god: bool,
+    pub pets: Vec<MoveShapePet>,
+    pub current_pets_mode: i32,
+    pub stiffen_started_ms: u32,
+    pub stiffen_count: i32,
+    pub killed_by: Option<KillingAttackIdentity>,
+}
+
+impl Deref for MoveShapeState {
+    type Target = CanonicalStateStorage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state_storage
+    }
+}
+
+impl DerefMut for MoveShapeState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state_storage
+    }
+}
+
+impl Default for MoveShapeState {
+    fn default() -> Self {
+        Self {
+            shape: CShape::default(),
+            skills: Default::default(),
+            state_storage: CanonicalStateStorage::default(),
+            property_modifiers: MoveShapePropertyModifiers::default(),
+            moveable_count: 0,
+            moveable: true,
+            can_fight_count: 0,
+            can_fight: true,
+            is_god: false,
+            pets: Vec::new(),
+            current_pets_mode: 1,
+            stiffen_started_ms: 0,
+            stiffen_count: 0,
+            killed_by: None,
+        }
+    }
+}
+
+impl MoveShapeState {
+    pub const fn property_modifiers(&self) -> &MoveShapePropertyModifiers {
+        &self.property_modifiers
+    }
+
+    pub const fn property_modifiers_mut(&mut self) -> &mut MoveShapePropertyModifiers {
+        &mut self.property_modifiers
+    }
+
+    pub fn reset_property_modifiers(&mut self) {
+        self.property_modifiers = MoveShapePropertyModifiers::default();
+    }
+
+    pub fn set_killed_by(&mut self, attack: KillingAttackIdentity) {
+        self.killed_by = Some(attack);
+    }
+
+    pub const fn killed_by(&self) -> Option<KillingAttackIdentity> {
+        self.killed_by
+    }
+
+    /// Exact `CMoveShape::Stiffen` (`RVA 0x000CD2F0`) идёт общей операцией
+    /// этого модуля: скаляры окна/live-limitа остаются полями этого агрегата,
+    /// setup передаётся value-формой (`GlobeStiffenSetup` — POD проекция
+    /// Shared resources, а не ссылка на setup-владельца).
+    pub fn stiffen(
+        &mut self,
+        damage: u16,
+        maximum_hp: u32,
+        reank: u16,
+        setup: GlobeStiffenSetup,
+        now_ms: impl FnMut() -> u32,
+        random: impl FnMut(i32) -> i32,
+    ) -> u32 {
+        stiffen(
+            &mut self.stiffen_started_ms,
+            &mut self.stiffen_count,
+            damage,
+            maximum_hp,
+            reank,
+            setup,
+            now_ms,
+            random,
+        )
+    }
+
+    pub const fn current_pets_mode(&self) -> i32 {
+        self.current_pets_mode
+    }
+
+    pub fn set_current_pets_mode(&mut self, mode: i32) -> bool {
+        set_current_pets_mode(&mut self.current_pets_mode, mode)
+    }
+
+    pub fn add_pet(&mut self, object_type: i32, id: i32, figure: i32) {
+        add_pet(&mut self.pets, object_type, id, figure);
+    }
+
+    pub fn remove_pet(&mut self, object_type: i32, id: i32) -> bool {
+        remove_pet(&mut self.pets, object_type, id)
+    }
+
+    pub fn pets(&self) -> &[MoveShapePet] {
+        &self.pets
+    }
+
+    pub const fn shape(&self) -> &CShape {
+        &self.shape
+    }
+
+    pub const fn shape_mut(&mut self) -> &mut CShape {
+        &mut self.shape
+    }
+
+    /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
+    /// сериализуется и проверяется ordinary `OnBeenAttacked` owner-ом.
+    pub const fn set_god(&mut self, enabled: bool) {
+        self.is_god = enabled;
+    }
+
+    pub const fn is_god(&self) -> bool {
+        self.is_god
+    }
+
+    /// Счётчик запретов боя идёт общей операцией этого модуля.
+    pub const fn set_fightable(&mut self, fightable: bool) {
+        set_fightable(&mut self.can_fight_count, &mut self.can_fight, fightable);
+    }
+
+    pub const fn can_fight(&self) -> bool {
+        self.can_fight
+    }
+
+    /// Scalar-prefix сброса при входе в регион идёт общей операцией этого
+    /// модуля; конкретные Begin заново устанавливают свои запреты после
+    /// этого сброса в общем живом проходе.
+    pub const fn reset_region_entry_control(&mut self) {
+        reset_region_entry_control(
+            &mut self.moveable,
+            &mut self.can_fight,
+            &mut self.moveable_count,
+            &mut self.can_fight_count,
+        );
+    }
+
+    pub const fn is_moveable(&self) -> bool {
+        self.moveable
+    }
+
+    pub const fn moveable_count(&self) -> i32 {
+        self.moveable_count
+    }
+
+    /// Счётчик запретов движения идёт общей операцией этого модуля.
+    pub const fn set_moveable(&mut self, moveable: bool) {
+        set_moveable(&mut self.moveable_count, &mut self.moveable, moveable);
     }
 }
 
