@@ -67,6 +67,10 @@ use super::csession::CSession;
 use super::cteam::CTeam;
 use super::cteamate::{CTeamate, TeamMateAvailability};
 use super::ctrader::CTrader;
+use nebokrai_zone::trade::ctrader::{
+    TRADE_PLUG_TYPE, TRADE_SESSION_LIFETIME, TRADE_SESSION_MAXIMUM_PLUGS,
+    TRADE_SESSION_MINIMUM_PLUGS,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionPlugKind {
@@ -808,9 +812,11 @@ impl CSessionFactory {
             player_ids,
         })
     }
-    /// Exact normal `(2, 2, 0)` player trade: первый plug принадлежит
-    /// пригласившему, второй — отвечающему, как два последовательных
-    /// `CreatePlug/InsertPlug` в `0x8FA07`.
+    /// Exact normal `(TRADE_SESSION_MINIMUM_PLUGS, TRADE_SESSION_MAXIMUM_PLUGS,
+    /// TRADE_SESSION_LIFETIME)` = `(2, 2, 0)` player trade: первый plug
+    /// принадлежит пригласившему, второй — отвечающему, как два
+    /// последовательных `CreatePlug/InsertPlug` в `0x8FA07`. Константы рамки
+    /// принадлежат Zone `trade/ctrader`.
     pub(crate) fn create_player_trade_session(
         &mut self,
         now_ms: u32,
@@ -818,7 +824,11 @@ impl CSessionFactory {
         answerer_id: i32,
     ) -> Option<(i32, i32, i32)> {
         let session_id = self.next_session_id;
-        let mut session = CSession::normal(2, 2, 0);
+        let mut session = CSession::normal(
+            TRADE_SESSION_MINIMUM_PLUGS,
+            TRADE_SESSION_MAXIMUM_PLUGS,
+            TRADE_SESSION_LIFETIME,
+        );
         if !session.start(now_ms) {
             return None;
         }
@@ -828,12 +838,12 @@ impl CSessionFactory {
         inviter.set_id(inviter_plug_id);
         inviter.set_owner(400, inviter_id);
         inviter.set_session(session_id);
-        inviter.set_plug_type(1);
+        inviter.set_plug_type(TRADE_PLUG_TYPE);
         let mut answerer = CPlug::new();
         answerer.set_id(answerer_plug_id);
         answerer.set_owner(400, answerer_id);
         answerer.set_session(session_id);
-        answerer.set_plug_type(1);
+        answerer.set_plug_type(TRADE_PLUG_TYPE);
         if !session.insert_plug(inviter_plug_id) || !session.insert_plug(answerer_plug_id) {
             return None;
         }

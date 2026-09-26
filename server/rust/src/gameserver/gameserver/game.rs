@@ -757,6 +757,29 @@ use nebokrai_zone::content::{QuestCatalog, ScriptFunctionRegistry, ScriptResourc
 use nebokrai_zone::quests::append_client_quest_record;
 use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
 use nebokrai_zone::trade::auction::auction_listing_goods_allowed;
+use nebokrai_zone::trade::audit::{
+    GroundMoveAuditActor, TradeAuditPartyFrame, ground_goods_move_log_frame,
+    trade_currency_audit_frame, trade_goods_audit_frame,
+};
+use nebokrai_zone::trade::ctrader::{
+    trade_extend_id_parts, trade_offer_amount_satisfies,
+    trade_offer_player_container_allowed,
+};
+use nebokrai_zone::trade::currency::{
+    TradeMoneyMerge, bank_currency_amount_valid, bank_currency_transfer_positions_valid,
+    bank_currency_transfer_route_allowed, bank_transfer_audit_reason,
+    ground_currency_index_matches, merge_trade_money,
+};
+use nebokrai_zone::trade::ground::{
+    ground_currency_pickup_destination, ground_drop_amount_valid, ground_drop_forbidden,
+    ground_move_audit_price, ground_partial_drop_busy_blocked, ground_pickup_out_of_range,
+};
+use nebokrai_zone::trade::session::{
+    PlayerTradeConditionBlock, TradeBillingRequest, build_trade_billing_request_frame,
+    trade_condition_notice, trade_currency_balance_insufficient,
+    trade_currency_capacity_exceeded, trade_resulting_burden_exceeded,
+    trade_yuan_billing_decision,
+};
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
 use std::ffi::CString;
@@ -2154,19 +2177,6 @@ pub(crate) enum PlayerTradeOfferMutation {
     Removed(TraderOfferRemoved),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerTradeConditionBlock {
-    SessionUnavailable,
-    MissingPlayerOrPlug,
-    MissingOfferedGoods,
-    BurdenExceeded,
-    PacketSpace,
-    InsufficientGold,
-    GoldCapacity,
-    InsufficientYuanBao,
-    YuanBaoCapacity,
-}
-
 #[derive(Clone, Debug)]
 struct PlayerTradePartySnapshot {
     plug_id: i32,
@@ -2193,6 +2203,20 @@ struct PlayerTradeAuditParty {
     tile_y: i32,
     client_ip: u32,
     name: Vec<u8>,
+}
+
+impl PlayerTradeAuditParty {
+    /// Скаляры party-записи audit-кадра `0x60201` владельца Zone `trade/audit`.
+    fn frame(&self) -> TradeAuditPartyFrame {
+        TradeAuditPartyFrame {
+            owner_id: self.owner_id,
+            pk_count: self.pk_count,
+            money: self.money,
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            client_ip: self.client_ip,
+        }
+    }
 }
 
 /// Общая граница завершения смерти монстра. Она нужна и боевому проходу ИИ,
@@ -7259,20 +7283,19 @@ impl CGame {
             tracing::trace!(player_id, reason, "игрок для журнала перемещения предмета не найден");
             return;
         };
-        let mut audit = CMessage::new(0x0006_0202);
-        audit.add_byte(reason);
-        audit.add_long(player_id);
-        audit.base_mut().add_short(player.pk_count() as i16);
-        audit.add_ulong(player.money());
-        audit.add_ulong(player.depot_money());
-        audit.base_mut().add_guid(goods.ex_id);
-        audit.add_ulong(price);
-        add_legacy_c_string(audit.base_mut(), name);
-        audit.add_ulong(amount);
-        audit.add_long(player.server_region_id().unwrap_or_default());
-        audit.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
-        audit.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
-        audit.add_ulong(player.client_ip());
+        // Кадр 0x60202 собирает Zone `trade/audit`; этот owner снимает
+        // скаляры актёра и выполняет transport-отправку.
+        let actor = GroundMoveAuditActor {
+            player_id,
+            pk_count: player.pk_count() as i16,
+            money: player.money(),
+            depot_money: player.depot_money(),
+            region_id: player.server_region_id().unwrap_or_default(),
+            tile_x: player.shape().get_tile_x().unwrap_or_default() as u32,
+            tile_y: player.shape().get_tile_y().unwrap_or_default() as u32,
+            client_ip: player.client_ip(),
+        };
+        let audit = ground_goods_move_log_frame(reason, &actor, goods.ex_id, price, name, amount);
         let delivery = audit.send(self, false);
         tracing::trace!(player_id, reason, ?delivery, "журнал перемещения предмета отправлен");
     }
@@ -7287,13 +7310,10 @@ impl CGame {
         destination_extend_id: i32,
         destination_position: u32,
     ) -> Result<(), BankCurrencyTransferBlock> {
-        if !matches!(
-            (source_extend_id, destination_extend_id),
-            (4, 8) | (8, 4) | (15, 4)
-        ) {
+        if !bank_currency_transfer_route_allowed(source_extend_id, destination_extend_id) {
             return Err(BankCurrencyTransferBlock::UnsupportedRoute);
         }
-        if source_position != 0 || destination_position != 0 {
+        if !bank_currency_transfer_positions_valid(source_position, destination_position) {
             return Err(BankCurrencyTransferBlock::InvalidPosition);
         }
         let source = self
@@ -7304,7 +7324,7 @@ impl CGame {
         if source.identity().ex_id != goods_id {
             return Err(BankCurrencyTransferBlock::MissingGoods);
         }
-        if amount == 0 || source.amount() < amount {
+        if !bank_currency_amount_valid(source.amount(), amount) {
             return Err(BankCurrencyTransferBlock::AmountMismatch);
         }
         if source_extend_id == 15 {
@@ -7461,7 +7481,7 @@ impl CGame {
         {
             self.send_ground_goods_move_log(
                 player_id,
-                if destination_extend_id == 8 { 9 } else { 10 },
+                bank_transfer_audit_reason(destination_extend_id),
                 removal.source,
                 amount,
                 &audit_name,
@@ -10813,29 +10833,27 @@ impl CGame {
         .filter(|goods| goods.identity().ex_id == goods_id)
         .ok_or(GroundGoodsMoveBlock::MissingGoods)?
         .clone();
-        let source_is_currency = matches!(
+        let source_is_currency = ground_currency_index_matches(
             source.base_properties_index(),
-            index if index == self.goods_factory.get_gold_coin_index()
-                || index == self.goods_factory.get_yuan_bao_index()
+            self.goods_factory.get_gold_coin_index(),
+            self.goods_factory.get_yuan_bao_index(),
         );
-        if source.amount() != amount
-            && !source_is_currency
-            && matches!(
+        if ground_partial_drop_busy_blocked(
+            source.amount() != amount,
+            source_is_currency,
+            matches!(
                 player.current_progress(),
                 PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
-            )
-        {
+            ),
+        ) {
             return Err(GroundGoodsMoveBlock::DropBusy(player.current_progress()));
         }
-        if source.amount() < amount
-            || amount == 0
-            || (source_extend_id == 2 && source.amount() != amount)
-        {
+        if !ground_drop_amount_valid(source.amount(), amount, source_extend_id == 2) {
             return Err(GroundGoodsMoveBlock::AmountMismatch);
         }
-        if source.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x100
-            != 0
-        {
+        if ground_drop_forbidden(
+            source.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32,
+        ) {
             return Err(GroundGoodsMoveBlock::DropForbidden);
         }
         let origin_x = player.shape().get_tile_x().map_err(|error| {
@@ -11292,11 +11310,7 @@ impl CGame {
                 player_id,
                 3,
                 goods,
-                if source_is_currency {
-                    amount
-                } else {
-                    source.price()
-                },
+                ground_move_audit_price(source_is_currency, amount, source.price()),
                 source.name(),
                 amount,
             );
@@ -11402,7 +11416,7 @@ impl CGame {
                 ));
             }
         };
-        if ground_x.abs_diff(player_x) >= 2 || ground_y.abs_diff(player_y) >= 2 {
+        if ground_pickup_out_of_range(ground_x, ground_y, player_x, player_y) {
             self.restore_region_owner(owner);
             return Err(GroundGoodsMoveBlock::PickupOutOfRange);
         }
@@ -11425,10 +11439,12 @@ impl CGame {
         let (destination_extend_id, destination_position) =
             if matches!(destination_extend_id, 1 | 2) {
                 (destination_extend_id, destination_position)
-            } else if audit_base_index == self.goods_factory.get_gold_coin_index() {
-                (4, 0)
-            } else if audit_base_index == self.goods_factory.get_yuan_bao_index() {
-                (5, 0)
+            } else if let Some(currency_destination) = ground_currency_pickup_destination(
+                audit_base_index,
+                self.goods_factory.get_gold_coin_index(),
+                self.goods_factory.get_yuan_bao_index(),
+            ) {
+                currency_destination
             } else {
                 (destination_extend_id, destination_position)
             };
@@ -11748,15 +11764,15 @@ impl CGame {
                     id: 0,
                     ex_id: goods_id,
                 },
-                if matches!(
-                    audit_base_index,
-                    index if index == self.goods_factory.get_gold_coin_index()
-                        || index == self.goods_factory.get_yuan_bao_index()
-                ) {
-                    amount
-                } else {
-                    audit_price
-                },
+                ground_move_audit_price(
+                    ground_currency_index_matches(
+                        audit_base_index,
+                        self.goods_factory.get_gold_coin_index(),
+                        self.goods_factory.get_yuan_bao_index(),
+                    ),
+                    amount,
+                    audit_price,
+                ),
                 &audit_name,
                 amount,
             );
@@ -14708,9 +14724,8 @@ impl CGame {
         goods_id: CGuid,
         amount: u32,
     ) -> Result<TraderOfferAdded, PlayerTradeOfferBlock> {
-        let plug_id = destination_extend_id >> 8;
-        let kind = TraderContainerKind::from_index(destination_extend_id & 0xff)
-            .ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
+        let (plug_id, kind) = trade_extend_id_parts(destination_extend_id);
+        let kind = kind.ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
         let actual_plug_id = self
             .session_factory
             .trader_plug_by_owner(session_id, player_id)
@@ -14718,12 +14733,7 @@ impl CGame {
         if actual_plug_id != plug_id {
             return Err(PlayerTradeOfferBlock::OwnerMismatch);
         }
-        let expected_source = match kind {
-            TraderContainerKind::Goods => matches!(source_extend_id, 1 | 2),
-            TraderContainerKind::Gold => source_extend_id == 4,
-            TraderContainerKind::YuanBao => source_extend_id == 5,
-        };
-        if !expected_source {
+        if !trade_offer_player_container_allowed(kind, source_extend_id) {
             return Err(PlayerTradeOfferBlock::UnsupportedSource);
         }
         let goods = self
@@ -14764,9 +14774,8 @@ impl CGame {
         destination_extend_id: i32,
         destination_position: u32,
     ) -> Result<TraderOfferRemoved, PlayerTradeOfferBlock> {
-        let plug_id = source_extend_id >> 8;
-        let kind = TraderContainerKind::from_index(source_extend_id & 0xff)
-            .ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
+        let (plug_id, kind) = trade_extend_id_parts(source_extend_id);
+        let kind = kind.ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
         let actual_plug_id = self
             .session_factory
             .trader_plug_by_owner(session_id, player_id)
@@ -14774,12 +14783,7 @@ impl CGame {
         if actual_plug_id != plug_id {
             return Err(PlayerTradeOfferBlock::OwnerMismatch);
         }
-        let expected_destination = match kind {
-            TraderContainerKind::Goods => matches!(destination_extend_id, 1 | 2),
-            TraderContainerKind::Gold => destination_extend_id == 4,
-            TraderContainerKind::YuanBao => destination_extend_id == 5,
-        };
-        if !expected_destination {
+        if !trade_offer_player_container_allowed(kind, destination_extend_id) {
             return Err(PlayerTradeOfferBlock::UnsupportedSource);
         }
         let original = self
@@ -14806,6 +14810,11 @@ impl CGame {
             .ok_or(PlayerTradeOfferBlock::MissingSourceGoods)
     }
 
+    /// Машинная очерёдность сброса готовности (`OnObjectAdded` рамки): готов
+    /// owner уже сбросил свой `ready` при записи предложения; здесь `CGame`
+    /// сбрасывает обоих участников и рассылает `0xBF716(byte 0)`. Micro-окно
+    /// между локальным и внешним сбросом — контракт исходного порядка
+    /// (risk-note Zone `trade/ctrader`), очерёдность сознательно не уплотняется.
     pub(crate) fn reset_player_trade_ready(&mut self, session_id: i32) {
         let plug_ids = self
             .session_factory
@@ -14987,11 +14996,11 @@ impl CGame {
                         offer.goods_id,
                     )
                     .filter(|goods| {
-                        if offer.original_container_extend_id == 1 {
-                            goods.amount() >= offer.goods_amount
-                        } else {
-                            goods.amount() == offer.goods_amount
-                        }
+                        trade_offer_amount_satisfies(
+                            offer.original_container_extend_id,
+                            goods.amount(),
+                            offer.goods_amount,
+                        )
                     })
                     .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
                 let mut offered_goods = goods.clone();
@@ -15025,11 +15034,11 @@ impl CGame {
                         offer.goods_id,
                     )
                     .filter(|goods| {
-                        if offer.original_container_extend_id == 1 {
-                            goods.amount() >= offer.goods_amount
-                        } else {
-                            goods.amount() == offer.goods_amount
-                        }
+                        trade_offer_amount_satisfies(
+                            offer.original_container_extend_id,
+                            goods.amount(),
+                            offer.goods_amount,
+                        )
                     })
                     .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
                 let mut offered_goods = goods.clone();
@@ -15042,33 +15051,30 @@ impl CGame {
                     return Err(PlayerTradeConditionBlock::PacketSpace);
                 }
             }
-            let resulting_burden = player
-                .current_burden(&self.goods_factory)
-                .wrapping_sub(own_weight)
-                .wrapping_add(incoming_weight);
-            if u32::from(player.combat_properties().burden) < resulting_burden {
+            if trade_resulting_burden_exceeded(
+                player.current_burden(&self.goods_factory),
+                own_weight,
+                incoming_weight,
+                u32::from(player.combat_properties().burden),
+            ) {
                 return Err(PlayerTradeConditionBlock::BurdenExceeded);
             }
-            if player.money() < party.gold {
+            if trade_currency_balance_insufficient(player.money(), party.gold) {
                 return Err(PlayerTradeConditionBlock::InsufficientGold);
             }
-            if maximum_gold
-                < player
-                    .money()
-                    .wrapping_sub(party.gold)
-                    .wrapping_add(contrary.gold)
+            if trade_currency_capacity_exceeded(player.money(), party.gold, contrary.gold, maximum_gold)
             {
                 return Err(PlayerTradeConditionBlock::GoldCapacity);
             }
-            if player.yuan_bao() < party.yuan_bao {
+            if trade_currency_balance_insufficient(player.yuan_bao(), party.yuan_bao) {
                 return Err(PlayerTradeConditionBlock::InsufficientYuanBao);
             }
-            if maximum_yuan_bao
-                < player
-                    .yuan_bao()
-                    .wrapping_sub(party.yuan_bao)
-                    .wrapping_add(contrary.yuan_bao)
-            {
+            if trade_currency_capacity_exceeded(
+                player.yuan_bao(),
+                party.yuan_bao,
+                contrary.yuan_bao,
+                maximum_yuan_bao,
+            ) {
                 return Err(PlayerTradeConditionBlock::YuanBaoCapacity);
             }
         }
@@ -15090,36 +15096,23 @@ impl CGame {
             .players
             .get(&receiver.owner_id)
             .expect("validated trade receiver остаётся online");
-        let ip = |value: u32| {
-            format!(
-                "{}.{}.{}.{}",
-                value & 0xff,
-                value >> 8 & 0xff,
-                value >> 16 & 0xff,
-                value >> 24
-            )
-        };
-        let mut message = CMessage::new(0x000e_f203);
-        message.add_long(2);
-        message.add_long(payer.owner_id);
-        message.add_long(receiver.owner_id);
-        add_legacy_c_string(message.base_mut(), payer_player.account());
-        add_legacy_c_string(message.base_mut(), receiver_player.account());
-        add_legacy_c_string(message.base_mut(), ip(payer_player.client_ip()).as_bytes());
-        add_legacy_c_string(
-            message.base_mut(),
-            ip(receiver_player.client_ip()).as_bytes(),
-        );
-        add_legacy_c_string(message.base_mut(), payer_player.player_name());
-        add_legacy_c_string(message.base_mut(), receiver_player.player_name());
-        message.add_ulong(amount);
-        message.add_long(1);
-        message.add_long(1);
-        message.add_long(session_id);
-        message.add_long(payer.plug_id);
-        message.add_long(self.login_server_id);
-        message.add_long(self.world_server_id);
-        message.base_mut().add_guid(CGuid::GUID_INVALID);
+        // Кадр 0xEF203 собирает Zone `trade/session`; dotted-quad тексты —
+        // тем же IPv4-правилом Zone `trade/auction`.
+        let message = build_trade_billing_request_frame(&TradeBillingRequest {
+            payer_owner_id: payer.owner_id,
+            receiver_owner_id: receiver.owner_id,
+            payer_account: payer_player.account(),
+            receiver_account: receiver_player.account(),
+            payer_ip: payer_player.client_ip(),
+            receiver_ip: receiver_player.client_ip(),
+            payer_name: payer_player.player_name(),
+            receiver_name: receiver_player.player_name(),
+            amount,
+            session_id,
+            payer_plug_id: payer.plug_id,
+            login_server_id: self.login_server_id,
+            world_server_id: self.world_server_id,
+        });
         // GameServer EXE/PDB: вызов RVA 0x001BB036 для 0xEF203/type 2
         // ведёт к CMessage::SendToBS (RVA 0x00013BE0), а не Send/World.
         message.send_to_bs(self, false)
@@ -15136,20 +15129,6 @@ impl CGame {
                     .send_to_player(self.net_server(), trader.owner_id())
             })
             .collect()
-    }
-
-    fn trade_condition_notice(block: PlayerTradeConditionBlock) -> &'static [u8] {
-        match block {
-            PlayerTradeConditionBlock::PacketSpace => b"GS0267",
-            PlayerTradeConditionBlock::BurdenExceeded => b"GS0268",
-            PlayerTradeConditionBlock::MissingOfferedGoods => b"GS0269",
-            PlayerTradeConditionBlock::MissingPlayerOrPlug
-            | PlayerTradeConditionBlock::SessionUnavailable => b"GS0270",
-            PlayerTradeConditionBlock::InsufficientGold => b"GS0271",
-            PlayerTradeConditionBlock::GoldCapacity => b"GS0272",
-            PlayerTradeConditionBlock::InsufficientYuanBao => b"GS0273",
-            PlayerTradeConditionBlock::YuanBaoCapacity => b"GS0274",
-        }
     }
 
     pub(crate) fn toggle_player_trade_ready<Context: GameContainerMessageRuntime>(
@@ -15238,7 +15217,7 @@ impl CGame {
             Ok(parties) => parties,
             Err(block) => {
                 let notification_deliveries =
-                    self.send_trade_notice(session_id, Self::trade_condition_notice(block));
+                    self.send_trade_notice(session_id, trade_condition_notice(block));
                 tracing::trace!(
                     player_id,
                     session_id,
@@ -15250,14 +15229,14 @@ impl CGame {
                 return;
             }
         };
-        let yuan_difference = i64::from(parties[0].yuan_bao) - i64::from(parties[1].yuan_bao);
-        if yuan_difference != 0 {
-            let (payer, receiver) = if yuan_difference > 0 {
-                (&parties[0], &parties[1])
-            } else {
-                (&parties[1], &parties[0])
-            };
-            let amount = yuan_difference.unsigned_abs() as u32;
+        if let Some(billing) =
+            trade_yuan_billing_decision(parties[0].yuan_bao, parties[1].yuan_bao)
+        {
+            let (payer, receiver) = (
+                &parties[billing.payer_index],
+                &parties[billing.receiver_index],
+            );
+            let amount = billing.amount;
             let delivery =
                 self.send_player_trade_billing_request(payer, receiver, amount, session_id);
             tracing::trace!(
@@ -15503,34 +15482,36 @@ impl CGame {
             let party = &parties[index];
             let contrary = &parties[1 - index];
             let current = self.players.get(&party.owner_id).map_or(0, CPlayer::money);
-            let resulting = current.wrapping_sub(party.gold).wrapping_add(contrary.gold);
-            if resulting < current {
-                let change = self
-                    .players
-                    .get_mut(&party.owner_id)
-                    .expect("trade party остаётся online")
-                    .decrease_money(current.wrapping_sub(resulting), &self.goods_factory);
-                let deliveries = self.send_player_money_decrease(party.owner_id, &change.outcome);
-                tracing::trace!(
-                    player_id = party.owner_id,
-                    ?deliveries,
-                    "деньги обмена списаны"
-                );
-            } else if current < resulting {
-                let delta = resulting.wrapping_sub(current);
-                let created =
-                    self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
-                let outcome = self
-                    .players
-                    .get_mut(&party.owner_id)
-                    .expect("trade party остаётся online")
-                    .increase_money(delta, &self.goods_factory, created);
-                let deliveries = self.send_player_money_increase(party.owner_id, &outcome);
-                tracing::trace!(
-                    player_id = party.owner_id,
-                    ?deliveries,
-                    "деньги обмена начислены"
-                );
+            match merge_trade_money(current, party.gold, contrary.gold) {
+                TradeMoneyMerge::Decrease(delta) => {
+                    let change = self
+                        .players
+                        .get_mut(&party.owner_id)
+                        .expect("trade party остаётся online")
+                        .decrease_money(delta, &self.goods_factory);
+                    let deliveries = self.send_player_money_decrease(party.owner_id, &change.outcome);
+                    tracing::trace!(
+                        player_id = party.owner_id,
+                        ?deliveries,
+                        "деньги обмена списаны"
+                    );
+                }
+                TradeMoneyMerge::Increase(delta) => {
+                    let created =
+                        self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
+                    let outcome = self
+                        .players
+                        .get_mut(&party.owner_id)
+                        .expect("trade party остаётся online")
+                        .increase_money(delta, &self.goods_factory, created);
+                    let deliveries = self.send_player_money_increase(party.owner_id, &outcome);
+                    tracing::trace!(
+                        player_id = party.owner_id,
+                        ?deliveries,
+                        "деньги обмена начислены"
+                    );
+                }
+                TradeMoneyMerge::Unchanged => {}
             }
         }
         self.send_player_trade_audits(
@@ -15623,13 +15604,16 @@ impl CGame {
                 (2u8, payer, payer_yuan_bao, payer_text),
                 (3u8, receiver, receiver_yuan_bao, receiver_text),
             ] {
-                let mut audit = CMessage::new(0x0006_020d);
-                audit.add_byte(kind);
-                add_legacy_c_string(audit.base_mut(), transaction);
-                audit.add_ulong(billing_amount);
-                add_legacy_c_string(audit.base_mut(), &text);
-                audit.add_long(party.owner_id);
-                audit.add_ulong(balance);
+                // Кадр 0x6020D собирает Zone `trade/audit`; этот owner
+                // формирует тексты и выполняет transport-отправку.
+                let audit = trade_currency_audit_frame(
+                    kind,
+                    transaction,
+                    billing_amount,
+                    &text,
+                    party.owner_id,
+                    balance,
+                );
                 let delivery = audit.send(self, false);
                 tracing::trace!(
                     kind,
@@ -15650,24 +15634,9 @@ impl CGame {
         amount: u32,
         goods_name: &[u8],
     ) {
-        let mut audit = CMessage::new(0x0006_0201);
-        audit.add_byte(0);
-        audit.add_long(receiver.owner_id);
-        audit.add_ulong(receiver.pk_count);
-        audit.add_ulong(receiver.money);
-        audit.add_long(receiver.tile_x);
-        audit.add_long(receiver.tile_y);
-        audit.add_long(source.owner_id);
-        audit.add_ulong(source.pk_count);
-        audit.add_ulong(source.money);
-        audit.add_long(source.tile_x);
-        audit.add_long(source.tile_y);
-        audit.base_mut().add_guid(goods_id);
-        audit.add_ulong(price);
-        audit.add_ulong(amount);
-        add_legacy_c_string(audit.base_mut(), goods_name);
-        audit.add_ulong(receiver.client_ip);
-        audit.add_ulong(source.client_ip);
+        // Кадр 0x60201 собирает Zone `trade/audit`; этот owner выполняет
+        // только transport-отправку на log server.
+        let audit = trade_goods_audit_frame(&source.frame(), &receiver.frame(), goods_id, price, amount, goods_name);
         let delivery = audit.send(self, false);
         tracing::trace!(source_id = source.owner_id, receiver_id = receiver.owner_id, goods_id = ?goods_id, amount, ?delivery, "журнал предмета обмена отправлен");
     }
@@ -15777,6 +15746,11 @@ impl CGame {
         }
     }
 
+    /// Машинная вилка Billing-завершения (`0xEF203` → `OnUniBillMessage`):
+    /// исходный commit завершает сделку БЕЗ повторной дистанционной проверки
+    /// участников, доверяя зафиксированной рамке (risk-note Zone
+    /// `trade/session`). Гейты сверх уже материализованного owner/plug +
+    /// availability отказа в этот путь не добавляются.
     pub(crate) fn complete_player_trade_after_billing<Context: GameContainerMessageRuntime>(
         &mut self,
         session_id: i32,

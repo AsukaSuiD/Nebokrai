@@ -12,6 +12,14 @@
 //!
 //! Подтверждённые goods/increment audit и container-listener следствия входят
 //! в тот же проход; замещённый RAW в owner-файле не дублируется.
+//!
+//! Скалярные правила рамки (kind индексов extend-id, приёмка предложения до
+//! занятия ячейки, таблица player-контейнеров источника, сверка количества и
+//! обратимость stack-merge rollback) перенесены в Zone
+//! `trade/ctrader.rs` порцией T и импортируются отсюда как прежние имена.
+//! Контейнерные операции `record_offer`/`remove_offer`/`clear` и отчёты
+//! `ShadowPresenceReport/ShadowRemovedReport` остаются здесь как
+//! container-owner (прецедент `CPersonalShopSeller`).
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
@@ -24,47 +32,12 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use nebokrai_shared::values::CGuid;
+use nebokrai_zone::trade::ctrader::{
+    SESSION_OWNER_TYPE, TRADE_GOODS_CELLS, trade_container_extend_id,
+    trade_currency_offer_block, trade_goods_offer_block, trade_offer_missing_goods,
+};
 
-const SESSION_OWNER_TYPE: i32 = 10;
-const TRADE_GOODS_CELLS: u32 = 32;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TraderContainerKind {
-    Goods,
-    Gold,
-    YuanBao,
-}
-
-impl TraderContainerKind {
-    pub(crate) const fn from_index(index: i32) -> Option<Self> {
-        match index {
-            0 => Some(Self::Goods),
-            1 => Some(Self::Gold),
-            2 => Some(Self::YuanBao),
-            _ => None,
-        }
-    }
-
-    pub(crate) const fn index(self) -> i32 {
-        match self {
-            Self::Goods => 0,
-            Self::Gold => 1,
-            Self::YuanBao => 2,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TraderOfferBlock {
-    InvalidContainer,
-    InvalidPosition,
-    MissingGoods,
-    CurrencyInGoodsContainer,
-    InvalidCurrency,
-    NoTrade,
-    Occupied,
-    ShadowRejected,
-}
+pub(crate) use nebokrai_zone::trade::ctrader::{TraderContainerKind, TraderOfferBlock};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraderOfferAdded {
@@ -107,14 +80,17 @@ impl CTrader {
         goods
             .base_mut()
             .base_mut()
-            .set_container_extend_id(plug_id.wrapping_shl(8));
+            .set_container_extend_id(trade_container_extend_id(plug_id, TraderContainerKind::Goods));
 
         let mut gold = CShadowWallet::new();
         gold.set_owner(SESSION_OWNER_TYPE, session_id);
-        gold.set_container_extend_id(plug_id.wrapping_shl(8) | 1);
+        gold.set_container_extend_id(trade_container_extend_id(plug_id, TraderContainerKind::Gold));
         let mut yuan_bao = CShadowYuanBao::new();
         yuan_bao.set_owner(SESSION_OWNER_TYPE, session_id);
-        yuan_bao.set_container_extend_id(plug_id.wrapping_shl(8) | 2);
+        yuan_bao.set_container_extend_id(trade_container_extend_id(
+            plug_id,
+            TraderContainerKind::YuanBao,
+        ));
         Self {
             plug_id,
             session_id,
@@ -182,7 +158,7 @@ impl CTrader {
         previous: PreviousContainer,
         factory: &CGoodsFactory,
     ) -> Result<TraderOfferAdded, TraderOfferBlock> {
-        if amount == 0 || amount > goods.amount() {
+        if trade_offer_missing_goods(amount, goods.amount()) {
             return Err(TraderOfferBlock::MissingGoods);
         }
         let base_index = goods.base_properties_index();
@@ -196,14 +172,15 @@ impl CTrader {
         };
         let (record, presence, replaced) = match kind {
             TraderContainerKind::Goods => {
-                if base_index == expected_gold || base_index == expected_yuan_bao {
-                    return Err(TraderOfferBlock::CurrencyInGoodsContainer);
-                }
-                if goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x20 != 0 {
-                    return Err(TraderOfferBlock::NoTrade);
-                }
-                if position >= self.goods.size() {
-                    return Err(TraderOfferBlock::InvalidPosition);
+                if let Some(block) = trade_goods_offer_block(
+                    base_index,
+                    expected_gold,
+                    expected_yuan_bao,
+                    goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32,
+                    position,
+                    self.goods.size(),
+                ) {
+                    return Err(block);
                 }
                 if !self.goods.is_space_enough(position) {
                     return Err(TraderOfferBlock::Occupied);
@@ -223,16 +200,14 @@ impl CTrader {
                 (added.recorded.record, added.presence, None)
             }
             TraderContainerKind::Gold | TraderContainerKind::YuanBao => {
-                let expected = if kind == TraderContainerKind::Gold {
-                    expected_gold
-                } else {
-                    expected_yuan_bao
-                };
-                if base_index != expected {
-                    return Err(TraderOfferBlock::InvalidCurrency);
-                }
-                if position != 0 {
-                    return Err(TraderOfferBlock::InvalidPosition);
+                if let Some(block) = trade_currency_offer_block(
+                    kind,
+                    base_index,
+                    expected_gold,
+                    expected_yuan_bao,
+                    position,
+                ) {
+                    return Err(block);
                 }
                 let container = if kind == TraderContainerKind::Gold {
                     self.gold.base_mut()
