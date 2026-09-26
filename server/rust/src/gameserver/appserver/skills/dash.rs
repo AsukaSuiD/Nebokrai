@@ -1,143 +1,338 @@
-//! Общая геометрия, визуальный формат и контактная атака Flash/LittleFlash.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/flash.cpp,
-//! littleflash.cpp и littleflash2.cpp.
+//! Общая геометрия, визуальный формат и контактная атака рывков
+//! Flash/LittleFlash и hub-швы семейства melee-рывков (dash/flash/littleflash/
+//! rush) — тела перенесены буквально в Zone `skills/{dash,flash,littleflash,
+//! rush}.rs` (порция №5 «player melee», запись аудита «Zone skills: машинная
+//! разведка melee dash/flash/littleflash/rush (порция №5)»; основание и
+//! машинные статусы см. там). Источник: gameserver.exe/GameServer.pdb,
+//! appserver/skills/flash.cpp, littleflash.cpp и littleflash2.cpp.
+//! Здесь — объявленные швы переноса: фасадные реализации трейтов Zone над
+//! прежними методами `CGame`/`CPlayer`/`CMoveShape` и общий outcome-шов
+//! делегатов; потребители не меняются.
 //!
-//! Путь и список поражённых целей принадлежат concrete владельцам и не
-//! копируются через callback атаки. Общая обработка пути сохраняет блоки
-//! GetTargetPath, проверяет первую фигуру клетки и выбирает выход сначала
-//! среди восьми соседей, затем через существующий CRegion random-поиск.
-//! LittleFlash2 не требует занятую клетку и очищает одиночный закрытый выход;
-//! поклеточный удар и live IsAttackAble остаются у вызывающего AI.
-//! Единый формат visual передаёт последнюю клетку подготовленного пути;
-//! безусловный базовый callback остаётся у зарегистрированного ресурса.
-//!
-//! Контакт использует общий оружейный расчёт с коэффициентом TARGET_DAMAGE_FACTOR.
+//! Региональные `dash_*` фасады перечитывают owner-а региона на каждый вызов
+//! (первичный гейт find_region конкретных zone-тел сохранён); random-поиск
+//! свободной клетки идёт через тот же `GetRandomPosInRange` от переданного
+//! runtime и потому сохраняет исходный поток случайных чисел. Контакт семьи
+//! проходит прежний общий `apply_player_weapon_attack`; Begin состояний
+//! рывков — прежний общий `begin_primary_blind_state` семейства Blind.
 
+use super::blindstate::begin_primary_blind_state;
+use super::skillbaseproperties::CSkillBaseProperties;
 use super::weaponattack::apply_player_weapon_attack;
-use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
-use crate::gameserver::appserver::moveshape::MoveShapeSkill;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
+use crate::gameserver::appserver::monster::MonsterSkillExecution;
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::player::CPlayer;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
-use crate::gameserver::appserver::states::state::resolve_state_move_shape;
-use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, RegionShapeResolver,
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_skill_sufferer, resolve_state_move_shape,
+    resolve_state_move_shape_mut,
 };
-use crate::public::tools::get_line_direction;
-use crate::nets::netserver::message::CMessage;
-use crate::nets::netserver::message::GameMessageDomainOps;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    RegionShapeResolver,
+};
+use crate::nets::netserver::message::{CMessage, GameMessageDomainOps};
+use nebokrai_zone::combat::MasterInfo;
+use nebokrai_zone::skills::dash::{
+    DashSkillContact, DashSkillExecutionOutcome, DashSkillGame, DashSkillMoveShape,
+    DashSkillPkPermissions, DashSkillPlayer,
+};
+use nebokrai_zone::skills::execution::RegisteredSkillRecord;
+use super::rushstate::RushState;
+use super::rushstate2::Rush2State;
+use nebokrai_zone::skills::state::StateKey;
+use nebokrai_zone::skills::SkillLifecycle;
 
-const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-
-pub(super) fn publish_dash_visual(
-    game: &CGame, skill: &MoveShapeSkill, mode: u32, kind: SkillVisualEffectKind,
-    destination: Option<(i32, i32)>,
-) {
-    if skill.visual_effect().is_none_or(|effect| effect.kind() != kind || effect.is_ended()) {
-        return;
-    }
-    let (region, identity) = skill.lifecycle().user();
-    let Some(user) = resolve_state_move_shape(game, region, identity) else { return; };
-    let source = user.shape();
-    let mut message = CMessage::new(0x000b_fe01);
-    if matches!(mode, 2 | 4 | 7 | 8 | 10 | 11 | 13 | 14 | 15) {
-        if source.identity().object_type == 400 {
-            message.add_byte(0);
-            message.add_byte(mode as u8);
-            let _ = message.send_to_player(game.net_server(), source.identity().id);
+impl DashSkillPlayer for CPlayer {
+    fn shape(&self) -> &CShape { self.shape() }
+    fn mana(&self) -> u32 { self.mana() }
+    fn rp(&self) -> u16 { self.rp() }
+    fn set_mana(&mut self, mana: u32) { self.set_mana(mana) }
+    fn set_rp(&mut self, rp: u16) { self.set_rp(rp) }
+    fn level(&self) -> u8 { self.level() }
+    fn player_id(&self) -> i32 { self.player_id() }
+    fn faction_id(&self) -> i32 { self.faction_id() }
+    fn team_id(&self) -> i32 { self.team_id() }
+    fn union_id(&self) -> i32 { self.union_id() }
+    fn country(&self) -> u8 { self.country() }
+    fn pk_permissions(&self) -> DashSkillPkPermissions {
+        let permissions = self.pk_permissions();
+        // MasterInfo пользуется четырьмя допусками и отдельной страной.
+        DashSkillPkPermissions {
+            player: permissions.player,
+            teammate: permissions.teammate,
+            guild_member: permissions.guild_member,
+            criminal: permissions.criminal,
         }
-        return;
     }
-    let action = match mode { 0 => 1, 1 => 2, 3 => 3, _ => return };
-    message.add_byte(action);
-    message.add_long(skill.id() as i32);
-    message.add_short(skill.level() as i16);
-    message.add_long(source.identity().object_type);
-    message.add_long(source.identity().id);
-    if mode == 1 {
-        let Some((x, y)) = destination else { return; };
-        message.add_long(0);
-        message.add_long(0);
-        message.add_long(x);
-        message.add_long(y);
-    } else {
-        message.add_long(source.get_direction());
-    }
-    if let Some(owner) = game.find_region(source.get_region_id()) {
-        let _ = game.send_game_shape_around(owner.base(), source, None, &message);
-    }
+    fn has_state_by_skill_id(&self, skill_id: u32) -> bool { self.has_state_by_skill_id(skill_id) }
+    fn set_skill_moveable(&mut self, moveable: bool) { self.set_skill_moveable(moveable) }
 }
 
-pub(super) fn check_dash_path<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, source: (i32, ShapeIdentity), mut path: Vec<(i32, i32, u8)>,
-    maximum: u32, require_shape_block: bool, clear_single_blocked: bool, runtime: &mut Runtime,
-) -> Vec<(i32, i32, u8)> {
-    if path.is_empty() { return path; }
-    let Some(shape) = resolve_state_move_shape(game, source.0, source.1).map(|shape| shape.shape()) else {
-        return Vec::new();
-    };
-    if !shape.is_assigned_to_server_region() { return Vec::new(); }
-    let Some(owner) = game.find_region(shape.get_region_id()) else { return Vec::new(); };
-    let region = owner.base();
-    let (source_x, source_y) = (shape.get_tile_x().unwrap_or(i32::MIN), shape.get_tile_y().unwrap_or(i32::MIN));
-    if path.first().is_some_and(|cell| cell.0 == source_x && cell.1 == source_y) { path.remove(0); }
-    path.truncate(maximum as usize);
-    // Native обращается к back() даже после подрезки до нуля. Пустой путь
-    // остаётся безопасным отказом без выдуманной клетки назначения.
-    let Some(last) = path.last().copied() else { return path; };
-    if let Ok(next) = CShape::get_direction_position(
-        get_line_direction(source_x, source_y, last.0, last.1),
-        ShapeAreaCoordinates { x: last.0, y: last.1 },
+impl DashSkillMoveShape for CMoveShape {
+    fn shape(&self) -> &CShape { self.shape() }
+    fn shape_mut(&mut self) -> &mut CShape { self.shape_mut() }
+    fn set_moveable(&mut self, moveable: bool) { self.set_moveable(moveable) }
+}
+
+impl DashSkillGame for CGame {
+    type MonsterExecution = MonsterSkillExecution;
+    type SkillAddress = RegisteredSkill;
+    type Player = CPlayer;
+    type MoveShape = CMoveShape;
+
+    fn registered_skill(
+        &self,
+        address: RegisteredSkill,
+    ) -> Option<&RegisteredSkillRecord<MonsterSkillExecution>> {
+        self.registered_skill(address)
+    }
+
+    fn registered_skill_mut(
+        &mut self,
+        address: RegisteredSkill,
+    ) -> Option<&mut RegisteredSkillRecord<MonsterSkillExecution>> {
+        self.registered_skill_mut(address)
+    }
+
+    fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
+        self.update_registered_skill_visual(address, mode)
+    }
+
+    fn skill_base_properties(&self, skill_id: u32, level: i32) -> Option<&CSkillBaseProperties> {
+        self.skill_base_properties(skill_id, level)
+    }
+
+    fn resolve_skill_sufferer(&self, lifecycle: &SkillLifecycle) -> Option<(i32, ShapeIdentity)> {
+        resolve_skill_sufferer(self, lifecycle)
+    }
+
+    fn resolve_state_move_shape(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&CMoveShape> {
+        resolve_state_move_shape(self, region_id, identity)
+    }
+
+    fn resolve_state_move_shape_mut(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<&mut CMoveShape> {
+        resolve_state_move_shape_mut(self, region_id, identity)
+    }
+
+    fn find_player(&self, player_id: i32) -> Option<&CPlayer> { self.find_player(player_id) }
+
+    fn find_player_mut(&mut self, player_id: i32) -> Option<&mut CPlayer> { self.find_player_mut(player_id) }
+
+    fn skill_target_path(&self, lifecycle: &SkillLifecycle) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path(lifecycle)
+    }
+
+    fn skill_target_path_with_length(
+        &self,
+        lifecycle: &SkillLifecycle,
+        maximum: u32,
+    ) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path_with_length(lifecycle, maximum)
+    }
+
+    fn dash_skill_cell_block(&self, region_id: i32, x: i32, y: i32) -> Option<u8> {
+        Some(self.find_region(region_id)?.base().skill_cell_block(x, y))
+    }
+
+    fn dash_region_size(&self, region_id: i32) -> Option<(i32, i32)> {
+        let region = self.find_region(region_id)?.base();
+        Some((region.region.width, region.region.height))
+    }
+
+    fn dash_shape_view_at(&self, region_id: i32, x: i32, y: i32) -> Option<ShapeView> {
+        let (area_width, area_height) = self.area_dimensions();
+        let owner = self.find_region(region_id)?;
+        let resolver = RegionShapeResolver { game: self, owner };
+        owner.base().get_shape(x, y, area_width, area_height, &resolver).ok().flatten()
+    }
+
+    fn dash_cell_views(&self, region_id: i32, x: i32, y: i32) -> Vec<ShapeView> {
+        let Some(owner) = self.find_region(region_id) else { return Vec::new(); };
+        let resolver = RegionShapeResolver { game: self, owner };
+        let (area_width, area_height) = self.area_dimensions();
+        let mut views = Vec::new();
+        if owner.base().get_shapes(x, y, area_width, area_height, &resolver, &mut views).is_err() { return Vec::new(); }
+        views
+    }
+
+    fn dash_monster_level(&self, region_id: i32, monster_id: i32) -> Option<u8> {
+        let monster = self.find_region(region_id)?.base().find_monster_by_id(monster_id)?;
+        Some(self.find_monster_property_by_origin_name(monster.base_property_key()?)?.level as u8)
+    }
+
+    fn send_skill_system_info(&self, player_id: i32, text: &[u8]) {
+        self.send_skill_system_info(player_id, text)
+    }
+
+    fn send_skill_system_info_with_unsigned(&self, player_id: i32, text: &[u8], amount: u32) {
+        self.send_skill_system_info_with_unsigned(player_id, text, amount)
+    }
+
+    fn publish_player_states(&self, player_id: i32) {
+        let _ = self.publish_player_states(player_id);
+    }
+
+    fn player_weapon_addon_category(&self, player: &CPlayer) -> Option<i32> {
+        player.equipment().get_goods(2)
+            .map(|weapon| weapon.addon_property_value(self.goods_factory(), GAP_WEAPON_CATEGORY, 1))
+    }
+
+    fn set_player_tile_position(&mut self, player_id: i32, tile_x: i32, tile_y: i32) {
+        let _ = self.set_player_tile_position(player_id, tile_x, tile_y);
+    }
+
+    fn relocate_region_shape(&mut self, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32) {
+        let _ = self.relocate_region_shape(region_id, identity, tile_x, tile_y);
+    }
+
+    fn live_skill_target_attackable(
+        &self,
+        region_id: i32,
+        user: ShapeIdentity,
+        target: ShapeIdentity,
+    ) -> bool {
+        self.live_skill_target_attackable(region_id, user, target)
+    }
+
+    fn move_shape_level(&self, region_id: i32, target: ShapeIdentity) -> Option<u8> {
+        self.move_shape_level(region_id, target)
+    }
+
+    fn base_magic_target_dead(&self, region_id: i32, target: ShapeIdentity) -> bool {
+        self.base_magic_target_dead(region_id, target)
+    }
+
+    fn skill_target_controller(&self, region_id: i32, target: ShapeIdentity) -> Option<i32> {
+        self.skill_target_controller(region_id, target)
+    }
+
+    fn move_shape_state_position(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        state_id: u32,
+    ) -> Option<usize> {
+        resolve_state_move_shape(self, region_id, identity)?
+            .find_state_position(|state| state.state_id() == state_id)
+            .map(|(position, _)| position)
+    }
+
+    fn end_move_shape_state_at(&mut self, region_id: i32, identity: ShapeIdentity, index: usize) {
+        let _ = end_and_destroy_state_at(self, region_id, identity, index);
+    }
+
+    fn send_dash_visual_to_player(&self, player_id: i32, message: &CMessage) {
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn send_dash_visual_around(&self, region_id: i32, origin: &CShape, message: &CMessage) {
+        // Гейт существующего региона прежнего caller-а сохранён.
+        if let Some(owner) = self.find_region(region_id) {
+            let _ = self.send_game_shape_around(owner.base(), origin, None, message);
+        }
+    }
+
+    fn begin_rush_state(
+        &mut self,
+        target: (i32, ShapeIdentity),
+        user: Option<(i32, ShapeIdentity)>,
+        state: RushState,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<StateKey> {
+        begin_primary_blind_state(self, target.0, target.1, user, Some(target), state, now)
+    }
+
+    fn begin_rush_2_state(
+        &mut self,
+        target: (i32, ShapeIdentity),
+        user: Option<(i32, ShapeIdentity)>,
+        state: Rush2State,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<StateKey> {
+        begin_primary_blind_state(self, target.0, target.1, user, Some(target), state, now)
+    }
+
+    fn force_move_skill_target(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        tile_x: i32,
+        tile_y: i32,
+        duration_ms: u32,
     ) {
-        path.push((next.x, next.y, region.skill_cell_block(next.x, next.y)));
+        // Развёрнутый результат у всех caller-ов семьи всегда отбрасывался.
+        let _ = self.force_move_skill_target(region_id, target, tile_x, tile_y, duration_ms);
     }
-    let (area_width, area_height) = game.area_dimensions();
-    let resolver = RegionShapeResolver { game, owner };
-    let mut saw_shape_block = false;
-    let mut trim_index = path.len();
-    for (index, cell) in path.iter().enumerate() {
-        let city_gate = region.get_shape(cell.0, cell.1, area_width, area_height, &resolver)
-            .ok().flatten().is_some_and(|shape| shape.identity.object_type == CITY_GATE_OBJECT_TYPE as i32);
-        if city_gate || matches!(cell.2, 1 | 2) {
-            trim_index = index.saturating_sub(1);
-            break;
-        }
-        if !saw_shape_block { saw_shape_block = cell.2 == 3; }
-        else if cell.2 != 3 { trim_index = index; break; }
-    }
-    if require_shape_block && !saw_shape_block { return Vec::new(); }
-    if trim_index == path.len() { trim_index = path.len().saturating_sub(1); }
-    path.truncate(trim_index.saturating_add(1));
-    let Some(anchor) = path.last().copied() else { return path; };
-    if anchor.2 != 0 {
-        if clear_single_blocked && path.len() == 1 {
-            path.clear();
-            return path;
-        }
-        for direction in 0..8 {
-            let Ok(candidate) = CShape::get_direction_position(
-                direction, ShapeAreaCoordinates { x: anchor.0, y: anchor.1 },
-            ) else { continue; };
-            if candidate.x >= 0 && candidate.y >= 0 && candidate.x < region.region.width
-                && candidate.y < region.region.height
-                && region.skill_cell_block(candidate.x, candidate.y) & 7 == 0
-            {
-                path.push((candidate.x, candidate.y, 0));
-                return path;
-            }
-        }
-        if let Ok(candidate) = region.region.get_random_pos_in_range(
-            anchor.0.wrapping_sub(2), anchor.1.wrapping_sub(2), 5, 5, runtime,
-        ) {
-            path.push((candidate.x, candidate.y, 0));
-        }
-    }
-    path
 }
 
-pub(super) fn apply_dash_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), runtime: &mut Runtime,
-) {
-    apply_player_weapon_attack(game, instance, source, target, TARGET_DAMAGE_FACTOR, runtime);
+impl<Runtime: GameMainLoopRuntime> DashSkillContact<Runtime> for CGame {
+    fn apply_dash_weapon_attack(
+        &mut self,
+        address: RegisteredSkill,
+        source: (i32, ShapeIdentity),
+        target: (i32, ShapeIdentity),
+        damage_factor_usage: u32,
+        runtime: &mut Runtime,
+    ) {
+        apply_player_weapon_attack(self, address, source, target, damage_factor_usage, runtime);
+    }
+
+    fn rush_first_attack_at_position(
+        &mut self,
+        player_id: i32,
+        controller: i32,
+        region_id: Option<i32>,
+        position: (i32, i32),
+        runtime: &mut Runtime,
+    ) {
+        let _ = self.player_on_first_attack_at_position(player_id, controller, region_id, position, runtime);
+    }
+
+    fn apply_owned_skill_contact(
+        &mut self,
+        master: MasterInfo,
+        target: ShapeIdentity,
+        region_id: i32,
+        attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        self.apply_owned_skill_contact(master, target, region_id, attack, runtime);
+    }
+
+    fn dash_random_pos_in_range(
+        &mut self,
+        region_id: i32,
+        left: i32,
+        top: i32,
+        range_width: i32,
+        range_height: i32,
+        runtime: &mut Runtime,
+    ) -> Option<(i32, i32)> {
+        let position = self.find_region(region_id)?.base().region
+            .get_random_pos_in_range(left, top, range_width, range_height, runtime).ok()?;
+        Some((position.x, position.y))
+    }
+}
+
+/// Обёртка очереди прежнего планировщика: общий терминал семейства без
+/// первого контакта; стадии приходят из Zone `dash::DashSkillExecutionOutcome`.
+pub(super) fn dash_skill_outcome(outcome: DashSkillExecutionOutcome) -> QueuedSkillExecutionOutcome {
+    let state = match outcome {
+        DashSkillExecutionOutcome::Pending => QueuedSkillExecutionState::Pending,
+        DashSkillExecutionOutcome::Rejected => QueuedSkillExecutionState::Rejected,
+        DashSkillExecutionOutcome::Completed => QueuedSkillExecutionState::Completed,
+    };
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
